@@ -383,7 +383,7 @@ TAMARIN_TEST(Modules, CodeGenCrossModuleFunctionCall) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 42);
 
     std::filesystem::remove_all(tempDir);
@@ -433,7 +433,7 @@ TAMARIN_TEST(Modules, CodeGenCrossModuleExplicitAlias) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 42);
 
     std::filesystem::remove_all(tempDir);
@@ -493,7 +493,7 @@ TAMARIN_TEST(Modules, CodeGenCrossModuleStructMethod) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 60);
 
     std::filesystem::remove_all(tempDir);
@@ -558,7 +558,7 @@ TAMARIN_TEST(Modules, CodeGenCrossModuleInheritance) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 50);
 
     std::filesystem::remove_all(tempDir);
@@ -613,7 +613,7 @@ TAMARIN_TEST(Modules, CodeGenCrossModuleReferenceMutation) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 25);
 
     std::filesystem::remove_all(tempDir);
@@ -668,7 +668,7 @@ TAMARIN_TEST(Modules, CodeGenCrossModuleSoA) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 100);
 
     std::filesystem::remove_all(tempDir);
@@ -700,7 +700,7 @@ TAMARIN_TEST(Modules, DriverIncludeDirsAndBuild) {
     EXPECT_EQ(res, 0);
 
     std::string cmd = "\"" + (projectDir / "main.exe").string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 42);
 
     std::filesystem::remove_all(baseTemp);

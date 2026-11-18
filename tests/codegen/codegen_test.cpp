@@ -474,8 +474,8 @@ TAMARIN_TEST(CodeGen, Optimization_O0vsO2Equivalence) {
     std::string cmdO0 = "\"" + exeO0.string() + "\"";
     std::string cmdO2 = "\"" + exeO2.string() + "\"";
 
-    int exitO0 = std::system(cmdO0.c_str());
-    int exitO2 = std::system(cmdO2.c_str());
+    int exitO0 = runCommand(cmdO0);
+    int exitO2 = runCommand(cmdO2);
 
     EXPECT_EQ(exitO0, 55);
     EXPECT_EQ(exitO2, 55);
@@ -527,7 +527,7 @@ TAMARIN_TEST(CodeGen, Scope_ScalarShadowingArray) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 4);
 
     std::error_code ec;
@@ -573,7 +573,7 @@ TAMARIN_TEST(CodeGen, Scope_ArrayShadowingScalar) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 42);
 
     std::error_code ec;
@@ -624,7 +624,7 @@ TAMARIN_TEST(CodeGen, Scope_InnerArraySizesAndLengthRestoration) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 2);
 
     std::error_code ec;
@@ -674,7 +674,7 @@ TAMARIN_TEST(CodeGen, Scope_ThreeLevelsOfShadowing) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 1);
 
     std::error_code ec;
@@ -723,7 +723,7 @@ TAMARIN_TEST(CodeGen, Scope_NameReuseInDifferentFunctions) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 30);
 
     std::error_code ec;
@@ -791,7 +791,7 @@ TAMARIN_TEST(CodeGen, TypedArray_Operations) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 5);
 
     std::error_code ec;
@@ -842,7 +842,7 @@ TAMARIN_TEST(CodeGen, ControlFlow_ShortCircuitAnd) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 42);
 
     std::error_code ec;
@@ -893,7 +893,7 @@ TAMARIN_TEST(CodeGen, ControlFlow_ShortCircuitOr) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 42);
 
     std::error_code ec;
@@ -940,7 +940,7 @@ TAMARIN_TEST(CodeGen, ControlFlow_BreakAndContinue) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 8);
 
     std::error_code ec;
@@ -985,7 +985,7 @@ TAMARIN_TEST(CodeGen, Array_ZeroInitialization) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 42);
 
     std::error_code ec;
@@ -1043,7 +1043,7 @@ TAMARIN_TEST(CodeGen, Numeric_FloatsAndUnsigned) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 5);
 
     std::error_code ec;
@@ -1091,7 +1091,7 @@ TAMARIN_TEST(CodeGen, StructFieldAccessAndMutation) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 45);
 
     std::error_code ec;
@@ -1142,7 +1142,7 @@ TAMARIN_TEST(CodeGen, StructPassByValueAndReturn) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 47);
 
     std::error_code ec;
@@ -1194,7 +1194,7 @@ TAMARIN_TEST(CodeGen, NestedStructs) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 25);
 
     std::error_code ec;
@@ -1251,10 +1251,10 @@ TAMARIN_TEST(CodeGen, StructOptimizationEquivalence) {
     EXPECT_TRUE(codegen.compileToExecutable(llO2, exeO2, 2));
 
     std::string cmd0 = "\"" + exeO0.string() + "\"";
-    int ret0 = std::system(cmd0.c_str());
+    int ret0 = runCommand(cmd0);
 
     std::string cmd2 = "\"" + exeO2.string() + "\"";
-    int ret2 = std::system(cmd2.c_str());
+    int ret2 = runCommand(cmd2);
 
     EXPECT_EQ(ret0, 26);
     EXPECT_EQ(ret2, 26);
@@ -1316,7 +1316,7 @@ TAMARIN_TEST(CodeGen, StructMethods) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 25);
 
     std::error_code ec;
@@ -1390,7 +1390,7 @@ TAMARIN_TEST(CodeGen, ClassConstructorsAndMethods) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 80);
 
     std::error_code ec;
@@ -1461,7 +1461,7 @@ TAMARIN_TEST(CodeGen, SingleInheritanceAndMethodOverride) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 47);
 
     std::error_code ec;
@@ -1528,7 +1528,7 @@ TAMARIN_TEST(CodeGen, VirtualMethodDynamicDispatch) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 42);
 
     std::error_code ec;
@@ -1581,7 +1581,7 @@ TAMARIN_TEST(CodeGen, ReferencesParamAndMutation) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 50);
 
     std::error_code ec;
@@ -1640,7 +1640,7 @@ TAMARIN_TEST(CodeGen, StructureOfArraysExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 60);
 
     std::error_code ec;
@@ -1751,10 +1751,10 @@ TAMARIN_TEST(CodeGen, OOPOptimizationEquivalence) {
     EXPECT_TRUE(codegen.compileToExecutable(llO2, exeO2, 2));
 
     std::string cmd0 = "\"" + exeO0.string() + "\"";
-    int ret0 = std::system(cmd0.c_str());
+    int ret0 = runCommand(cmd0);
 
     std::string cmd2 = "\"" + exeO2.string() + "\"";
-    int ret2 = std::system(cmd2.c_str());
+    int ret2 = runCommand(cmd2);
 
     EXPECT_EQ(ret0, 35);
     EXPECT_EQ(ret2, 35);
@@ -1843,8 +1843,7 @@ static bool compileAndRunProgram(const std::string& src, int optLevel, int& exit
     }
     cmd += " > \"" + outPath.string() + "\" 2>&1";
 
-    std::string fullCmd = "\"" + cmd + "\"";
-    exitCode = std::system(fullCmd.c_str());
+    exitCode = runCommand(cmd);
 
     std::ifstream out(outPath, std::ios::binary);
     if (out) {
@@ -5872,7 +5871,7 @@ TAMARIN_TEST(CodeGen, TernaryConditionalOperatorExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     if (exitCode != 0) {
         std::cout << "\n>>> OperatorOverloadingExecution FAILED with exit code: " << exitCode << " <<<\n\n";
     }
@@ -5974,7 +5973,7 @@ TAMARIN_TEST(CodeGen, OperatorOverloadingExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     if (exitCode != 0) {
         std::cout << "\n>>> OperatorOverloadingExecution FAILED with exit code: " << exitCode << " <<<\n\n";
     }
@@ -6052,7 +6051,7 @@ TAMARIN_TEST(CodeGen, TypeInferenceAutoExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     EXPECT_EQ(exitCode, 0);
 
     std::error_code ec;
@@ -6128,7 +6127,7 @@ TAMARIN_TEST(CodeGen, DefaultParameterArgumentsExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     if (exitCode != 0) {
         std::cout << "\n>>> DefaultParameterArgumentsExecution FAILED with exit code: " << exitCode << " <<<\n\n";
     }
@@ -6206,7 +6205,7 @@ TAMARIN_TEST(CodeGen, TupleAndDestructuringExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     if (exitCode != 0) {
         std::cout << "\n>>> TupleAndDestructuringExecution FAILED with exit code: " << exitCode << " <<<\n\n";
     }
@@ -6295,7 +6294,7 @@ TAMARIN_TEST(CodeGen, LambdaExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     if (exitCode != 0) {
         std::cout << "\n>>> LambdaExecution FAILED with exit code: " << exitCode << " <<<\n\n";
     }
@@ -6386,7 +6385,7 @@ TAMARIN_TEST(CodeGen, RangeSlicingExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     if (exitCode != 0) {
         std::cout << "\n>>> RangeSlicingExecution FAILED with exit code: " << exitCode << " <<<\n\n";
     }
@@ -6448,7 +6447,7 @@ TAMARIN_TEST(CodeGen, AsyncFunctionExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     EXPECT_EQ(exitCode, 0);
 
     std::error_code ec;
@@ -6500,7 +6499,7 @@ TAMARIN_TEST(CodeGen, AsyncRecursiveWorkStealing) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     EXPECT_EQ(exitCode, 0);
 
     std::error_code ec;
