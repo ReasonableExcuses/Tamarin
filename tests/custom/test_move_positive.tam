@@ -1,0 +1,35 @@
+import std.collections.vec as col;
+import std.string as str;
+import std.io as io;
+
+Result<col::Vec<int>, str::String> create_vector(bool should_succeed) {
+    if (should_succeed) {
+        col::Vec<int> v;
+        v.init();
+        v.push(10);
+        v.push(20);
+        return Result::Ok(move(v));
+    } else {
+        str::String err;
+        err.init_from("Vector creation failed");
+        return Result::Err(move(err));
+    }
+}
+
+int main() {
+    auto res = create_vector(true);
+    match (res) {
+        Result::Ok(v) => {
+            v.push(30);
+            io::print("Vec size: ");
+            io::print(v.size());
+            io::print("; Element 2: ");
+            io::print(v.get(2));
+            io::println(";");
+        }
+        Result::Err(err) => {
+            io::println("Error occurred");
+        }
+    }
+    return 0;
+}

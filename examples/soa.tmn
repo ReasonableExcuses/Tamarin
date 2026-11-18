@@ -1,0 +1,30 @@
+// TAMARIN v0.3.5 - Structure-of-Arrays (@layout(scan)) Layout
+
+@layout(scan)
+struct Particle {
+    float x;
+    float y;
+    float vx;
+    float vy;
+};
+
+int main() {
+    Particle particles[100];
+
+    // Initialize particles
+    for (int i = 0; i < 100; i++) {
+        particles[i].x = (float)i;
+        particles[i].y = (float)(i * 2);
+        particles[i].vx = 1.0f;
+        particles[i].vy = 0.5f;
+    }
+
+    // High performance sequential SIMD-friendly update
+    for (int i = 0; i < 100; i++) {
+        particles[i].x += particles[i].vx;
+        particles[i].y += particles[i].vy;
+    }
+
+    return (int)(particles[99].x + particles[99].y);
+}
+

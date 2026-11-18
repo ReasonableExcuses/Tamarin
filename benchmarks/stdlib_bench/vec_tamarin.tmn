@@ -1,0 +1,49 @@
+import std.collections.vec as col;
+import std.io as io;
+
+int main() {
+    __benchmark_start();
+
+    int N = 10000000;
+    col::Vec<int> v;
+    v.init();
+
+    // 1. Push
+    for (int i = 0; i < N; ++i) {
+        v.push(i * 3 + 1);
+    }
+
+    // 2. Sum
+    long sum = 0;
+    int len = v.size();
+    for (int i = 0; i < len; ++i) {
+        sum = sum + v[i];
+    }
+
+    // 3. Mutate
+    for (int i = 0; i < len; ++i) {
+        v[i] = v[i] + 7;
+    }
+
+    // 4. Pop
+    long popSum = 0;
+    for (int i = 0; i < 1000000; ++i) {
+        popSum = popSum + v.pop();
+    }
+
+    v.release();
+
+    double ms = __benchmark_elapsed_ms();
+
+    io::print("[Tamarin Idiomatic] N=");
+    io::print(N);
+    io::print(" | sum=");
+    io::print(sum);
+    io::print(" | popSum=");
+    io::print(popSum);
+    io::print(" | time=");
+    io::print(ms);
+    io::println(" ms");
+
+    return 0;
+}

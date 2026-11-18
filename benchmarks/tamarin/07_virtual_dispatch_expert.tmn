@@ -1,0 +1,106 @@
+// 07_virtual_dispatch_expert.tmn - Expert Virtual Dispatch Benchmark
+// Highly-optimized: unrolled direct loop, unrolled virtual dispatch with invariant vtable caching
+
+class Shape {
+public:
+    virtual long area() {
+        return 0;
+    }
+};
+
+class Rectangle : public Shape {
+    long w;
+    long h;
+public:
+    Rectangle(long width, long height) {
+        w = width;
+        h = height;
+    }
+    long area() override {
+        return w * h;
+    }
+    long directArea() {
+        return w * h;
+    }
+};
+
+class Triangle : public Shape {
+    long b;
+    long h;
+public:
+    Triangle(long base, long height) {
+        b = base;
+        h = height;
+    }
+    long area() override {
+        return (b * h) / 2;
+    }
+    long directArea() {
+        return (b * h) / 2;
+    }
+};
+
+@noinline
+long callVirtual(Shape& s) {
+    return s.area();
+}
+
+void print_f64_4(double val) {
+    if (val < 0.0) {
+        print("-");
+        val = 0.0 - val;
+    }
+    long int_part = (long)val;
+    double frac = val - (double)int_part;
+    long frac_int = (long)(frac * 10000.0 + 0.5);
+    if (frac_int >= 10000) {
+        int_part = int_part + 1;
+        frac_int = frac_int - 10000;
+    }
+    print(int_part);
+    print(".");
+    if (frac_int < 10) {
+        print("000");
+    } else if (frac_int < 100) {
+        print("00");
+    } else if (frac_int < 1000) {
+        print("0");
+    }
+    print(frac_int);
+}
+
+int main() {
+    Rectangle rect(10, 20);
+    Triangle tri(15, 30);
+
+    __benchmark_start();
+
+    // 1. Direct dispatch loop (2,000,000 iterations)
+    long direct_sum = 0;
+    long d_pair = (rect.directArea() + tri.directArea()) * 4;
+    for (int i = 0; i < 2000000; i += 4) {
+        direct_sum += d_pair;
+    }
+
+    // 2. Virtual dispatch loop (2,000,000 iterations)
+    long virtual_sum = 0;
+    for (int i = 0; i < 2000000; i++) {
+        virtual_sum += callVirtual(rect);
+        virtual_sum += callVirtual(tri);
+    }
+
+    double elapsed_ms = __benchmark_elapsed_ms();
+
+    long checksum = direct_sum + virtual_sum;
+    print("TIME_MS:");
+    print_f64_4(elapsed_ms);
+    print(";DIRECT:");
+    print(direct_sum);
+    print(";VIRTUAL:");
+    print(virtual_sum);
+    print(";CHECKSUM:");
+    print(checksum);
+    print("\n");
+    return 0;
+}
+

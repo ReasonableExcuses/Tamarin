@@ -1,0 +1,101 @@
+// ============================================================================
+// std.collections.vec - Production-Grade Growable Contiguous Dynamic Vector
+// ============================================================================
+
+public struct Vec<T> {
+    T buffer[];
+    int length;
+    int capacity;
+
+    void init() {
+        this.capacity = 4;
+        this.length = 0;
+        this.buffer = __builtin_alloc<T>(4);
+    }
+
+    void init_with_capacity(int initialCap) {
+        if (initialCap < 2) { initialCap = 2; }
+        this.capacity = initialCap;
+        this.length = 0;
+        this.buffer = __builtin_alloc<T>(initialCap);
+    }
+
+    ~Vec() {
+        if (this.capacity > 0) {
+            __builtin_free(this.buffer);
+            this.capacity = 0;
+            this.length = 0;
+        }
+    }
+
+    void reserve(int newCap) {
+        if (newCap > this.capacity) {
+            this.buffer = __builtin_realloc<T>(this.buffer, newCap);
+            this.capacity = newCap;
+        }
+    }
+
+    void push(T val) {
+        if (this.length >= this.capacity) {
+            int newCap = this.capacity * 2;
+            if (newCap < 4) { newCap = 4; }
+            this.reserve(newCap);
+        }
+        __builtin_set_unchecked<T>(this.buffer, this.length, val);
+        this.length = this.length + 1;
+    }
+
+    void push_unchecked(T val) {
+        __builtin_set_unchecked<T>(this.buffer, this.length, val);
+        this.length = this.length + 1;
+    }
+
+    T pop() {
+        this.length = this.length - 1;
+        return __builtin_get_unchecked<T>(this.buffer, this.length);
+    }
+
+    T get(int idx) {
+        return __builtin_get_unchecked<T>(this.buffer, idx);
+    }
+
+    void set(int idx, T val) {
+        __builtin_set_unchecked<T>(this.buffer, idx, val);
+    }
+
+    T at(int idx) {
+        return this.buffer[idx];
+    }
+
+    T peek() {
+        return this.buffer[this.length - 1];
+    }
+
+    int size() const {
+        return this.length;
+    }
+
+    int cap() const {
+        return this.capacity;
+    }
+
+    bool is_empty() const {
+        return this.length == 0;
+    }
+
+    void clear() {
+        this.length = 0;
+    }
+
+    T[] as_slice() {
+        return this.buffer;
+    }
+
+    void release() {
+        if (this.capacity > 0) {
+            __builtin_free(this.buffer);
+            this.capacity = 0;
+            this.length = 0;
+        }
+    }
+};

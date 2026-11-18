@@ -1,0 +1,18 @@
+public struct Vec2 {
+    int x;
+    int y;
+
+    int sum() const {
+        return x + y;
+    }
+
+    void scale(int s) {
+        x = x * s;
+        y = y * s;
+    }
+};
+
+public int dot(const Vec2& a, const Vec2& b) {
+    return a.x * b.x + a.y * b.y;
+}
+

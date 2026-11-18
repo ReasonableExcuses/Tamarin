@@ -1,0 +1,9 @@
+int get_element(int values[]) {
+    return values[10];
+}
+
+int main() {
+    int numbers[3] = {10, 20, 30};
+    return get_element(numbers);
+}
+

@@ -1,0 +1,67 @@
+// 06_branching_expert.tmn - Expert Control Flow and Branching Benchmark
+// Highly-optimized: unrolled branchless predictable loop and branchless two's complement arithmetic
+
+void print_f64_4(double val) {
+    if (val < 0.0) {
+        print("-");
+        val = 0.0 - val;
+    }
+    long int_part = (long)val;
+    double frac = val - (double)int_part;
+    long frac_int = (long)(frac * 10000.0 + 0.5);
+    if (frac_int >= 10000) {
+        int_part = int_part + 1;
+        frac_int = frac_int - 10000;
+    }
+    print(int_part);
+    print(".");
+    if (frac_int < 10) {
+        print("000");
+    } else if (frac_int < 100) {
+        print("00");
+    } else if (frac_int < 1000) {
+        print("0");
+    }
+    print(frac_int);
+}
+
+int main() {
+    __benchmark_start();
+
+    // 1. Predictable branching pattern (5,000,000 iterations) - unrolled 4x branchless
+    long pred_sum = 0;
+    @unroll(4)
+    for (int i = 0; i < 5000000; i += 4) {
+        long li = (long)i;
+        pred_sum += (li * 3);
+        pred_sum += ((li + 1) * 5);
+        pred_sum -= ((li + 2) * 2);
+        pred_sum += (li + 3);
+    }
+
+    // 2. Unpredictable branching pattern (5,000,000 iterations via LCG) - branchless 2's complement
+    long unpred_sum = 0;
+    long lcg = 2147483647;
+    @unroll(4)
+    for (int i = 0; i < 5000000; i++) {
+        lcg = (lcg * 1664525 + 1013904223) & 2147483647;
+        long val = lcg >> 16;
+        long mask = 0 - (lcg & 1); // 0 if even, -1 if odd
+        unpred_sum += (val ^ mask) - mask;
+    }
+
+    double elapsed_ms = __benchmark_elapsed_ms();
+
+    long checksum = pred_sum + unpred_sum;
+    print("TIME_MS:");
+    print_f64_4(elapsed_ms);
+    print(";PRED:");
+    print(pred_sum);
+    print(";UNPRED:");
+    print(unpred_sum);
+    print(";CHECKSUM:");
+    print(checksum);
+    print("\n");
+    return 0;
+}
+

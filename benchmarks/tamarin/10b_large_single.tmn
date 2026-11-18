@@ -1,0 +1,52 @@
+// 10b_large_single.tmn - Pattern B: Large single region with many allocations
+
+void print_f64_4(double val) {
+    if (val < 0.0) {
+        print("-");
+        val = 0.0 - val;
+    }
+    long int_part = (long)val;
+    double frac = val - (double)int_part;
+    long frac_int = (long)(frac * 10000.0 + 0.5);
+    if (frac_int >= 10000) {
+        int_part = int_part + 1;
+        frac_int = frac_int - 10000;
+    }
+    print(int_part);
+    print(".");
+    if (frac_int < 10) {
+        print("000");
+    } else if (frac_int < 100) {
+        print("00");
+    } else if (frac_int < 1000) {
+        print("0");
+    }
+    print(frac_int);
+}
+
+int main() {
+    __benchmark_start();
+
+    long sum = 0;
+    region r(1048576) {
+        for (int alloc = 0; alloc < 10000; alloc++) {
+            long buf[8];
+            for (int j = 0; j < 8; j++) {
+                buf[j] = (long)(alloc * 8 + j);
+                sum += buf[j];
+            }
+        }
+    }
+
+    double elapsed_ms = __benchmark_elapsed_ms();
+
+    print("TIME_MS:");
+    print_f64_4(elapsed_ms);
+    print(";SUM:");
+    print(sum);
+    print(";CHECKSUM:");
+    print(sum);
+    print("\n");
+    return 0;
+}
+

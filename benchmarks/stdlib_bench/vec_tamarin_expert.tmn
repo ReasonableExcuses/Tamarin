@@ -1,0 +1,51 @@
+import std.collections.vec as col;
+import std.mem as mem;
+import std.io as io;
+
+int main() {
+    __benchmark_start();
+
+    int N = 10000000;
+    col::Vec<int> v;
+    v.init_with_capacity(N);
+
+    // 1. Push unchecked (capacity is pre-reserved)
+    for (int i = 0; i < N; ++i) {
+        v.push_unchecked(i * 3 + 1);
+    }
+
+    // 2. Sum
+    int s[] = v.as_slice();
+    long sum = 0;
+    int len = v.size();
+    for (int i = 0; i < len; ++i) {
+        sum = sum + mem::get_unchecked<int>(s, i);
+    }
+
+    // 3. Mutate
+    for (int i = 0; i < len; ++i) {
+        mem::set_unchecked<int>(s, i, mem::get_unchecked<int>(s, i) + 7);
+    }
+
+    // 4. Pop
+    long popSum = 0;
+    for (int i = 0; i < 1000000; ++i) {
+        popSum = popSum + v.pop();
+    }
+
+    v.release();
+
+    double ms = __benchmark_elapsed_ms();
+
+    io::print("[Tamarin Expert]    N=");
+    io::print(N);
+    io::print(" | sum=");
+    io::print(sum);
+    io::print(" | popSum=");
+    io::print(popSum);
+    io::print(" | time=");
+    io::print(ms);
+    io::println(" ms");
+
+    return 0;
+}

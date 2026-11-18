@@ -1,0 +1,49 @@
+import std.string as str;
+import std.io as io;
+
+int main() {
+    __benchmark_start();
+
+    int N = 500000;
+    str::String s;
+    s.init();
+
+    // 1. Append
+    for (int i = 0; i < N; ++i) {
+        s.append("tamarin_");
+    }
+
+    // 2. Starts with & Ends with
+    bool sw = s.starts_with("tamarin_");
+    bool ew = s.ends_with("tamarin_");
+
+    // 3. String to int conversions
+    long numSum = 0;
+    str::String numStr;
+    numStr.init_from("12345678");
+    for (int i = 0; i < 1000000; ++i) {
+        numSum = numSum + numStr.to_int();
+    }
+
+    int totalLen = s.length();
+    s.release();
+    numStr.release();
+
+    double ms = __benchmark_elapsed_ms();
+
+    io::print("[Tamarin String] N=");
+    io::print(N);
+    io::print(" | len=");
+    io::print(totalLen);
+    io::print(" | sw=");
+    if (sw) { io::print("1"); } else { io::print("0"); }
+    io::print(" | ew=");
+    if (ew) { io::print("1"); } else { io::print("0"); }
+    io::print(" | numSum=");
+    io::print(numSum);
+    io::print(" | time=");
+    io::print(ms);
+    io::println(" ms");
+
+    return 0;
+}

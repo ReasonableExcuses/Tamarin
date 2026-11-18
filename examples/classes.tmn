@@ -1,0 +1,39 @@
+// TAMARIN v0.3.5 - Object-Oriented Programming (Classes & Methods)
+
+class Player {
+private:
+    int health;
+    int maxHealth;
+
+public:
+    Player(int initialHealth) {
+        health = initialHealth;
+        maxHealth = initialHealth;
+    }
+
+    void takeDamage(int amount) {
+        health -= amount;
+        if (health < 0) {
+            health = 0;
+        }
+    }
+
+    void heal(int amount) {
+        health += amount;
+        if (health > maxHealth) {
+            health = maxHealth;
+        }
+    }
+
+    int getHealth() const {
+        return health;
+    }
+};
+
+int main() {
+    Player player(100);
+    player.takeDamage(30);
+    player.heal(10);
+    return player.getHealth(); // Expected: 80
+}
+

@@ -1,0 +1,153 @@
+// ============================================================================
+// std.string - High-Performance Dynamic UTF-8 String for TAMARIN
+// ============================================================================
+
+public struct String {
+    char buffer[];
+    int len;
+    int capacity;
+
+    void init() {
+        this.capacity = 16;
+        this.len = 0;
+        this.buffer = __builtin_alloc<char>(16);
+        this.buffer[0] = 0;
+    }
+
+    void init_from(const char text[]) {
+        int slen = len(text);
+        int cap = slen + 8;
+        if (cap < 16) { cap = 16; }
+        this.capacity = cap;
+        this.len = slen;
+        this.buffer = __builtin_alloc<char>(cap);
+        __builtin_memcpy<char>(this.buffer, 0, text, 0, slen);
+        this.buffer[slen] = 0;
+    }
+
+    ~String() {
+        if (this.capacity > 0) {
+            __builtin_free(this.buffer);
+            this.capacity = 0;
+            this.len = 0;
+        }
+    }
+
+    void reserve(int newCap) {
+        if (newCap > this.capacity) {
+            this.buffer = __builtin_realloc<char>(this.buffer, newCap);
+            this.capacity = newCap;
+        }
+    }
+
+    void append(const char text[]) {
+        int slen = len(text);
+        if (this.len + slen + 1 > this.capacity) {
+            int newCap = (this.len + slen + 1) * 2;
+            if (newCap < 16) { newCap = 16; }
+            this.reserve(newCap);
+        }
+        __builtin_memcpy<char>(this.buffer, this.len, text, 0, slen);
+        this.len = this.len + slen;
+        this.buffer[this.len] = 0;
+    }
+
+    void push_char(char c) {
+        if (this.len + 2 > this.capacity) {
+            int newCap = this.capacity * 2;
+            if (newCap < 16) { newCap = 16; }
+            this.reserve(newCap);
+        }
+        this.buffer[this.len] = c;
+        this.len = this.len + 1;
+        this.buffer[this.len] = 0;
+    }
+
+    char get(int idx) {
+        return this.buffer[idx];
+    }
+
+    void set(int idx, char c) {
+        this.buffer[idx] = c;
+    }
+
+    const char[] view() const {
+        return this.buffer;
+    }
+
+    int length() const {
+        return this.len;
+    }
+
+    int cap() const {
+        return this.capacity;
+    }
+
+    bool is_empty() const {
+        return this.len == 0;
+    }
+
+    void clear() {
+        this.len = 0;
+        if (this.capacity > 0) {
+            this.buffer[0] = 0;
+        }
+    }
+
+    bool starts_with(const char prefix[]) {
+        int pLen = len(prefix);
+        if (pLen > this.len) { return false; }
+        for (int i = 0; i < pLen; ++i) {
+            if (this.buffer[i] != prefix[i]) { return false; }
+        }
+        return true;
+    }
+
+    bool ends_with(const char suffix[]) {
+        int sLen = len(suffix);
+        if (sLen > this.len) { return false; }
+        int offset = this.len - sLen;
+        for (int i = 0; i < sLen; ++i) {
+            if (this.buffer[offset + i] != suffix[i]) { return false; }
+        }
+        return true;
+    }
+
+    bool equals(const char other[]) {
+        int oLen = len(other);
+        if (oLen != this.len) { return false; }
+        for (int i = 0; i < this.len; ++i) {
+            if (this.buffer[i] != other[i]) { return false; }
+        }
+        return true;
+    }
+
+    int to_int() {
+        int res = 0;
+        int i = 0;
+        bool neg = false;
+        if (this.len > 0 && this.buffer[0] == 45 /* '-' */) {
+            neg = true;
+            i = 1;
+        }
+        while (i < this.len) {
+            char c = this.buffer[i];
+            if (c >= 48 /* '0' */ && c <= 57 /* '9' */) {
+                res = res * 10 + (c - 48);
+            } else {
+                break;
+            }
+            i = i + 1;
+        }
+        if (neg) { return -res; }
+        return res;
+    }
+
+    void release() {
+        if (this.capacity > 0) {
+            __builtin_free(this.buffer);
+            this.capacity = 0;
+            this.len = 0;
+        }
+    }
+};

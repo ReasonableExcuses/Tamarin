@@ -1,0 +1,182 @@
+// 12_adt_matching.tmn - Milestone v0.7: Algebraic Data Types, Pattern Matching & Error Handling
+struct Entity {
+    int id;
+};
+
+enum Event {
+    Quit,
+    Move(int, int),
+    Damage(int, int),
+    Telemetry(int, int, int)
+};
+
+void print_f64_4(double val) {
+    if (val < 0.0) {
+        print("-");
+        val = 0.0 - val;
+    }
+    long int_part = (long)val;
+    double frac = val - (double)int_part;
+    long frac_int = (long)(frac * 10000.0 + 0.5);
+    if (frac_int >= 10000) {
+        int_part = int_part + 1;
+        frac_int = frac_int - 10000;
+    }
+    print(int_part);
+    print(".");
+    if (frac_int < 10) {
+        print("000");
+    } else if (frac_int < 100) {
+        print("00");
+    } else if (frac_int < 1000) {
+        print("0");
+    }
+    print(frac_int);
+}
+
+Result<int, int> stage1(int val) {
+    if ((val & 7) == 0) {
+        return Result::Err(1);
+    }
+    return Result::Ok(val + 10);
+}
+
+Result<int, int> stage2(int val) {
+    if ((val & 32) != 0) {
+        return Result::Err(2);
+    }
+    return Result::Ok(val * 3);
+}
+
+Result<int, int> stage3(int val) {
+    if ((val & 256) != 0) {
+        return Result::Err(3);
+    }
+    return Result::Ok(val ^ 23130);
+}
+
+Result<int, int> run_pipeline(int val) {
+    int v1 = stage1(val)?;
+    int v2 = stage2(v1)?;
+    int v3 = stage3(v2)?;
+    return Result::Ok(v3);
+}
+
+int main() {
+    __benchmark_start();
+
+    long lcg = 2147483647;
+
+    // ── Part 1: ADT Pattern Matching (2,000,000 iterations) ──
+    long x = 0;
+    long y = 0;
+    long damage_sum = 0;
+    long telemetry_sum = 0;
+    long quit_count = 0;
+
+    for (int i = 0; i < 2000000; i++) {
+        lcg = (lcg * 1664525 + 1013904223) & 2147483647;
+        int ev_tag = (int)(lcg % 4);
+
+        Event ev = Event::Quit;
+        if (ev_tag == 0) {
+            ev = Event::Quit;
+        } else if (ev_tag == 1) {
+            int dx = (int)((lcg >> 16) & 255);
+            int dy = (int)((lcg >> 8) & 255);
+            ev = Event::Move(dx, dy);
+        } else if (ev_tag == 2) {
+            int target_id = (int)((lcg >> 16) & 1023);
+            int amount = (int)(lcg & 255);
+            ev = Event::Damage(target_id, amount);
+        } else {
+            int code = (int)((lcg >> 16) & 255);
+            int length = (int)((lcg >> 8) & 127);
+            int flags = (int)(lcg & 31);
+            ev = Event::Telemetry(code, length, flags);
+        }
+
+        match ev {
+            Event::Quit => {
+                quit_count += 1;
+            }
+            Event::Move(dx, dy) => {
+                x += (long)dx;
+                y += (long)dy;
+            }
+            Event::Damage(target_id, amount) => {
+                damage_sum += (long)(target_id * amount);
+            }
+            Event::Telemetry(code, length, flags) => {
+                telemetry_sum += (long)((code ^ length) + flags);
+            }
+        }
+    }
+
+    long adt_sum = x + y + damage_sum + telemetry_sum + quit_count;
+
+    // ── Part 2: Safe Error Handling with Result and ? (1,000,000 iterations) ──
+    long ok_sum = 0;
+    long err_sum = 0;
+
+    for (int j = 0; j < 1000000; j++) {
+        lcg = (lcg * 1664525 + 1013904223) & 2147483647;
+        int val = (int)(lcg & 65535);
+
+        Result<int, int> res = run_pipeline(val);
+        match res {
+            Result::Ok(r) => {
+                ok_sum += (long)r;
+            }
+            Result::Err(e) => {
+                err_sum += (long)e;
+            }
+        }
+    }
+
+    long try_sum = ok_sum - err_sum;
+
+    // ── Part 3: Niche-Optimized Option Handle (500,000 iterations) ──
+    Slab<Entity> slab(2048);
+    Handle<Entity> handles[1024];
+    for (int k = 0; k < 1024; k++) {
+        Entity e = (Entity){ k + 1 };
+        handles[k] = slab.insert(e);
+    }
+
+    long niche_sum = 0;
+    for (int m = 0; m < 500000; m++) {
+        lcg = (lcg * 1664525 + 1013904223) & 2147483647;
+        Option<Handle<Entity>> opt = Option::None;
+        if ((lcg & 3) != 0) {
+            int idx = (int)(lcg & 1023);
+            opt = Option::Some(handles[idx]);
+        }
+
+        match opt {
+            Option::Some(h) => {
+                niche_sum += (long)slab[h].id;
+            }
+            Option::None => {
+                niche_sum -= 42;
+            }
+        }
+    }
+
+    double elapsed_ms = __benchmark_elapsed_ms();
+
+    long checksum = adt_sum + try_sum + niche_sum;
+
+    print("TIME_MS:");
+    print_f64_4(elapsed_ms);
+    print(";ADT_SUM:");
+    print(adt_sum);
+    print(";TRY_SUM:");
+    print(try_sum);
+    print(";NICHE_SUM:");
+    print(niche_sum);
+    print(";CHECKSUM:");
+    print(checksum);
+    print("\n");
+    return 0;
+}

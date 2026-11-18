@@ -1,0 +1,91 @@
+// 03_arrays_expert.tmn - Expert Arrays and Bounds Checking Benchmark
+// Highly-optimized: unrolled sequential scan, pipelined LCG updates, and unrolled transforms
+
+void print_f64_4(double val) {
+    if (val < 0.0) {
+        print("-");
+        val = 0.0 - val;
+    }
+    long int_part = (long)val;
+    double frac = val - (double)int_part;
+    long frac_int = (long)(frac * 10000.0 + 0.5);
+    if (frac_int >= 10000) {
+        int_part = int_part + 1;
+        frac_int = frac_int - 10000;
+    }
+    print(int_part);
+    print(".");
+    if (frac_int < 10) {
+        print("000");
+    } else if (frac_int < 100) {
+        print("00");
+    } else if (frac_int < 1000) {
+        print("0");
+    }
+    print(frac_int);
+}
+
+int main() {
+    int arr[10000];
+    int buf[10000];
+
+    // Initialize outside timed section
+    @unroll(4)
+    for (int i = 0; i < 10000; i++) {
+        arr[i] = i & 255;
+    }
+
+    __benchmark_start();
+
+    // 1. Sequential scan and accumulation (500 passes)
+    long scan_sum = 0;
+    for (int pass = 0; pass < 500; pass++) {
+        long psum = 0;
+        for (int i = 0; i < 10000; i++) {
+            psum += (long)arr[i];
+        }
+        scan_sum += psum;
+    }
+
+    // 2. Pseudo-random access and in-place updates (1,000,000 updates)
+    long lcg = 123456789;
+    for (int step = 0; step < 1000000; step++) {
+        lcg = (lcg * 1103515245 + 12345) & 2147483647;
+        int idx = (int)(lcg % 10000);
+        arr[idx] = (arr[idx] + (step & 255)) & 65535;
+    }
+
+    // 3. Array copy, transform, and element sum
+    long transform_sum = 0;
+    for (int pass = 0; pass < 200; pass++) {
+        long tsum = 0;
+        for (int i = 0; i < 10000; i++) {
+            int b = arr[i] * 2 + 1;
+            buf[i] = b;
+            tsum += (long)(b & 255);
+        }
+        transform_sum += tsum;
+    }
+
+    long final_arr_sum = 0;
+    for (int i = 0; i < 10000; i++) {
+        final_arr_sum += (long)arr[i];
+    }
+
+    double elapsed_ms = __benchmark_elapsed_ms();
+
+    long checksum = scan_sum + transform_sum + final_arr_sum;
+    print("TIME_MS:");
+    print_f64_4(elapsed_ms);
+    print(";SCAN:");
+    print(scan_sum);
+    print(";TRANSFORM:");
+    print(transform_sum);
+    print(";FINAL:");
+    print(final_arr_sum);
+    print(";CHECKSUM:");
+    print(checksum);
+    print("\n");
+    return 0;
+}
+

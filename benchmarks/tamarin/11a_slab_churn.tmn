@@ -1,0 +1,85 @@
+// 11a_slab_churn.tmn - Milestone v0.6: Recyclable Slab Churn & Free-List Reuse
+struct Entity {
+    int id;
+    int health;
+    int speed;
+};
+
+void print_f64_4(double val) {
+    if (val < 0.0) {
+        print("-");
+        val = 0.0 - val;
+    }
+    long int_part = (long)val;
+    double frac = val - (double)int_part;
+    long frac_int = (long)(frac * 10000.0 + 0.5);
+    if (frac_int >= 10000) {
+        int_part = int_part + 1;
+        frac_int = frac_int - 10000;
+    }
+    print(int_part);
+    print(".");
+    if (frac_int < 10) {
+        print("000");
+    } else if (frac_int < 100) {
+        print("00");
+    } else if (frac_int < 1000) {
+        print("0");
+    }
+    print(frac_int);
+}
+
+int main() {
+    __benchmark_start();
+
+    Slab<Entity> pool(4096);
+    Handle<Entity> active[1024];
+
+    long sum = 0;
+
+    // Outer rounds of churn
+    for (int round = 0; round < 200; round++) {
+        // Insert 1024 entities
+        for (int i = 0; i < 1024; i++) {
+            Entity e = (Entity){ round * 1024 + i, 100, 5 };
+            active[i] = pool.insert(e);
+        }
+
+        // Access and accumulate
+        for (int j = 0; j < 1024; j++) {
+            Handle<Entity> h = active[j];
+            sum += (long)pool[h].id;
+        }
+
+        // Remove half of the active entities (free-list recycling)
+        for (int k = 0; k < 1024; k += 2) {
+            pool.remove(active[k]);
+        }
+
+        // Re-insert into recycled slots
+        for (int m = 0; m < 1024; m += 2) {
+            Entity e2 = (Entity){ round * 1024 + m + 500000, 150, 10 };
+            active[m] = pool.insert(e2);
+        }
+
+        // Final accumulation for round
+        for (int n = 0; n < 1024; n++) {
+            Handle<Entity> h2 = active[n];
+            sum += (long)pool[h2].health;
+        }
+
+        // Clear for next round
+        pool.clear();
+    }
+
+    double elapsed_ms = __benchmark_elapsed_ms();
+
+    print("TIME_MS:");
+    print_f64_4(elapsed_ms);
+    print(";SUM:");
+    print(sum);
+    print(";CHECKSUM:");
+    print(sum);
+    print("\n");
+    return 0;
+}

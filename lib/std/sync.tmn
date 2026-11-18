@@ -1,0 +1,215 @@
+// ============================================================================
+// std.sync - Hardware Atomics, Spinlocks, and Concurrency Primitives for TAMARIN
+// ============================================================================
+
+public struct Atomic<T> {
+public:
+    T value;
+
+    void init(T initial) {
+        this.value = initial;
+    }
+
+    T load() {
+        return __builtin_atomic_load<T>(this.value);
+    }
+
+    void store(T val) {
+        __builtin_atomic_store<T>(this.value, val);
+    }
+
+    T fetch_add(T val) {
+        return __builtin_atomic_add<T>(this.value, val);
+    }
+
+    T fetch_sub(T val) {
+        return __builtin_atomic_sub<T>(this.value, val);
+    }
+
+    bool compare_exchange(T expected, T desired) {
+        return __builtin_atomic_cmpxchg<T>(this.value, expected, desired);
+    }
+};
+
+public T atomic_load<T>(const T& target) {
+    return __builtin_atomic_load<T>(target);
+}
+
+public void atomic_store<T>(T& target, T val) {
+    __builtin_atomic_store<T>(target, val);
+}
+
+public T atomic_fetch_add<T>(T& target, T val) {
+    return __builtin_atomic_add<T>(target, val);
+}
+
+public T atomic_fetch_sub<T>(T& target, T val) {
+    return __builtin_atomic_sub<T>(target, val);
+}
+
+public bool atomic_compare_exchange<T>(T& target, T expected, T desired) {
+    return __builtin_atomic_cmpxchg<T>(target, expected, desired);
+}
+
+public struct SpinLock {
+public:
+    int state; // 0 = unlocked, 1 = locked
+
+    void init() {
+        this.state = 0;
+    }
+
+    void lock() {
+        while (!__builtin_atomic_cmpxchg<int>(this.state, 0, 1)) {
+            // spin wait
+        }
+    }
+
+    void unlock() {
+        __builtin_atomic_store<int>(this.state, 0);
+    }
+};
+
+public int next_pow2(int n) {
+    if (n <= 2) return 2;
+    int v = n - 1;
+    v = v | (v >> 1);
+    v = v | (v >> 2);
+    v = v | (v >> 4);
+    v = v | (v >> 8);
+    v = v | (v >> 16);
+    return v + 1;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Dmitry Vyukov Lock-Free Bounded MPMC (Multi-Producer Multi-Consumer) Channel
+// ────────────────────────────────────────────────────────────────────────────
+public struct Channel<T> {
+public:
+    T buffer[];
+    long sequence[];
+    long mask;
+    int capacity;
+    long enqueue_pos;
+    long dequeue_pos;
+
+    void init(int cap) {
+        int realCap = cap;
+        if (realCap <= 2) {
+            realCap = 2;
+        } else {
+            int v = realCap - 1;
+            v = v | (v >> 1);
+            v = v | (v >> 2);
+            v = v | (v >> 4);
+            v = v | (v >> 8);
+            v = v | (v >> 16);
+            realCap = v + 1;
+        }
+        this.capacity = realCap;
+        this.mask = (long)(realCap - 1);
+        this.buffer = __builtin_alloc<T>(realCap);
+        this.sequence = __builtin_alloc<long>(realCap);
+        for (int i = 0; i < realCap; i++) {
+            __builtin_set_unchecked<long>(this.sequence, i, (long)i);
+        }
+        this.enqueue_pos = 0;
+        this.dequeue_pos = 0;
+    }
+
+    void release() {
+        if (this.capacity > 0) {
+            __builtin_free(this.buffer);
+            __builtin_free(this.sequence);
+            this.capacity = 0;
+        }
+    }
+
+    bool try_send(T val) {
+        long pos = __builtin_atomic_load<long>(this.enqueue_pos);
+        while (true) {
+            long idx = pos & this.mask;
+            long seq = __builtin_atomic_load<long>(this.sequence[idx]);
+            long dif = seq - pos;
+            if (dif == 0) {
+                if (__builtin_atomic_cmpxchg<long>(this.enqueue_pos, pos, pos + 1)) {
+                    __builtin_set_unchecked<T>(this.buffer, idx, val);
+                    __builtin_atomic_store<long>(this.sequence[idx], pos + 1);
+                    return true;
+                }
+                pos = __builtin_atomic_load<long>(this.enqueue_pos);
+            } else if (dif < 0) {
+                return false; // Queue is full!
+            } else {
+                pos = __builtin_atomic_load<long>(this.enqueue_pos);
+            }
+        }
+        return false;
+    }
+
+    void send(T val) {
+        while (!this.try_send(val)) {
+            // spin wait
+        }
+    }
+
+    bool try_recv(T& outVal) {
+        long pos = __builtin_atomic_load<long>(this.dequeue_pos);
+        while (true) {
+            long idx = pos & this.mask;
+            long seq = __builtin_atomic_load<long>(this.sequence[idx]);
+            long dif = seq - (pos + 1);
+            if (dif == 0) {
+                if (__builtin_atomic_cmpxchg<long>(this.dequeue_pos, pos, pos + 1)) {
+                    outVal = __builtin_get_unchecked<T>(this.buffer, idx);
+                    __builtin_atomic_store<long>(this.sequence[idx], pos + this.mask + 1);
+                    return true;
+                }
+                pos = __builtin_atomic_load<long>(this.dequeue_pos);
+            } else if (dif < 0) {
+                return false; // Queue is empty!
+            } else {
+                pos = __builtin_atomic_load<long>(this.dequeue_pos);
+            }
+        }
+        return false;
+    }
+
+    T recv() {
+        while (true) {
+            long pos = __builtin_atomic_load<long>(this.dequeue_pos);
+            long idx = pos & this.mask;
+            long seq = __builtin_atomic_load<long>(this.sequence[idx]);
+            long dif = seq - (pos + 1);
+            if (dif == 0) {
+                if (__builtin_atomic_cmpxchg<long>(this.dequeue_pos, pos, pos + 1)) {
+                    T item = __builtin_get_unchecked<T>(this.buffer, idx);
+                    __builtin_atomic_store<long>(this.sequence[idx], pos + this.mask + 1);
+                    return item;
+                }
+            }
+        }
+        return __builtin_get_unchecked<T>(this.buffer, 0);
+    }
+
+    bool is_empty() {
+        long eq = __builtin_atomic_load<long>(this.enqueue_pos);
+        long dq = __builtin_atomic_load<long>(this.dequeue_pos);
+        return eq <= dq;
+    }
+
+    bool is_full() {
+        long eq = __builtin_atomic_load<long>(this.enqueue_pos);
+        long dq = __builtin_atomic_load<long>(this.dequeue_pos);
+        return (eq - dq) >= (long)this.capacity;
+    }
+
+    int len() {
+        long eq = __builtin_atomic_load<long>(this.enqueue_pos);
+        long dq = __builtin_atomic_load<long>(this.dequeue_pos);
+        long diff = eq - dq;
+        if (diff < 0) return 0;
+        if (diff > (long)this.capacity) return this.capacity;
+        return (int)diff;
+    }
+};

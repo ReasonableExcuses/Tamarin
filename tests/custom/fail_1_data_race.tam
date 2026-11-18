@@ -1,0 +1,9 @@
+// MUST FAIL TO COMPILE: Unsynchronized mutation of outer variable in parallel for
+int main() {
+    int shared_counter = 0;
+    parallel for (int i = 0; i < 1024; i++) {
+        shared_counter = shared_counter + 1;
+    }
+    print(shared_counter);
+    return 0;
+}

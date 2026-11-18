@@ -1,0 +1,72 @@
+// 01_integer.tmn - Integer Arithmetic Benchmark
+// Tests prime sieve, Collatz sequences, and 64-bit unsigned modular hashing
+
+int collatz_steps(u64 n) {
+    int steps = 0;
+    while (n > 1) {
+        if (n % 2 == 0) {
+            n = n / 2;
+        } else {
+            n = 3 * n + 1;
+        }
+        steps++;
+    }
+    return steps;
+}
+
+int main() {
+    int is_prime[20000];
+    __benchmark_start();
+
+    // 1. Sieve of Eratosthenes (20,000 elements x 50 iterations)
+    int prime_count = 0;
+    for (int iter = 0; iter < 50; iter++) {
+        for (int i = 0; i < 20000; i++) {
+            is_prime[i] = 1;
+        }
+        is_prime[0] = 0;
+        is_prime[1] = 0;
+        for (int p = 2; p * p < 20000; p++) {
+            if (is_prime[p] == 1) {
+                for (int m = p * p; m < 20000; m += p) {
+                    is_prime[m] = 0;
+                }
+            }
+        }
+        if (iter == 49) {
+            for (int i = 0; i < 20000; i++) {
+                if (is_prime[i] == 1) {
+                    prime_count++;
+                }
+            }
+        }
+    }
+
+    // 2. Collatz sequence steps (1 to 20,000)
+    u64 total_collatz = 0;
+    for (int i = 1; i <= 20000; i++) {
+        total_collatz += (u64)collatz_steps((u64)i);
+    }
+
+    // 3. 64-bit unsigned modular integer hashing (2,000,000 iterations)
+    u64 h = 1469598103934665603;
+    for (int i = 0; i < 2000000; i++) {
+        h = (h * 1099511628211 + (u64)i) ^ (h >> 17);
+    }
+
+    double elapsed_ms = __benchmark_elapsed_ms();
+
+    u64 checksum = (u64)prime_count + total_collatz + (h & 2147483647);
+    print("TIME_MS:");
+    print(elapsed_ms);
+    print(";PRIMES:");
+    print(prime_count);
+    print(";COLLATZ:");
+    print(total_collatz);
+    print(";H:");
+    print(h & 2147483647);
+    print(";CHECKSUM:");
+    print(checksum);
+    print("\n");
+    return 0;
+}

@@ -1,0 +1,12 @@
+// dc09b_initialized_int_to_ptr.tam
+int main() {
+    int fallback = 0;
+    int* p = &fallback;
+    {
+        int secret = 12345;
+        long raw_addr = (long)(&secret);
+        p = (int*)raw_addr;
+    }
+    print(*p);
+    return 0;
+}

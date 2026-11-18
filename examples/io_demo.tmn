@@ -1,0 +1,45 @@
+// ============================================================================
+// io_demo.tmn - TAMARIN Standard Library I/O, Strings & File Handling Demo
+// ============================================================================
+
+import std.io;
+import std.file as file;
+import std.math;
+
+int main() {
+    // 1. Console Output via std.io and direct builtins
+    io::println("=== TAMARIN Standard I/O & Filesystem Demo ===");
+    print("Computing math with std.math: 2^10 = ");
+    int power = math::ipow(2, 10);
+    println(power);
+
+    // 2. String literals and views
+    char message[] = "Tamarin Systems Programming";
+    int msgLen = (int)len(message);
+    print("Message length: ");
+    println(msgLen);
+
+    // 3. File Handling using RAII file::File class
+    io::println("Opening 'tamarin_log.txt' using file::File...");
+    file::File f;
+    if (f.open("tamarin_log.txt", "w")) {
+        f.writeLine("TAMARIN v0.4 Standard Library Log");
+        f.writeLine("Status: OK");
+        f.close();
+    }
+
+    // 4. File existence & reading back
+    if (io::fileExists("tamarin_log.txt")) {
+        io::println("Verified 'tamarin_log.txt' exists on disk.");
+        char buffer[128];
+        int bytes = io::readFile("tamarin_log.txt", buffer, 128);
+        print("Bytes read from file: ");
+        println(bytes);
+        io::removeFile("tamarin_log.txt");
+        io::println("Cleaned up 'tamarin_log.txt'.");
+    }
+
+    io::println("=== Demo Finished Successfully ===");
+    return 0;
+}
+

@@ -1,0 +1,41 @@
+// benchmarks/async_bench/tamarin_async.tam
+// High-throughput async churn & recursive tree work-stealing reduction
+
+async int task_work(int x) {
+    return x * 3 + 1;
+}
+
+async int tree_sum(int depth, int val) {
+    if (depth <= 0) {
+        return val;
+    }
+    Task<int> left = tree_sum(depth - 1, val * 2);
+    Task<int> right = tree_sum(depth - 1, val * 2 + 1);
+    int l = await left;
+    int r = await right;
+    return l + r;
+}
+
+int main() {
+    __benchmark_start();
+
+    // 1. High-frequency async task churn (50,000 tasks)
+    int churn_sum = 0;
+    for (int i = 0; i < 50000; i++) {
+        Task<int> t = task_work(i);
+        churn_sum += await t;
+    }
+
+    // 2. Recursive tree reduction depth 14 (16,383 nodes)
+    int tree_res = await tree_sum(14, 1);
+
+    double elapsed = __benchmark_elapsed_ms();
+    u64 checksum = (u64)churn_sum + (u64)tree_res;
+
+    print("TIME_MS: ");
+    print(elapsed);
+    print("\nCHECKSUM: ");
+    print(checksum);
+    println("");
+    return 0;
+}

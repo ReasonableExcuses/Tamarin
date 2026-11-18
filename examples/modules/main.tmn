@@ -1,0 +1,11 @@
+import math.vector as vec;
+
+int main() {
+    vec::Vec2 a = { 3, 4 };
+    vec::Vec2 b = { 1, 2 };
+
+    a.scale(2);
+    int d = vec::dot(a, b);
+    return d + a.sum(); // (6*1 + 8*2) + (6 + 8) = 22 + 14 = 36
+}
+

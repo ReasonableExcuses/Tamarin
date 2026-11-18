@@ -1,0 +1,11 @@
+// MUST FAIL TO COMPILE: Escaping reference/pointer to local stack variable
+int* escape_local() {
+    int local_secret = 42;
+    return &local_secret;
+}
+
+int main() {
+    int* p = escape_local();
+    print(*p);
+    return 0;
+}

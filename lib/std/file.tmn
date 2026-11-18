@@ -1,0 +1,103 @@
+// ============================================================================
+// std.file - Dedicated File Handling and Operations for TAMARIN
+// ============================================================================
+
+public long open(const char path[], const char mode[]) {
+    return __builtin_file_open(path, mode);
+}
+
+public int close(long handle) {
+    return __builtin_file_close(handle);
+}
+
+public int read(const char path[], char buffer[], int maxBytes) {
+    return __builtin_read_file(path, buffer, maxBytes);
+}
+
+public int write(const char path[], const char text[]) {
+    return __builtin_write_file(path, text);
+}
+
+public int append(const char path[], const char text[]) {
+    return __builtin_append_file(path, text);
+}
+
+public bool exists(const char path[]) {
+    return __builtin_file_exists(path);
+}
+
+public int remove(const char path[]) {
+    return __builtin_file_remove(path);
+}
+
+public class File {
+private:
+    long handle;
+    bool is_open;
+
+public:
+    File() {
+        this.handle = 0;
+        this.is_open = false;
+    }
+
+    ~File() {
+        if (this.is_open) {
+            this.close();
+        }
+    }
+
+    bool open(const char path[], const char mode[]) {
+        if (this.is_open) {
+            this.close();
+        }
+        this.handle = __builtin_file_open(path, mode);
+        if (this.handle != 0) {
+            this.is_open = true;
+            return true;
+        }
+        return false;
+    }
+
+    void close() {
+        if (this.is_open) {
+            __builtin_file_close(this.handle);
+            this.handle = 0;
+            this.is_open = false;
+        }
+    }
+
+    bool isOpen() const {
+        return this.is_open;
+    }
+
+    int read(char buffer[], int maxBytes) {
+        if (!this.is_open) {
+            return -1;
+        }
+        return __builtin_file_read(this.handle, buffer, maxBytes);
+    }
+
+    int write(const char text[]) {
+        if (!this.is_open) {
+            return -1;
+        }
+        return __builtin_file_write(this.handle, text);
+    }
+
+    int writeLine(const char text[]) {
+        if (!this.is_open) {
+            return -1;
+        }
+        int w1 = __builtin_file_write(this.handle, text);
+        int w2 = __builtin_file_write(this.handle, "\n");
+        return w1 + w2;
+    }
+
+    void flush() {
+        if (this.is_open) {
+            __builtin_file_flush(this.handle);
+        }
+    }
+};
+

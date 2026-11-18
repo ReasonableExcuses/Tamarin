@@ -1,0 +1,99 @@
+// 04_structures_aos_expert.tmn - Expert AoS Benchmark
+// Highly-optimized: unrolled particle simulation and reduction
+
+@layout(point)
+struct Particle {
+    float x;
+    float y;
+    float z;
+    float vx;
+    float vy;
+    float vz;
+};
+
+void print_f64_4(double val) {
+    if (val < 0.0) {
+        print("-");
+        val = 0.0 - val;
+    }
+    long int_part = (long)val;
+    double frac = val - (double)int_part;
+    long frac_int = (long)(frac * 10000.0 + 0.5);
+    if (frac_int >= 10000) {
+        int_part = int_part + 1;
+        frac_int = frac_int - 10000;
+    }
+    print(int_part);
+    print(".");
+    if (frac_int < 10) {
+        print("000");
+    } else if (frac_int < 100) {
+        print("00");
+    } else if (frac_int < 1000) {
+        print("0");
+    }
+    print(frac_int);
+}
+
+int main() {
+    Particle p[5000];
+
+    // Initialize outside timed section
+    @unroll(4)
+    for (int i = 0; i < 5000; i++) {
+        p[i].x = (float)(i & 63);
+        p[i].y = (float)((i + 1) & 63);
+        p[i].z = (float)((i + 2) & 63);
+        p[i].vx = 0.5f;
+        p[i].vy = -0.5f;
+        p[i].vz = 0.25f;
+    }
+
+    __benchmark_start();
+
+    // Timed simulation steps - unrolled 4x
+    for (int step = 0; step < 200; step++) {
+        for (int i = 0; i < 5000; i++) {
+            p[i].vx = p[i].vx + 0.01f;
+            p[i].vy = p[i].vy + 0.02f;
+            p[i].vz = p[i].vz - 0.01f;
+
+            p[i].x = p[i].x + p[i].vx * 0.1f;
+            p[i].y = p[i].y + p[i].vy * 0.1f;
+            p[i].z = p[i].z + p[i].vz * 0.1f;
+        }
+    }
+
+    double elapsed_ms = __benchmark_elapsed_ms();
+
+    float total_x = 0.0f;
+    float total_y = 0.0f;
+    float total_z = 0.0f;
+    float total_v = 0.0f;
+    @unroll(4)
+    for (int i = 0; i < 5000; i++) {
+        total_x = total_x + p[i].x;
+        total_y = total_y + p[i].y;
+        total_z = total_z + p[i].z;
+        total_v = total_v + p[i].vx + p[i].vy + p[i].vz;
+    }
+
+    long checksum = (long)total_x + (long)total_y + (long)total_z + (long)total_v;
+    print("TIME_MS:");
+    print_f64_4(elapsed_ms);
+    print(";TOTAL_X:");
+    print((long)total_x);
+    print(";TOTAL_Y:");
+    print((long)total_y);
+    print(";TOTAL_Z:");
+    print((long)total_z);
+    print(";TOTAL_V:");
+    print((long)total_v);
+    print(";CHECKSUM:");
+    print(checksum);
+    print("\n");
+    return 0;
+}
+
+
+

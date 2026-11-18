@@ -1,0 +1,17 @@
+@layout(point)
+struct Vec2 {
+    float x;
+    float y;
+};
+
+float dot(Vec2 a, Vec2 b) {
+    return a.x * b.x + a.y * b.y;
+}
+
+int main() {
+    const Vec2 a = { 2.0f, 3.0f };
+    Vec2 b = { .x = 4.0f, .y = 5.0f };
+    b.y = 6.0f;
+    float d = dot(a, b);
+    return (int)d;
+}

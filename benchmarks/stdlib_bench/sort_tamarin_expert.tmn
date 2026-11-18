@@ -1,0 +1,42 @@
+import std.algorithms as algo;
+import std.mem as mem;
+import std.io as io;
+
+int main() {
+    int N = 2000000;
+    int data[] = mem::alloc<int>(N);
+    int seed = 123456789;
+    for (int i = 0; i < N; ++i) {
+        seed = seed * 1664525 + 1013904223;
+        data[i] = seed & 2147483647;
+    }
+
+    __benchmark_start();
+
+    algo::radix_sort(data);
+
+    double ms = __benchmark_elapsed_ms();
+
+    bool ok = true;
+    for (int i = 0; i < N - 1; ++i) {
+        if (data[i] > data[i + 1]) {
+            ok = false;
+            break;
+        }
+    }
+
+    io::print("[Tamarin Expert RadixSort] N=");
+    io::print(N);
+    io::print(" | sorted=");
+    if (ok) { io::print("YES"); } else { io::print("NO"); }
+    io::print(" | min=");
+    io::print(data[0]);
+    io::print(" | max=");
+    io::print(data[N - 1]);
+    io::print(" | time=");
+    io::print(ms);
+    io::println(" ms");
+
+    mem::free<int>(data);
+    return 0;
+}

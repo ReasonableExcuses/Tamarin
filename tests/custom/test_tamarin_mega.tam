@@ -1,0 +1,418 @@
+// test_tamarin_mega.tam
+// Comprehensive end-to-end stress suite for Tamarin:
+//   1. Ternary operator (? :) precedence, right-associativity, nesting, recursion, & SIMD args
+//   2. Multiple @layout(scan) SoA structs passed across functions with non-linear indexing
+//   3. Native float4 and float8 SIMD arithmetic & reductions
+//   4. Disjoint parallel for writes + multi-variable parallel (reduction(...)) loops
+//   5. extern "C" runtime imports + @c_layout structs + @export C ABI boundary
+
+extern "C" {
+    double fabs(double x);
+    double sqrt(double x);
+    double sin(double x);
+    double cos(double x);
+}
+
+@layout(scan)
+struct Particle {
+    float x;
+    float y;
+    float z;
+    float vx;
+    float vy;
+    float vz;
+    float mass;
+    int active;
+};
+
+@layout(scan)
+struct Attractor {
+    float ax;
+    float ay;
+    float az;
+    float strength;
+};
+
+@c_layout
+struct MegaReport {
+    long stage1_ternary_oracle;
+    long stage1_ternary_actual;
+    long stage2_soa_oracle;
+    long stage2_soa_actual;
+    long stage3_simd_oracle;
+    long stage3_simd_actual;
+    long stage4_parallel_oracle;
+    long stage4_parallel_actual;
+    int stage1_pass;
+    int stage2_pass;
+    int stage3_pass;
+    int stage4_pass;
+    int all_passed;
+};
+
+// Recursive function testing ternary base/recursive branches
+long fib_ternary(int n) {
+    return (n <= 1) ? (long)n : (fib_ternary(n - 1) + fib_ternary(n - 2));
+}
+
+// Helper testing ternary inside return expressions and float clamping
+float clamp_ternary(float val, float lo, float hi) {
+    return (val < lo) ? lo : ((val > hi) ? hi : val);
+}
+
+// ============================================================================
+// STAGE 1: Ternary Operator Precedence, Associativity, Nesting & Recursion
+// ============================================================================
+int run_stage1_ternary(long seed_in, MegaReport report_out[1]) {
+    // 1A. Right-associativity check:
+    // In C, `1 ? 10 : 0 ? 20 : 30` MUST parse as `1 ? 10 : (0 ? 20 : 30)` == 10.
+    // A broken left-associative parser evaluates `(1 ? 10 : 0) ? 20 : 30` == 20.
+    int assoc_check = (1 == 1) ? 10 : (0 == 1) ? 20 : 30;
+    int raw_assoc   = 1 ? 10 : 0 ? 20 : 30;
+
+    // 1B. Recursive ternary check: fib(15) == 610
+    long fib_val = fib_ternary(15);
+
+    // 1C. 1,024-iteration nested ternary vs explicit if/else oracle
+    int lookup[16];
+    for (int k = 0; k < 16; k++) {
+        lookup[k] = (k * 7 + 3) & 31;
+    }
+
+    long oracle_acc = 0;
+    long ternary_acc = 0;
+    long s = seed_in;
+
+    for (int i = 0; i < 1024; i++) {
+        s = (s * 1664525 + 1013904223) & 2147483647;
+        int a = (int)(s & 15);
+        int b = (int)((s >> 4) & 15);
+        int c = (int)((s >> 8) & 15);
+
+        // Explicit if/else ground truth
+        int expected = 0;
+        if (a > b) {
+            if (b > c) {
+                expected = lookup[a] * 3 + lookup[c];
+            } else {
+                expected = lookup[b] * 2 - lookup[a];
+            }
+        } else {
+            if (c == 0) {
+                expected = -99;
+            } else {
+                expected = lookup[c] + ((a & 1) == 1 ? 5 : -5);
+            }
+        }
+
+        // Equivalent deeply nested ternary + ternary array subscript
+        int actual = (a > b)
+            ? ((b > c) ? (lookup[a] * 3 + lookup[c]) : (lookup[b] * 2 - lookup[a]))
+            : ((c == 0) ? -99 : (lookup[(a > c) ? c : c] + (((a & 1) == 1) ? 5 : -5)));
+
+        oracle_acc = oracle_acc + (long)expected;
+        ternary_acc = ternary_acc + (long)actual;
+    }
+
+    int meta_ok = (assoc_check == 10 && raw_assoc == 10 && fib_val == 610) ? 1 : 0;
+    long final_oracle = oracle_acc + 630;
+    long final_actual = ternary_acc + (long)(assoc_check + raw_assoc) + fib_val;
+
+    report_out[0].stage1_ternary_oracle = final_oracle;
+    report_out[0].stage1_ternary_actual = final_actual;
+
+    int pass = (meta_ok == 1 && final_oracle == final_actual) ? 1 : 0;
+    report_out[0].stage1_pass = pass;
+    return pass;
+}
+
+// ============================================================================
+// STAGE 2: Multi-Struct @layout(scan) SoA Simulation (Scalar vs SIMD/Scrambled)
+// ============================================================================
+void init_swarm(Particle p[2048], Attractor att[32], long seed_in) {
+    long s = seed_in;
+    for (int i = 0; i < 2048; i++) {
+        s = (s * 1664525 + 1013904223) & 2147483647;
+        p[i].x = ((float)(s & 65535) / 65535.0f) * 40.0f - 20.0f;
+
+        s = (s * 1664525 + 1013904223) & 2147483647;
+        p[i].y = ((float)(s & 65535) / 65535.0f) * 40.0f - 20.0f;
+
+        s = (s * 1664525 + 1013904223) & 2147483647;
+        p[i].z = ((float)(s & 65535) / 65535.0f) * 40.0f - 20.0f;
+
+        p[i].vx = (i % 2 == 0) ? 0.15f : -0.15f;
+        p[i].vy = (i % 3 == 0) ? -0.10f : 0.20f;
+        p[i].vz = (i % 5 == 0) ? 0.05f : -0.05f;
+        p[i].mass = 1.0f + (float)(i & 7) * 0.25f;
+        p[i].active = (i % 4 != 0) ? 1 : 0;
+    }
+
+    for (int j = 0; j < 32; j++) {
+        att[j].ax = (float)(j - 16) * 1.5f;
+        att[j].ay = (j % 2 == 0) ? 5.0f : -5.0f;
+        att[j].az = (float)(j & 7) - 3.5f;
+        att[j].strength = 0.25f + (float)(j & 3) * 0.1f;
+    }
+}
+
+long step_soa_scalar_oracle(Particle p[2048], Attractor att[32]) {
+    double checksum = 0.0;
+    for (int i = 0; i < 2048; i++) {
+        if (p[i].active == 1) {
+            float fx = 0.0f;
+            float fy = 0.0f;
+            float fz = 0.0f;
+
+            for (int j = 0; j < 32; j++) {
+                float dx = att[j].ax - p[i].x;
+                float dy = att[j].ay - p[i].y;
+                float dz = att[j].az - p[i].z;
+                float dist_sq = dx * dx + dy * dy + dz * dz + 1.0f;
+                float inv = att[j].strength / dist_sq;
+                fx = fx + dx * inv;
+                fy = fy + dy * inv;
+                fz = fz + dz * inv;
+            }
+
+            float nx = clamp_ternary(p[i].x + p[i].vx + fx * 0.01f, -50.0f, 50.0f);
+            float ny = clamp_ternary(p[i].y + p[i].vy + fy * 0.01f, -50.0f, 50.0f);
+            float nz = clamp_ternary(p[i].z + p[i].vz + fz * 0.01f, -50.0f, 50.0f);
+
+            checksum = checksum + (double)((nx + ny - nz) * p[i].mass);
+        }
+    }
+    return (long)(checksum * 1000.0);
+}
+
+long step_soa_simd_scrambled(Particle p[2048], Attractor att[32]) {
+    double checksum = 0.0;
+
+    // Bijective stride (i * 257 + 31) & 2047 tests non-linear SoA plane addressing
+    for (int i = 0; i < 2048; i++) {
+        int idx = (i * 257 + 31) & 2047;
+        if (p[idx].active == 1) {
+            float4 pos = float4(p[idx].x, p[idx].y, p[idx].z, 0.0f);
+            float4 vel = float4(p[idx].vx, p[idx].vy, p[idx].vz, 0.0f);
+            float4 f_acc = float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+            for (int j = 0; j < 32; j++) {
+                float4 a_pos = float4(att[j].ax, att[j].ay, att[j].az, 0.0f);
+                float4 diff  = a_pos - pos;
+                float4 sq    = diff * diff;
+                float dist_sq = sq.x + sq.y + sq.z + 1.0f;
+                float inv = att[j].strength / dist_sq;
+                float4 scale = float4(inv, inv, inv, 0.0f);
+                f_acc = f_acc + (diff * scale);
+            }
+
+            float4 dt_vec = float4(0.01f, 0.01f, 0.01f, 0.0f);
+            float4 next_p = pos + vel + (f_acc * dt_vec);
+
+            float nx = clamp_ternary(next_p.x, -50.0f, 50.0f);
+            float ny = clamp_ternary(next_p.y, -50.0f, 50.0f);
+            float nz = clamp_ternary(next_p.z, -50.0f, 50.0f);
+
+            checksum = checksum + (double)((nx + ny - nz) * p[idx].mass);
+        }
+    }
+    return (long)(checksum * 1000.0);
+}
+
+int run_stage2_soa(long seed_in, MegaReport report_out[1]) {
+    Particle swarm[2048];
+    Attractor attractors[32];
+
+    init_swarm(swarm, attractors, seed_in);
+
+    long oracle_res = step_soa_scalar_oracle(swarm, attractors);
+    long actual_res = step_soa_simd_scrambled(swarm, attractors);
+
+    double diff = fabs((double)(oracle_res - actual_res));
+    int pass = (diff <= 2.0) ? 1 : 0;
+
+    report_out[0].stage2_soa_oracle = oracle_res;
+    report_out[0].stage2_soa_actual = actual_res;
+    report_out[0].stage2_pass = pass;
+    return pass;
+}
+
+// ============================================================================
+// STAGE 3: Native float8 (AVX2) + float4 SIMD Vector & Ternary Lane Pipeline
+// ============================================================================
+int run_stage3_simd(MegaReport report_out[1]) {
+    float data_a[4096];
+    float data_b[4096];
+
+    for (int i = 0; i < 4096; i++) {
+        data_a[i] = ((i % 2) == 0) ? ((float)(i & 63) * 0.125f) : ((float)(i & 31) * -0.25f);
+        data_b[i] = ((i % 3) == 0) ? 1.5f : 0.75f;
+    }
+
+    // Scalar ground truth
+    double scalar_sum = 0.0;
+    for (int i = 0; i < 4096; i++) {
+        float gain = ((i & 7) < 4) ? 2.0f : 0.5f;
+        float v = (data_a[i] * data_b[i] + gain) * 0.25f;
+        scalar_sum = scalar_sum + (double)v;
+    }
+
+    // 8-wide AVX2 float8 vector loop (512 blocks x 8 lanes = 4096 elements)
+    float8 v_acc = float8(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+    float8 v_quarter = float8(0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f);
+
+    for (int blk = 0; blk < 512; blk++) {
+        int base = blk * 8;
+        float8 va = float8(
+            data_a[base + 0], data_a[base + 1], data_a[base + 2], data_a[base + 3],
+            data_a[base + 4], data_a[base + 5], data_a[base + 6], data_a[base + 7]
+        );
+        float8 vb = float8(
+            data_b[base + 0], data_b[base + 1], data_b[base + 2], data_b[base + 3],
+            data_b[base + 4], data_b[base + 5], data_b[base + 6], data_b[base + 7]
+        );
+        float8 v_gain = float8(
+            ((base + 0) & 7) < 4 ? 2.0f : 0.5f,
+            ((base + 1) & 7) < 4 ? 2.0f : 0.5f,
+            ((base + 2) & 7) < 4 ? 2.0f : 0.5f,
+            ((base + 3) & 7) < 4 ? 2.0f : 0.5f,
+            ((base + 4) & 7) < 4 ? 2.0f : 0.5f,
+            ((base + 5) & 7) < 4 ? 2.0f : 0.5f,
+            ((base + 6) & 7) < 4 ? 2.0f : 0.5f,
+            ((base + 7) & 7) < 4 ? 2.0f : 0.5f
+        );
+
+        float8 prod = ((va * vb) + v_gain) * v_quarter;
+        v_acc = v_acc + prod;
+    }
+
+    double simd_sum = (double)v_acc[0] + (double)v_acc[1] + (double)v_acc[2] + (double)v_acc[3]
+                    + (double)v_acc[4] + (double)v_acc[5] + (double)v_acc[6] + (double)v_acc[7];
+
+    long oracle_long = (long)(scalar_sum * 1000.0);
+    long simd_long   = (long)(simd_sum * 1000.0);
+    double diff = fabs((double)(oracle_long - simd_long));
+    int pass = (diff <= 2.0) ? 1 : 0;
+
+    report_out[0].stage3_simd_oracle = oracle_long;
+    report_out[0].stage3_simd_actual = simd_long;
+    report_out[0].stage3_pass = pass;
+    return pass;
+}
+
+// ============================================================================
+// STAGE 4: Disjoint parallel for Array Writes + Dual Parallel Reductions
+// ============================================================================
+int run_stage4_parallel(MegaReport report_out[1]) {
+    float parallel_buf[8192];
+    float scalar_buf[8192];
+
+    // 4A. Disjoint parallel array mutation + extern "C" math + ternary
+    parallel for (int i = 0; i < 8192; i++) {
+        double angle = (double)(i & 255) * 0.025;
+        double wave = sin(angle) * cos(angle);
+        float raw = (float)(sqrt(fabs(wave) + 0.01));
+        parallel_buf[i] = ((i % 2) == 0) ? raw : (0.0f - raw);
+    }
+
+    for (int i = 0; i < 8192; i++) {
+        double angle = (double)(i & 255) * 0.025;
+        double wave = sin(angle) * cos(angle);
+        float raw = (float)(sqrt(fabs(wave) + 0.01));
+        scalar_buf[i] = ((i % 2) == 0) ? raw : (0.0f - raw);
+    }
+
+    // 4B. Dual parallel reduction + float4 SIMD over parallel_buf
+    double par_sum = 0.0;
+    double par_sq_sum = 0.0;
+
+    parallel (reduction(+:par_sum), reduction(+:par_sq_sum))
+    for (int blk = 0; blk < 2048; blk++) {
+        int base = blk * 4;
+        float4 v = float4(
+            parallel_buf[base + 0],
+            parallel_buf[base + 1],
+            parallel_buf[base + 2],
+            parallel_buf[base + 3]
+        );
+        float4 v2 = v * v;
+        float s1 = v.x + v.y + v.z + v.w;
+        float s2 = v2.x + v2.y + v2.z + v2.w;
+
+        par_sum = par_sum + (double)s1;
+        par_sq_sum = par_sq_sum + (double)s2;
+    }
+
+    // Scalar oracle for 4B
+    double seq_sum = 0.0;
+    double seq_sq_sum = 0.0;
+    for (int i = 0; i < 8192; i++) {
+        float val = scalar_buf[i];
+        seq_sum = seq_sum + (double)val;
+        seq_sq_sum = seq_sq_sum + (double)(val * val);
+    }
+
+    long oracle_total = (long)(seq_sum * 10000.0) + (long)(seq_sq_sum * 10000.0);
+    long par_total    = (long)(par_sum * 10000.0) + (long)(par_sq_sum * 10000.0);
+    double diff = fabs((double)(oracle_total - par_total));
+    int pass = (diff <= 2.0) ? 1 : 0;
+
+    report_out[0].stage4_parallel_oracle = oracle_total;
+    report_out[0].stage4_parallel_actual = par_total;
+    report_out[0].stage4_pass = pass;
+    return pass;
+}
+
+// ============================================================================
+// STAGE 5: Exported C ABI Entry Point (@export + @c_layout)
+// ============================================================================
+@export
+MegaReport run_mega_verification(long master_seed) {
+    MegaReport rep[1];
+
+    int p1 = run_stage1_ternary(master_seed, rep);
+    int p2 = run_stage2_soa(master_seed ^ 99112233, rep);
+    int p3 = run_stage3_simd(rep);
+    int p4 = run_stage4_parallel(rep);
+
+    rep[0].all_passed = (p1 == 1 && p2 == 1 && p3 == 1 && p4 == 1) ? 1 : 0;
+    return rep[0];
+}
+
+int main() {
+    MegaReport r = run_mega_verification(135792468);
+
+    print("=== TAMARIN MEGA VERIFICATION SUITE ===\n");
+
+    print("[Stage 1: Ternary & Recursion] Oracle=");
+    print(r.stage1_ternary_oracle);
+    print(" Actual=");
+    print(r.stage1_ternary_actual);
+    print((r.stage1_pass == 1) ? " -> PASS\n" : " -> FAIL\n");
+
+    print("[Stage 2: Multi-SoA & Stride]  Oracle=");
+    print(r.stage2_soa_oracle);
+    print(" Actual=");
+    print(r.stage2_soa_actual);
+    print((r.stage2_pass == 1) ? " -> PASS\n" : " -> FAIL\n");
+
+    print("[Stage 3: float8/float4 SIMD]  Oracle=");
+    print(r.stage3_simd_oracle);
+    print(" Actual=");
+    print(r.stage3_simd_actual);
+    print((r.stage3_pass == 1) ? " -> PASS\n" : " -> FAIL\n");
+
+    print("[Stage 4: Parallel Reductions] Oracle=");
+    print(r.stage4_parallel_oracle);
+    print(" Actual=");
+    print(r.stage4_parallel_actual);
+    print((r.stage4_pass == 1) ? " -> PASS\n" : " -> FAIL\n");
+
+    if (r.all_passed == 1) {
+        print("OVERALL STATUS: ALL 4 STAGES PASSED!\n");
+        return 0;
+    } else {
+        print("OVERALL STATUS: FAILURE DETECTED!\n");
+        return 1;
+    }
+}

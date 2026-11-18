@@ -1,0 +1,168 @@
+// ============================================================================
+// std.algorithms - Cache-Friendly High-Throughput Algorithms for TAMARIN
+// ============================================================================
+
+public void swap<T>(T& a, T& b) {
+    T tmp = a;
+    a = b;
+    b = tmp;
+}
+
+public void reverse<T>(T arr[]) {
+    int i = 0;
+    int j = len(arr) - 1;
+    while (i < j) {
+        T tmp = arr[i];
+        arr[i] = arr[j];
+        arr[j] = tmp;
+        i = i + 1;
+        j = j - 1;
+    }
+}
+
+public void fill<T>(T arr[], T val) {
+    int n = len(arr);
+    for (int i = 0; i < n; ++i) {
+        arr[i] = val;
+    }
+}
+
+public int binary_search<T>(T arr[], T key) {
+    int low = 0;
+    int high = len(arr) - 1;
+    while (low <= high) {
+        int mid = low + (high - low) / 2;
+        if (arr[mid] == key) {
+            return mid;
+        }
+        if (arr[mid] < key) {
+            low = mid + 1;
+        } else {
+            high = mid - 1;
+        }
+    }
+    return -1;
+}
+
+// High-throughput cache-optimized quicksort with tail-call elimination
+public void quicksort<T>(T arr[], int low, int high) {
+    while (high - low > 16) {
+        // Median-of-three pivot selection
+        int mid = low + (high - low) / 2;
+        if (arr[low] > arr[mid]) {
+            T t1 = arr[low]; arr[low] = arr[mid]; arr[mid] = t1;
+        }
+        if (arr[low] > arr[high]) {
+            T t2 = arr[low]; arr[low] = arr[high]; arr[high] = t2;
+        }
+        if (arr[mid] > arr[high]) {
+            T t3 = arr[mid]; arr[mid] = arr[high]; arr[high] = t3;
+        }
+
+        T pivot = arr[mid];
+        int i = low;
+        int j = high;
+
+        while (i <= j) {
+            while (arr[i] < pivot) { i = i + 1; }
+            while (arr[j] > pivot) { j = j - 1; }
+            if (i <= j) {
+                T tmp = arr[i];
+                arr[i] = arr[j];
+                arr[j] = tmp;
+                i = i + 1;
+                j = j - 1;
+            }
+        }
+
+        // Recurse on the smaller partition, loop on the larger partition
+        if (j - low < high - i) {
+            if (low < j) { quicksort<T>(arr, low, j); }
+            low = i;
+        } else {
+            if (i < high) { quicksort<T>(arr, i, high); }
+            high = j;
+        }
+    }
+
+    // Small sub-array insertion sort for remaining elements (N <= 16)
+    for (int i = low + 1; i <= high; ++i) {
+        T key = arr[i];
+        int j = i - 1;
+        while (j >= low && arr[j] > key) {
+            arr[j + 1] = arr[j];
+            j = j - 1;
+        }
+        arr[j + 1] = key;
+    }
+}
+
+public void sort<T>(T arr[]) {
+    int n = len(arr);
+    if (n > 1) {
+        quicksort<T>(arr, 0, n - 1);
+    }
+}
+
+// High-speed O(N) 8-bit LSD Radix Sort for 32-bit integers
+public void radix_sort(int arr[]) {
+    int n = len(arr);
+    if (n <= 32) {
+        sort<int>(arr);
+        return;
+    }
+
+    int temp[] = __builtin_alloc<int>(n);
+    int count[256];
+    int offset[256];
+
+    int src[] = arr;
+    int dst[] = temp;
+
+    for (int pass = 0; pass < 4; ++pass) {
+        int shift = pass * 8;
+
+        for (int i = 0; i < 256; ++i) {
+            count[i] = 0;
+        }
+
+        if (pass == 3) {
+            for (int i = 0; i < n; ++i) {
+                int b = ((src[i] >> 24) ^ 128) & 255;
+                count[b] = count[b] + 1;
+            }
+        } else {
+            for (int i = 0; i < n; ++i) {
+                int b = (src[i] >> shift) & 255;
+                count[b] = count[b] + 1;
+            }
+        }
+
+        offset[0] = 0;
+        for (int i = 1; i < 256; ++i) {
+            offset[i] = offset[i - 1] + count[i - 1];
+        }
+
+        if (pass == 3) {
+            for (int i = 0; i < n; ++i) {
+                int b = ((src[i] >> 24) ^ 128) & 255;
+                int pos = offset[b];
+                __builtin_set_unchecked<int>(dst, pos, src[i]);
+                offset[b] = pos + 1;
+            }
+        } else {
+            for (int i = 0; i < n; ++i) {
+                int b = (src[i] >> shift) & 255;
+                int pos = offset[b];
+                __builtin_set_unchecked<int>(dst, pos, src[i]);
+                offset[b] = pos + 1;
+            }
+        }
+
+        int swapTmp[] = src;
+        src = dst;
+        dst = swapTmp;
+    }
+
+    __builtin_free(temp);
+}

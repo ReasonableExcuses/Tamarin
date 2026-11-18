@@ -1,0 +1,76 @@
+// ============================================================================
+// std.io - Standard I/O, Console, and File Operations for TAMARIN
+// ============================================================================
+
+public void print(const char msg[]) {
+    __builtin_print(msg);
+}
+
+public void println(const char msg[]) {
+    __builtin_println(msg);
+}
+
+public void printInt(int val) {
+    __builtin_print(val);
+}
+
+public void printlnInt(int val) {
+    __builtin_println(val);
+}
+
+public void printFloat(double val) {
+    __builtin_print(val);
+}
+
+public void printlnFloat(double val) {
+    __builtin_println(val);
+}
+
+public void printBool(bool val) {
+    __builtin_print(val);
+}
+
+public void printlnBool(bool val) {
+    __builtin_println(val);
+}
+
+public void printNewline() {
+    __builtin_println();
+}
+
+public int readLine(char buffer[], int maxBytes) {
+    return __builtin_get_input(buffer, maxBytes);
+}
+
+public const char[] getInput() {
+    return __builtin_get_input();
+}
+
+public long openFile(const char path[], const char mode[]) {
+    return __builtin_file_open(path, mode);
+}
+
+public int closeFile(long handle) {
+    return __builtin_file_close(handle);
+}
+
+public int readFile(const char path[], char buffer[], int maxBytes) {
+    return __builtin_read_file(path, buffer, maxBytes);
+}
+
+public int writeFile(const char path[], const char text[]) {
+    return __builtin_write_file(path, text);
+}
+
+public int appendFile(const char path[], const char text[]) {
+    return __builtin_append_file(path, text);
+}
+
+public bool fileExists(const char path[]) {
+    return __builtin_file_exists(path);
+}
+
+public int removeFile(const char path[]) {
+    return __builtin_file_remove(path);
+}
+

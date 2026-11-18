@@ -1,0 +1,91 @@
+# ── Build Directories ────────────────────────────────────────────────────────
+build/
+/bin/
+/target/
+out/
+cmake-build-*/
+x64/
+x86/
+Debug/
+Release/
+MinSizeRel/
+RelWithDebInfo/
+generated/
+
+# ── CMake Artifacts ──────────────────────────────────────────────────────────
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+CMakeSettings.json
+Testing/
+
+# ── Compiled / Object / Binary Outputs ───────────────────────────────────────
+*.obj
+*.o
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.idb
+*.suo
+
+# ── LLVM IR / Assembly ───────────────────────────────────────────────────────
+*.ll
+*.bc
+*.s
+*.asm
+
+# ── Package Manager Artifacts ────────────────────────────────────────────────
+.troop/
+troop.lock
+
+# ── Python / Test Artifacts ──────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# ── Visual Studio / IDEs ─────────────────────────────────────────────────────
+.vs/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+*.opensdf
+*.sdf
+*.cachefile
+*.VC.db
+*.VC.opendb
+ipch/
+.vscode/
+.idea/
+
+# ── Precompiled Headers ──────────────────────────────────────────────────────
+*.gch
+*.pch
+
+# ── OS / Editor Junk ─────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+*~
+*.swp
+*.swo
+*.bak
+*.tmp
+scratch/
+
+# ── Benchmark Temporary Outputs ──────────────────────────────────────────────
+benchmarks/build/
+benchmarks/rust/target/
+benchmarks/**/*.exe
+benchmarks/**/*.obj
+benchmarks/**/*.pdb
+benchmarks/**/*.ll

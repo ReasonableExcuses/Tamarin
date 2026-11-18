@@ -1,0 +1,173 @@
+# Tamarin Compiler Architecture and Pipeline Specification
+
+**Version:** 0.15.0  
+**Classification:** Systems Engineering & Compiler Internals  
+
+---
+
+## 1. Architectural Overview
+
+The Tamarin compiler (`tamarin`) is engineered as a modular C++23 compiler pipeline designed for high compilation throughput, verifiable semantic safety, and optimal native code generation via LLVM.
+
+```text
++---------------------------------------------------------------------------------+
+|                            Tamarin Compiler Architecture                        |
++---------------------------------------------------------------------------------+
+   Source Files (.tam / .tmn)
+          │
+          ▼
+   [ SourceManager ] ─────────► UTF-8 Memory Mapping & Line/Column Diagnostics
+          │
+          ▼
+   [ Lexer & Parser ] ────────► Recursive Descent AST Construction
+          │
+          ▼
+   [ Semantic Analysis (Sema) ]
+     ├── Symbol Resolution & Scope Hierarchies
+     ├── Hindley-Milner Type Inference & Static Type Checking
+     ├── Monomorphization Engine (Zero-Cost Generics)
+     ├── BorrowChecker (ProvenanceSet + ActiveBorrow Verification)
+     ├── MoveChecker (Linear Resource Consumption & Drop Flag Synthesizer)
+     └── DataRaceChecker (Affine Injectivity on parallel for)
+          │
+          ▼
+   [ Tamarin IR (TIR) ] ──────► Static Single Assignment (SSA) Control Flow Graph
+     ├── Pass: Range Analysis
+     ├── Pass: Bounds Check Elimination (BCE)
+     └── Pass: Alias Analysis & Redundancy Elimination
+          │
+          ▼
+   [ LLVM Codegen & Optimizer ]
+     ├── Target: Host Native CPU (-march=native, AVX2/AVX-512)
+     ├── Optimization: LLVM O3 Pipeline + Fast-Math Vectorizer
+     └── C99 Header Generator (--emit-header)
+          │
+          ├──────────────────────────────┬──────────────────────────────┐
+          ▼                              ▼                              ▼
+   Native Binary (.exe/.dll)      C99 Interface (.h)             LLVM IR (.ll)
+```
+
+---
+
+## 2. Frontend Subsystems
+
+### 2.1 `SourceManager` and Diagnostic Engine
+- **Memory Mapping**: Source files are memory-mapped into contiguous read-only buffers with zero extra copies.
+- **Diagnostics**: Diagnostics feature ANSI color highlighting, source code context carats, line/column positioning, and standard error classification codes (`E01xx` syntax, `E02xx` borrow checker, `E03xx` type errors, `E04xx` data race errors).
+
+### 2.2 Lexer (`src/lexer/`)
+- Handcrafted deterministic finite automaton (DFA) scanner.
+- Zero heap allocations during token scanning; identifiers and string literals point directly into the source buffer via string views (`std::string_view`).
+- Preserves token trivia and source locations for error reporting.
+
+### 2.3 Parser and AST (`src/parser/`, `src/ast/`)
+- Recursive descent parser with operator precedence Pratt parsing for binary expressions.
+- Builds an Abstract Syntax Tree (AST) rooted in `TranslationUnitNode`.
+- Supports exact C-style declarations (`int main()`, `float compute(float x)`), algebraic `enum`, `match` expressions, closures `|x| expr`, and `@layout(scan)` struct annotations.
+
+---
+
+## 3. Semantic Analysis Engine (Sema)
+
+The `Sema` phase (`src/sema/`) performs multi-pass semantic verification:
+
+1. **Symbol Table & Scope Resolution** (`symbol_table.cpp`):
+   Constructs lexical scope trees, resolves identifier bindings, and verifies visibility modifiers (`public` vs internal).
+2. **Type Checking & Monomorphization** (`type_checker.cpp`, `monomorphizer.cpp`):
+   Performs type unification, checks assignment compatibility, and monomorphizes generic functions and structs (`Result<T, E>`, `Vector<T>`).
+3. **Borrow Checker** (`BorrowChecker`):
+   Tracks `ProvenanceSet` roots and ensures the reader-writer borrow invariant: any number of immutable references (`&T`) OR exactly one exclusive mutable reference (`&mut T`).
+4. **Move Checker** (`MoveChecker`):
+   Validates affine linear consumption: variables passed to `move(x)` are invalidated for subsequent reads. For variables moved along conditional paths, the compiler synthesizes stack-allocated drop flags.
+5. **Data Race Checker** (`DataRaceChecker`):
+   Analyzes array index expressions in `parallel for` bodies to prove index injectivity $f(i) = c_1 \cdot i + c_2$ ($c_1 \ne 0$), rejecting race conditions at compile time.
+
+---
+
+## 4. Tamarin Intermediate Representation (TIR)
+
+TIR (`src/ir/`) is a mid-level SSA intermediate representation designed to bridge the semantic gap between the high-level AST and low-level LLVM IR.
+
+### 4.1 TIR Instruction Set
+- **Control Flow**: `tir.branch`, `tir.cond_branch`, `tir.return`.
+- **Memory Operations**: `tir.alloc`, `tir.load`, `tir.store`, `tir.move`, `tir.drop`.
+- **Data Orientation**: `tir.soa_load`, `tir.soa_store` representing contiguous column vector operations for `@layout(scan)` arrays.
+- **Concurrency**: `tir.task_spawn`, `tir.task_await`, `tir.parallel_for`.
+
+### 4.2 Mid-Level Optimization Passes (`src/ir/opt/`)
+- **Range Analysis** (`range_analysis.cpp`): Computes interval bounds $[L_i, U_i]$ for induction variables and array indexes across loop bodies.
+- **Bounds Check Elimination** (`bounds_check_elimination.cpp`): Uses range analysis to prove array indices remain strictly within $[0, \text{Length}-1]$, eliminating redundant branch instructions.
+- **Alias Analysis** (`alias_analysis.cpp`): Leverages `ProvenanceSet` guarantees to prove disjointness between memory loads and stores, enabling aggressive load forwarding and dead store elimination.
+
+---
+
+## 5. Backend and Code Generation
+
+### 5.1 LLVM IR Lowering (`src/backend/llvm_codegen.cpp`)
+- Converts TIR basic blocks and instructions into strongly typed LLVM IR.
+- Configures target machine triples, data layouts, CPU features (e.g., `+avx2,+fma` under `--target-cpu native`), and floating-point models (`--fast-math`).
+- Automatically emits metadata for loop auto-vectorization (`llvm.loop.vectorize.enable`).
+
+### 5.2 C99 Header Generation (`src/backend/c_header_generator.cpp`)
+- When invoked with `--emit-header`, the backend scans all `@c_layout` structs and `@export` functions, generating an idiomatic, standards-compliant C99 header file with include guards and C ABI type definitions.
+
+---
+
+## 6. Runtime Library Architecture (`src/runtime/`)
+
+Tamarin applications link against a lightweight, zero-overhead runtime (`tamarin_runtime`):
+
+### 6.1 `PageProvider` (`src/runtime/page_provider.cpp`)
+- Manages high-performance page-aligned virtual memory requests via OS APIs (`VirtualAlloc`/`VirtualFree` on Windows, `mmap`/`munmap` on POSIX).
+- Maintains thread-local page caches for instant region bump-allocation without contending on OS kernel locks.
+
+### 6.2 `ThreadTaskPool` (`src/runtime/concurrency.cpp`)
+- Work-stealing thread pool configured to the number of physical CPU cores.
+- Executes `parallel for` partitions across work queues using deque-based work stealing.
+- Provides coroutine scheduling and lightweight fiber execution for `Task<T>`.
+
+---
+
+## 7. Troop Package Manager Architecture (`troop/`)
+
+`troop` is the canonical package manager and build orchestrator for Tamarin projects.
+
+```text
++---------------------------------------------------------------------------------+
+|                            Troop Package Orchestrator                           |
++---------------------------------------------------------------------------------+
+   troop.toml Manifest
+          │
+          ▼
+   [ Manifest Parser ] ───────► TOML Semantic Deserialization (Package & Deps)
+          │
+          ▼
+   [ Dependency Resolver ] ───► Semantic Versioning (SemVer 2.0.0)
+     ├── Diamond Dependency Deduplication
+     ├── Cycle Detection (Tarjan's DFS)
+     └── Topological Compilation Order Construction
+          │
+          ▼
+   [ Lockfile Generator ] ────► troop.lock (Deterministic Reproducibility)
+          │
+          ▼
+   [ Build Runner ] ──────────► Incremental Invocation of 'tamarin'
+```
+
+### 7.1 Manifest (`troop.toml`)
+Defines package metadata, compiler requirements, and dependencies:
+```toml
+[package]
+name = "math_service"
+version = "0.1.0"
+authors = ["Compiler Team"]
+edition = "2026"
+
+[dependencies]
+matrix_core = { path = "../matrix_core" }
+```
+
+### 7.2 Deterministic Resolver
+- Resolves dependencies using Semantic Versioning (SemVer 2.0.0).
+- Performs depth-first search (DFS) with topological sorting to detect cycles and build a deterministic Directed Acyclic Graph (DAG) compilation schedule.
+- Emits `troop.lock` containing exact package hashes and pinned dependency paths.

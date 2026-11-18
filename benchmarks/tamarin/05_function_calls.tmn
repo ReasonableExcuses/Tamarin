@@ -1,0 +1,64 @@
+// 05_function_calls.tmn - Function Calls and Inlining Benchmark
+// Tests deep recursion (fibonacci) and tight loop function dispatch
+
+int fib(int n) {
+    if (n <= 1) {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+u64 transform(u64 x, u64 y) {
+    return (x * 3 + y * 7 + 1) ^ (x >> 3);
+}
+
+void print_f64_4(double val) {
+    if (val < 0.0) {
+        print("-");
+        val = 0.0 - val;
+    }
+    long int_part = (long)val;
+    double frac = val - (double)int_part;
+    long frac_int = (long)(frac * 10000.0 + 0.5);
+    if (frac_int >= 10000) {
+        int_part = int_part + 1;
+        frac_int = frac_int - 10000;
+    }
+    print(int_part);
+    print(".");
+    if (frac_int < 10) {
+        print("000");
+    } else if (frac_int < 100) {
+        print("00");
+    } else if (frac_int < 1000) {
+        print("0");
+    }
+    print(frac_int);
+}
+
+int main() {
+    __benchmark_start();
+
+    int f = fib(34);
+
+    u64 acc = 12345;
+    for (int i = 0; i < 5000000; i++) {
+        acc = transform(acc, (u64)i);
+    }
+
+    double elapsed_ms = __benchmark_elapsed_ms();
+
+    u64 acc_masked = acc & 2147483647;
+    long checksum = (long)f + (long)acc_masked;
+
+    print("TIME_MS:");
+    print_f64_4(elapsed_ms);
+    print(";FIB:");
+    print(f);
+    print(";ACC:");
+    print(acc_masked);
+    print(";CHECKSUM:");
+    print(checksum);
+    print("\n");
+    return 0;
+}

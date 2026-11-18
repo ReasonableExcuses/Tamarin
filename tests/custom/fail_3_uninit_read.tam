@@ -1,0 +1,11 @@
+// MUST FAIL TO COMPILE: Reading struct field before initialization
+struct Packet {
+    int id;
+    float weight;
+};
+
+int main() {
+    Packet pkt;
+    print(pkt.id);
+    return 0;
+}

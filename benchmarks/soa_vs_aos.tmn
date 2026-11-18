@@ -1,0 +1,55 @@
+// TAMARIN v0.3.5 - Array-of-Structures (AoS) vs Structure-of-Arrays (SoA) Benchmark
+
+@layout(point)
+struct ParticleAoS {
+    float x;
+    float y;
+    float vx;
+    float vy;
+};
+
+@layout(scan)
+struct ParticleSoA {
+    float x;
+    float y;
+    float vx;
+    float vy;
+};
+
+int benchmarkAoS(int n) {
+    ParticleAoS p[1000];
+    for (int i = 0; i < 1000; i++) {
+        p[i].x = 1.0f;
+        p[i].vx = 0.5f;
+    }
+    for (int step = 0; step < 100; step++) {
+        for (int i = 0; i < 1000; i++) {
+            p[i].x += p[i].vx;
+        }
+    }
+    return (int)p[999].x;
+}
+
+int benchmarkSoA(int n) {
+    ParticleSoA p[1000];
+    for (int i = 0; i < 1000; i++) {
+        p[i].x = 1.0f;
+        p[i].vx = 0.5f;
+    }
+    for (int step = 0; step < 100; step++) {
+        for (int i = 0; i < 1000; i++) {
+            p[i].x += p[i].vx;
+        }
+    }
+    return (int)p[999].x;
+}
+
+int main() {
+    int resAoS = benchmarkAoS(1000);
+    int resSoA = benchmarkSoA(1000);
+    if (resAoS == resSoA) {
+        return 0; // Success: AoS and SoA results match
+    }
+    return 1;
+}
+

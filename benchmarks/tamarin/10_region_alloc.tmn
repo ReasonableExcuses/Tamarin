@@ -1,0 +1,99 @@
+// 10_region_alloc.tmn - Memory Regions and Monotonic Arena Benchmark
+// Tests monotonic bump allocation, nested regions, and bulk reclamation
+
+void print_f64_4(double val) {
+    if (val < 0.0) {
+        print("-");
+        val = 0.0 - val;
+    }
+    long int_part = (long)val;
+    double frac = val - (double)int_part;
+    long frac_int = (long)(frac * 10000.0 + 0.5);
+    if (frac_int >= 10000) {
+        int_part = int_part + 1;
+        frac_int = frac_int - 10000;
+    }
+    print(int_part);
+    print(".");
+    if (frac_int < 10) {
+        print("000");
+    } else if (frac_int < 100) {
+        print("00");
+    } else if (frac_int < 1000) {
+        print("0");
+    }
+    print(frac_int);
+}
+
+struct Particle {
+    long id;
+    long x;
+    long y;
+    long z;
+};
+
+int main() {
+    __benchmark_start();
+
+    long particle_sum = 0;
+    long scratch_sum = 0;
+    long nested_sum = 0;
+
+    for (int iter = 0; iter < 5000; iter++) {
+        region frame(65536) {
+            Particle particles[100];
+            int scratch[200];
+            int growth[18000];
+
+            for (int i = 0; i < 100; i++) {
+                particles[i].id = (long)(iter * 100 + i);
+                particles[i].x = (long)(i * 3 + iter);
+                particles[i].y = (long)(i * 7 + iter * 2);
+                particles[i].z = (long)(i * 11 + iter * 3);
+            }
+
+            for (int j = 0; j < 100; j++) {
+                scratch[j] = (int)(particles[j].x + particles[j].y);
+                scratch[j + 100] = (int)(particles[j].z - particles[j].x);
+            }
+
+            growth[0] = scratch[0] + (int)particles[0].x;
+            growth[17999] = scratch[199] + (int)particles[99].z;
+
+            for (int k = 0; k < 200; k++) {
+                scratch_sum += (long)scratch[k];
+            }
+            scratch_sum += (long)(growth[0] + growth[17999]);
+
+            for (int p = 0; p < 100; p++) {
+                particle_sum += particles[p].id;
+            }
+
+            region subframe(16384) {
+                int temp[50];
+                for (int m = 0; m < 50; m++) {
+                    temp[m] = scratch[m] + (int)particles[m].z;
+                    nested_sum += (long)temp[m];
+                }
+            }
+        }
+    }
+
+    double elapsed_ms = __benchmark_elapsed_ms();
+
+    long checksum = particle_sum + scratch_sum + nested_sum;
+
+    print("TIME_MS:");
+    print_f64_4(elapsed_ms);
+    print(";PARTICLES:");
+    print(particle_sum);
+    print(";SCRATCH:");
+    print(scratch_sum);
+    print(";NESTED:");
+    print(nested_sum);
+    print(";CHECKSUM:");
+    print(checksum);
+    print("\n");
+    return 0;
+}
+

@@ -1,0 +1,5 @@
+// 09_startup_expert.tmn - Expert Startup Overhead Benchmark
+int main() {
+    return 0;
+}
+

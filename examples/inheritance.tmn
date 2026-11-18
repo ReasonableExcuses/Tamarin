@@ -1,0 +1,41 @@
+// TAMARIN v0.3.5 - Single Inheritance and Virtual Method Dynamic Dispatch
+
+class Animal {
+protected:
+    int age;
+
+public:
+    Animal(int a) {
+        age = a;
+    }
+
+    virtual int speak() {
+        return 10;
+    }
+
+    int getAge() const {
+        return age;
+    }
+};
+
+class Dog : public Animal {
+public:
+    Dog(int a) {
+        age = a;
+    }
+
+    int speak() override {
+        return 42;
+    }
+};
+
+int makeAnimalSpeak(Animal& a) {
+    return a.speak();
+}
+
+int main() {
+    Dog dog(5);
+    int sound = makeAnimalSpeak(dog); // Dynamic dispatch -> 42
+    return sound + dog.getAge();      // 42 + 5 = 47
+}
+

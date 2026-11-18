@@ -1,0 +1,70 @@
+// 10e_sparse_dtors_expert.tmn - Expert Pattern E: Regions with sparse destructor sidecars
+// Optimized with thread-local sidecar chunk caching
+
+void print_f64_4(double val) {
+    if (val < 0.0) {
+        print("-");
+        val = 0.0 - val;
+    }
+    long int_part = (long)val;
+    double frac = val - (double)int_part;
+    long frac_int = (long)(frac * 10000.0 + 0.5);
+    if (frac_int >= 10000) {
+        int_part = int_part + 1;
+        frac_int = frac_int - 10000;
+    }
+    print(int_part);
+    print(".");
+    if (frac_int < 10) {
+        print("000");
+    } else if (frac_int < 100) {
+        print("00");
+    } else if (frac_int < 1000) {
+        print("0");
+    }
+    print(frac_int);
+}
+
+class Token {
+public:
+    long id;
+    Token() {
+        this.id = 0;
+    }
+    ~Token() {
+        this.id = 0 - this.id;
+    }
+};
+
+int main() {
+    __benchmark_start();
+
+    long sum = 0;
+    @unroll(4)
+    for (int iter = 0; iter < 1000; iter++) {
+        region r {
+            Token t0;
+            Token t1;
+            Token t2;
+            Token t3;
+            long base = (long)(iter * 4);
+            t0.id = base + 0;
+            t1.id = base + 1;
+            t2.id = base + 2;
+            t3.id = base + 3;
+            sum += t0.id + t1.id + t2.id + t3.id;
+        }
+    }
+
+    double elapsed_ms = __benchmark_elapsed_ms();
+
+    print("TIME_MS:");
+    print_f64_4(elapsed_ms);
+    print(";SUM:");
+    print(sum);
+    print(";CHECKSUM:");
+    print(sum);
+    print("\n");
+    return 0;
+}
+

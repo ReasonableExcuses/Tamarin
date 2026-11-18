@@ -1,0 +1,35 @@
+// ============================================================================
+// std.mem - Dynamic Memory and Buffer Operations for TAMARIN
+// ============================================================================
+
+public T[] alloc<T>(int count) {
+    return __builtin_alloc<T>(count);
+}
+
+public T[] realloc<T>(T slice[], int newCount) {
+    return __builtin_realloc<T>(slice, newCount);
+}
+
+public void free<T>(T slice[]) {
+    __builtin_free(slice);
+}
+
+public void copy<T>(T dst[], int dstOffset, const T src[], int srcOffset, int count) {
+    __builtin_memcpy<T>(dst, dstOffset, src, srcOffset, count);
+}
+
+public void move<T>(T dst[], int dstOffset, const T src[], int srcOffset, int count) {
+    __builtin_memmove<T>(dst, dstOffset, src, srcOffset, count);
+}
+
+public void set<T>(T dst[], int dstOffset, int byteVal, int count) {
+    __builtin_memset<T>(dst, dstOffset, byteVal, count);
+}
+
+public T get_unchecked<T>(const T slice[], int idx) {
+    return __builtin_get_unchecked<T>(slice, idx);
+}
+
+public void set_unchecked<T>(T slice[], int idx, T val) {
+    __builtin_set_unchecked<T>(slice, idx, val);
+}

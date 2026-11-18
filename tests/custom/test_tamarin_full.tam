@@ -1,0 +1,127 @@
+// test_tamarin_full.tam
+// Stresses: @layout(scan) SoA strides, runtime bounds checks, float4 SIMD,
+//           parallel reductions, extern "C" {} imports, and @c_layout + @export ABI.
+
+extern "C" {
+    double fabs(double x);
+}
+
+@layout(scan)
+struct Body {
+    float x;
+    float y;
+    float z;
+    float mass;
+    int active;
+};
+
+@c_layout
+struct SimSummary {
+    long scalar_checksum;
+    long parallel_checksum;
+    int passed;
+};
+
+// 1. Sequential scalar ground-truth kernel
+long compute_scalar_oracle(Body bodies[2048], int count) {
+    double acc_pos = 0.0;
+    double acc_weighted = 0.0;
+
+    for (int i = 0; i < count; i++) {
+        if (bodies[i].active == 1) {
+            float d = bodies[i].x * 0.5f + bodies[i].y * 0.25f - bodies[i].z * 0.125f;
+            acc_pos = acc_pos + (double)d;
+            acc_weighted = acc_weighted + (double)(d * bodies[i].mass);
+        }
+    }
+    return (long)(acc_pos * 1000.0) + (long)(acc_weighted * 1000.0);
+}
+
+// 2. Parallel + SIMD + non-linear runtime indexing over @layout(scan) SoA memory
+long compute_parallel_soa_simd(Body bodies[2048], int count) {
+    double par_pos = 0.0;
+    double par_weighted = 0.0;
+
+    parallel (reduction(+:par_pos), reduction(+:par_weighted))
+    for (int i = 0; i < count; i++) {
+        // Bijection over 0..2047: tests SoA stride math on scrambled runtime indices
+        int idx = (i * 131 + 17) & 2047;
+
+        if (bodies[idx].active == 1) {
+            float4 pos_vec = float4(bodies[idx].x, bodies[idx].y, bodies[idx].z, 0.0f);
+            float4 coeff   = float4(0.5f, 0.25f, -0.125f, 0.0f);
+            float4 prod    = pos_vec * coeff;
+            float d        = prod.x + prod.y + prod.z;
+
+            par_pos = par_pos + (double)d;
+            par_weighted = par_weighted + (double)(d * bodies[idx].mass);
+        }
+    }
+    return (long)(par_pos * 1000.0) + (long)(par_weighted * 1000.0);
+}
+
+// 3. Exported C ABI entry point (emits SimSummary + prototype to .h)
+@export
+SimSummary run_tamarin_verification(long seed_input) {
+    Body swarm[2048];
+    long seed = seed_input;
+
+    for (int i = 0; i < 2048; i++) {
+        seed = (seed * 1664525 + 1013904223) & 2147483647;
+        swarm[i].x = ((float)(seed & 65535) / 65535.0f) * 20.0f - 10.0f;
+
+        seed = (seed * 1664525 + 1013904223) & 2147483647;
+        swarm[i].y = ((float)(seed & 65535) / 65535.0f) * 20.0f - 10.0f;
+
+        seed = (seed * 1664525 + 1013904223) & 2147483647;
+        swarm[i].z = ((float)(seed & 65535) / 65535.0f) * 20.0f - 10.0f;
+
+        seed = (seed * 1664525 + 1013904223) & 2147483647;
+        swarm[i].mass = ((float)(seed & 65535) / 65535.0f) * 5.0f + 0.5f;
+
+        if (i % 3 != 0) {
+            swarm[i].active = 1;
+        } else {
+            swarm[i].active = 0;
+        }
+    }
+
+    // Mutate via dynamic runtime index to stress bounds check + SoA write-back
+    int dynamic_idx = (int)((seed_input ^ 12345) & 2047);
+    swarm[dynamic_idx].x = swarm[dynamic_idx].x + 2.5f;
+    swarm[dynamic_idx].active = 1;
+
+    long scalar_res = compute_scalar_oracle(swarm, 2048);
+    long parallel_res = compute_parallel_soa_simd(swarm, 2048);
+
+    // Uses imported C fabs() via extern "C" {}
+    double diff = fabs((double)(scalar_res - parallel_res));
+
+    SimSummary result;
+    result.scalar_checksum = scalar_res;
+    result.parallel_checksum = parallel_res;
+    if (diff <= 1.0) {
+        result.passed = 1;
+    } else {
+        result.passed = 0;
+    }
+    return result;
+}
+
+int main() {
+    SimSummary res = run_tamarin_verification(987654321);
+
+    print("SCALAR_ORACLE:");
+    print(res.scalar_checksum);
+    print(";PARALLEL_SOA_SIMD:");
+    print(res.parallel_checksum);
+    print("\n");
+
+    if (res.passed == 1) {
+        print("STATUS: PASS (SoA + SIMD + Parallel Reduction + C ABI verified)\n");
+        return 0;
+    } else {
+        print("STATUS: FAIL (Mismatch between scalar ground truth and SoA/Parallel/SIMD!)\n");
+        return 1;
+    }
+}
