@@ -1,6 +1,6 @@
 # Tamarin Compiler Architecture and Pipeline Specification
 
-**Version:** 0.15.0  
+**Version:** 0.17.0  
 **Classification:** Systems Engineering & Compiler Internals  
 
 ---
@@ -171,3 +171,25 @@ matrix_core = { path = "../matrix_core" }
 - Resolves dependencies using Semantic Versioning (SemVer 2.0.0).
 - Performs depth-first search (DFS) with topological sorting to detect cycles and build a deterministic Directed Acyclic Graph (DAG) compilation schedule.
 - Emits `troop.lock` containing exact package hashes and pinned dependency paths.
+
+---
+
+## 8. Standard Library Architecture
+
+The Tamarin Standard Library (`lib/std/`) is written directly in Tamarin with minimal compiler primitives:
+
+### 8.1 Swiss Table Hash Map (`lib/std/collections/hash_map.tmn`)
+- Implements a flat-array open-addressing hash table inspired by Google Abseil and Rust hashbrown.
+- Uses 1-byte control bytes (`ctrl` table): `EMPTY = 128`, `DELETED = 254`, `FULL = 0..127` ($H_2$ 7-bit fingerprint).
+- Employs 16-way SIMD/group probing: loads a 16-byte window and matches tags using triangular probe strides.
+- Control bytes are mirrored for the first 16 bytes (`ctrl[capacity + i] = ctrl[i]`), guaranteeing bounds-safe group loads without wrapping overhead.
+- Supports generic keys and values with $O(1)$ amortized lookups and an 87.5% maximum load factor.
+
+### 8.2 Zero-Allocation JSON DOM (`lib/std/json.tmn`)
+- Structural streaming tokenizer avoiding heap allocations for string tokens and object keys by emitting non-owning `JsonStringView` slices.
+- Flat tape AST representation (`JsonNode nodes[]` contiguous array) where each node contains integer-indexed links to `first_child` and `next_sibling`, completely eliminating heap recursion and pointer chasing.
+- High-performance query APIs: `find_field`, `get_int`, `get_float`, `get_bool`, `array_get`.
+
+### 8.3 Hardware Bit Intrinsics (`lib/std/bits.tmn`)
+- Direct lowering to LLVM target intrinsics (`llvm.ctpop`, `llvm.ctlz`, `llvm.cttz`, `llvm.bitreverse`, `llvm.bswap`).
+- Emits native x86-64 instructions (`popcnt`, `lzcnt`, `tzcnt`, `bswap`) and ARM64 NEON instructions (`cnt`, `clz`, `rbit`, `rev`).

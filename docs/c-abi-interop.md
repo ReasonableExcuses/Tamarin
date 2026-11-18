@@ -1,6 +1,6 @@
 # Tamarin C ABI Interoperability Specification
 
-**Version:** 0.15.0  
+**Version:** 0.17.0  
 **Target:** C99 / POSIX / Win32 Calling Conventions  
 **Classification:** Systems ABI & Foreign Function Interface (FFI)  
 
@@ -139,3 +139,12 @@ Tamarin supports both dynamic and fully static linking models:
 ### 5.2 Static Native Executable (`--static`)
 - Generates a standalone, dependency-free native executable.
 - Statically embeds `tamarin_runtime_static` and the static C runtime (`/MT` on MSVC), producing a single binary deployable without external runtime dependencies.
+
+---
+
+## 6. GUI and Graphics Ecosystem Interop Strategy (Option B)
+
+Tamarin adopts an ecosystem-first strategy for graphics, windowing, and graphical user interfaces:
+- **Zero Compiler Bloat**: GUI is not baked into the core compiler or standard library runtime. This maintains rapid compilation times, zero extra binary size for headless systems or server backends, and full embeddability.
+- **First-Class C ABI Bindings**: Graphics libraries (such as **Raylib**, **SDL3**, and **Dear ImGui**) interoperate natively using `extern "C"` declarations and `@c_layout` struct definitions.
+- **Automated Generation (`tamarin-bindgen`)**: In Milestone v0.18.0, the `tamarin-bindgen` tool automatically parses C header files (`raylib.h`, `SDL.h`, `cimgui.h`) and synthesizes idiomatic Tamarin binding packages distributed through the `troop` package manager (`troop add raylib`, `troop add sdl3`).

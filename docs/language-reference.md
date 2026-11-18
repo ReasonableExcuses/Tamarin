@@ -1,6 +1,6 @@
 # Tamarin Language Reference Specification
 
-**Version:** 0.15.0  
+**Version:** 0.17.0  
 **Target:** LLVM 20+ / C99 ABI  
 **Classification:** Systems Programming Language Specification  
 
@@ -219,3 +219,99 @@ parallel for (int i = 0; i < 10000; i++) {
 }
 ```
 The compiler verifies that loop indexing guarantees non-overlapping memory writes, rejecting potential data races before code generation.
+
+---
+
+## 8. Conditional Compilation Directives (`@cfg(...)`)
+
+Tamarin provides compile-time configuration predicates evaluated before semantic analysis, pruning inactive declarations and imports:
+
+```tamarin
+@cfg(target_os = "windows")
+import std.os.windows;
+
+@cfg(target_os = "linux")
+import std.os.linux;
+
+@cfg(any(target_arch = "x86_64", target_arch = "aarch64"))
+public void fast_compute() {
+    // 64-bit architecture optimizations
+}
+```
+
+Predicates support `target_os` (`"windows"`, `"linux"`, `"macos"`, `"darwin"`), `target_arch` (`"x86_64"`, `"aarch64"`), and boolean combinators `all(...)`, `any(...)`, and `not(...)`.
+
+---
+
+## 9. Standard Library Ecosystem
+
+Tamarin provides a high-performance standard library designed for zero-allocation and cache-friendly systems engineering:
+
+### 9.1 Swiss Table Hash Map (`std.collections.hash_map`)
+Google Abseil-style Swiss Table with 1-byte control metadata and 16-way SIMD/group probing:
+```tamarin
+import std.collections.hash_map as hm;
+
+hm::HashMap<int, int> map;
+map.init();
+map.insert(42, 1000);
+if (map.contains(42)) {
+    int val = map.get(42);
+}
+map.release();
+```
+
+### 9.2 Zero-Allocation Streaming JSON (`std.json`)
+Non-owning string view slices and flat contiguous tape AST representation (`JsonNode nodes[]`):
+```tamarin
+import std.json as json;
+
+char jsonText[] = "{\"server\": \"127.0.0.1\", \"port\": 8080}";
+json::JsonDocument doc;
+doc.init();
+if (doc.parse(jsonText)) {
+    int root = doc.root();
+    int port = doc.get_int(root, "port");
+}
+doc.release();
+```
+
+### 9.3 Hardware Bit-Twiddling (`std.bits`)
+Exposes direct LLVM hardware intrinsics:
+```tamarin
+import std.bits as bits;
+
+int ones = bits::popcnt(0x00FF00FF);  // 16
+int zeros = bits::clz(0x00010000);    // 15
+int trailing = bits::ctz(8);          // 3
+int rev = bits::bitrev(1);            // 0x80000000
+int swapped = bits::bswap(0x12345678);// 0x78563412
+bool isPow2 = bits::is_power_of_two(64); // true
+```
+
+### 9.4 Dynamic Vectors (`std.collections.vec`)
+Contiguous growable dynamic array:
+```tamarin
+import std.collections.vec as col;
+
+col::Vec<int> v;
+v.init();
+v.push(10);
+v.push(20);
+int x = v[0];
+v.release();
+```
+
+---
+
+## 10. Compiler Builtin Intrinsics
+
+- `__builtin_alloc<T>(count)`: Heap allocation returning a slice `T[]`.
+- `__builtin_realloc<T>(slice, count)`: Reallocates dynamic heap slice.
+- `__builtin_free(slice)`: Releases heap slice.
+- `__builtin_memcpy<T>(dst, dstOff, src, srcOff, count)`: Copies elements between slices.
+- `__builtin_memset<T>(dst, dstOff, val, count)`: Sets byte values.
+- `__builtin_popcnt(x)`, `__builtin_clz(x)`, `__builtin_ctz(x)`: Hardware bit intrinsics.
+- `__builtin_bitrev(x)`, `__builtin_bswap(x)`: Hardware bit and byte reversal.
+- `__builtin_hash(x)`: Universal high-speed hash function for scalar, float, slice, and struct keys.
+- `len(slice)`: Returns element count of fixed array, slice, or string.

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.17.0] - 2026-11-19
+
+### Added & Hardened — Milestone v0.17.0: Swiss Table HashMap, Zero-Allocation `std.json`, and Hardware `std.bits`
+- **Swiss Table `HashMap<K, V>` (`lib/std/collections/hash_map.tmn`)**:
+  - Implemented Google Abseil / Rust hashbrown style flat hash table.
+  - 1-byte control byte metadata table: `EMPTY = 128` (`0x80`), `DELETED = 254` (`0xFE`), `FULL = 0..127` (7-bit $H_2$ fingerprint).
+  - 16-way SIMD/group probing with 16-byte tail mirroring (`ctrl[capacity + i] = ctrl[i]`), guaranteeing bounds-safe group loads without wrapping overhead.
+  - Triangular probe sequences preventing primary clustering.
+  - High load factor ($87.5\%$ or $7/8$ capacity) with automated table doubling upon saturation.
+  - Comprehensive API: `init()`, `init_with_capacity(minCap)`, `insert(key, val)`, `get(key)`, `get_or(key, fallback)`, `contains(key)`, `remove(key)`, `size()`, `cap()`, `is_empty()`, `clear()`, `release()`, `is_slot_full(i)`.
+- **Zero-Allocation Streaming JSON (`std.json`) (`lib/std/json.tmn`)**:
+  - Non-owning `JsonStringView` slices referencing source buffers with zero heap allocations for string tokens and object keys.
+  - Flat contiguous tape AST (`JsonNode nodes[]`), eliminating pointer chasing and tree recursion.
+  - High-speed streaming DOM parser and query engine supporting nested objects, arrays, numbers (integers, decimals, scientific exponents), booleans, and nulls.
+  - Query APIs: `root()`, `find_field(objId, key)`, `get_int(objId, key)`, `get_float(objId, key)`, `get_bool(objId, key)`, `array_get(arrId, idx)`, `str_equals(nodeId, expected)`.
+- **Hardware Bit-Twiddling Intrinsics (`std.bits`) (`lib/std/bits.tmn`, `src/ir/`, `src/backend/`)**:
+  - Exposes hardware-accelerated population count (`popcnt` / `popcount`), count leading zeros (`clz`), count trailing zeros (`ctz`), bit reversal (`bitrev` / `bitreverse`), and byte swap (`bswap`) lowered directly to LLVM intrinsics.
+  - Added universal `__builtin_hash` lowering across 32-bit, 64-bit, float, double, and slice types (`__tamarin_hash32`, `__tamarin_hash64`, `__tamarin_hash_f32`, `__tamarin_hash_f64`, `__tamarin_hash_bytes`, `__tamarin_hash_view`).
+- **Compiler Bug Fixes & Soundness Hardening (`src/sema/type_checker.cpp`)**:
+  - Fixed array subscript type checking to automatically dereference `Reference` types (`int&`) when used as array indices.
+  - Fixed struct field assignment validation to allow repointing non-owning `ArrayView` fields (such as `const char source[];`), while preserving element immutability.
+- **Verification Scorecard**:
+  - All 440 tests across all 10 unit, soundness, integration, and E2E suites passing (100% pass rate).
+
+---
+
 ## [0.16.0] - 2026-11-18
 
 ### Added & Hardened — Milestone v0.16.0: Cross-Platform Native Portability (Linux, macOS Darwin, Windows), Conditional Compilation (`@cfg`), and Multi-OS CI
