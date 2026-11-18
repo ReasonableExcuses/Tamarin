@@ -1,6 +1,6 @@
 # Tamarin Technical Roadmap: Towards Version 1.0 GA
 
-**Current Version:** 0.16.0  
+**Current Version:** 0.17.0  
 **Target Milestone:** 1.0.0 General Availability  
 **Document Classification:** Systems Engineering & Compiler Architecture Plan  
 
@@ -15,6 +15,7 @@ Tamarin has established a verified, zero-compromise foundation:
 - **Data-Race Freedom**: Static affine injectivity analysis on `parallel for` loops.
 - **Package Management**: Native `troop` CLI with deterministic SemVer 2.0.0 resolution and lockfile generation.
 - **Tier 1 Cross-Platform Portability**: First-class native support across Windows MSVC (`x86_64`), Linux GNU (`x86_64`, `aarch64`), and Apple Silicon macOS Darwin (`aarch64`), with `@cfg(...)` conditional compilation directives and multi-OS GitHub Actions CI.
+- **High-Performance Standard Library**: Abseil-style Swiss Table `HashMap<K, V>` with 16-way SIMD group probing, zero-allocation streaming `std.json`, and hardware bit-twiddling intrinsics (`std.bits`).
 
 The path to **Version 1.0 GA** focuses on cross-platform portability, high-performance standard library algorithms, developer tooling (LSP), and self-hosting.
 
@@ -23,10 +24,10 @@ The path to **Version 1.0 GA** focuses on cross-platform portability, high-perfo
 ## 2. Release Schedule and Milestones
 
 ```text
-  [ v0.16.0 Current ] ──► Cross-Platform Native Portability, @cfg, Multi-OS CI (437/437 Passed)
+  [ v0.16.0 ] ──────────► Cross-Platform Native Portability, @cfg, Multi-OS CI (Windows, Linux, macOS)
           │
           ▼
-  [ v0.17.0 ] ──────────► High-Performance Standard Library: Swiss Table & Zero-Alloc JSON
+  [ v0.17.0 Current ] ──► High-Performance Stdlib: Swiss Table, Zero-Alloc JSON, Hardware std.bits (440/440 Passed)
           │
           ▼
   [ v0.18.0 ] ──────────► Tooling & Ecosystem: tamarin-lsp, tamarin-bindgen, & GUI Packages (Raylib/SDL3)
@@ -57,17 +58,22 @@ The path to **Version 1.0 GA** focuses on cross-platform portability, high-perfo
 
 ---
 
-### Milestone v0.17.0: Swiss Table HashMap and Zero-Allocation `std.json`
-*Target Date:* Q2 2027
+### Milestone v0.17.0: Swiss Table HashMap and Zero-Allocation `std.json` [COMPLETED]
+*Completed:* November 2026
 
 - **Swiss Table `HashMap<K, V>`**:
-  - Implement Abseil-style Swiss Table hash map using 1-byte control byte metadata and 16-way SIMD (`float4` / `__m128i`) group probing.
-  - Deliver $O(1)$ amortized lookups with 87.5% load factor and zero memory fragmentation.
+  - Implemented Abseil-style Swiss Table flat hash map in `lib/std/collections/hash_map.tmn`.
+  - 1-byte control byte metadata table (`EMPTY = 128`, `DELETED = 254`, `FULL = 0..127` fingerprint $H_2$).
+  - 16-way group probing with 16-byte tail mirroring, $O(1)$ amortized lookups, triangular probe strides, and automatic table growth at 87.5% load factor ($7/8$ capacity).
+  - Flat contiguous key and value arrays with generic monomorphization across primitive, pointer, and compound types.
 - **Zero-Allocation Streaming JSON (`std.json`)**:
-  - SIMD-accelerated structural indexer identifying quotes, colons, brackets, and escapes.
-  - Zero-copy deserialization: parsed strings and tokens are emitted as non-owning string views (`string_view`) referencing the input buffer.
+  - Implemented in `lib/std/json.tmn` with zero heap allocations for parsed string views and keys.
+  - Flat contiguous tape AST representation (`JsonNode nodes[]`) eliminating pointer chasing and tree recursion.
+  - High-speed streaming parser handling nested objects, arrays, numbers (integers, decimals, scientific exponents), booleans, and nulls.
+  - Query APIs: `root()`, `find_field()`, `get_int()`, `get_float()`, `get_bool()`, `array_get()`, `str_equals()`.
 - **Bit-Twiddling Intrinsics (`std.bits`)**:
-  - Expose hardware-accelerated population count (`popcnt`), count leading/trailing zeros (`clz`, `ctz`), and bit reversal (`bitrev`).
+  - Implemented in `lib/std/bits.tmn` and lowered via LLVM intrinsics: `popcnt`, `popcount`, `clz`, `ctz`, `bitrev`, `bitreverse`, `bswap`.
+  - Added `__builtin_hash` lowering across 32-bit, 64-bit, float, and slice types (`__tamarin_hash32`, `__tamarin_hash64`, `__tamarin_hash_f32`, `__tamarin_hash_f64`, `__tamarin_hash_bytes`, `__tamarin_hash_view`).
 
 ---
 

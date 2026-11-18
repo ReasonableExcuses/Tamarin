@@ -1309,3 +1309,207 @@ TAMARIN_TEST(Stdlib, SelectMultiplexChannels) {
     safeRemoveAll(tempDir);
     return true;
 }
+
+
+TAMARIN_TEST(Stdlib, ImportStdBits) {
+    auto tempDir = std::filesystem::temp_directory_path() / "tamarin_test_import_bits";
+    safeRemoveAll(tempDir);
+    std::filesystem::create_directories(tempDir);
+
+    auto mainPath = tempDir / "main.tmn";
+    writeStdlibTestFile(mainPath,
+        "import std.bits as bits;\n"
+        "import std.io as io;\n"
+        "int main() {\n"
+        "    if (bits::popcnt(0) != 0) return 1;\n"
+        "    if (bits::popcnt(7) != 3) return 2;\n"
+        "    if (bits::popcnt(1431655765 /* 0x55555555 */) != 16) return 3;\n"
+        "    if (bits::clz(1) != 31) return 4;\n"
+        "    if (bits::ctz(8) != 3) return 5;\n"
+        "    if (bits::ctz(1) != 0) return 6;\n"
+        "    if (bits::bitrev(1) != -2147483647 - 1 /* 0x80000000 */) return 7;\n"
+        "    if (bits::bswap(305419896 /* 0x12345678 */) != 2018915346 /* 0x78563412 */) return 8;\n"
+        "    if (!bits::is_power_of_two(16)) return 9;\n"
+        "    if (bits::is_power_of_two(15)) return 10;\n"
+        "    if (bits::next_power_of_two(13) != 16) return 11;\n"
+        "    if (bits::rotl(1, 4) != 16) return 12;\n"
+        "    if (bits::rotr(16, 4) != 1) return 13;\n"
+        "    io::println(\"std.bits success!\");\n"
+        "    return 0;\n"
+        "}\n");
+
+    SourceManager sm;
+    std::ostringstream errs;
+    DiagnosticEngine diag(sm, errs);
+
+    driver::ModuleGraph graph(sm, diag, { tempDir.string(), getStdlibDir() });
+    bool bgOk = graph.buildGraph(mainPath.string());
+    if (!bgOk) std::cerr << "buildGraph error: " << errs.str() << "\n";
+    EXPECT_TRUE(bgOk);
+
+    sema::Sema sema(diag);
+    bool semaOk = sema.analyzeModules(graph.getTopologicalOrder());
+    if (!semaOk) std::cerr << "sema error: " << errs.str() << "\n";
+    EXPECT_TRUE(semaOk);
+
+    ir::IRBuilder irBuilder(sema.checker());
+    auto mod = irBuilder.buildProgram(graph.getTopologicalOrder(), "main");
+    EXPECT_TRUE(mod != nullptr);
+
+    backend::LLVMCodeGen codegen(*mod, diag);
+    auto llPath  = tempDir / "bits_test.ll";
+    auto exePath = tempDir / "bits_test.exe";
+
+    EXPECT_TRUE(codegen.emitLLVMIRToFile(llPath));
+    EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
+
+    std::string cmd = "\"" + exePath.string() + "\"";
+    int ret = runCommand(cmd);
+    EXPECT_EQ(ret, 0);
+
+    safeRemoveAll(tempDir);
+    return true;
+}
+
+
+TAMARIN_TEST(Stdlib, ImportStdCollectionsHashMap) {
+    auto tempDir = std::filesystem::temp_directory_path() / "tamarin_test_import_hashmap";
+    safeRemoveAll(tempDir);
+    std::filesystem::create_directories(tempDir);
+
+    auto mainPath = tempDir / "main.tmn";
+    writeStdlibTestFile(mainPath,
+        "import std.collections.hash_map as hm;\n"
+        "import std.io as io;\n"
+        "int main() {\n"
+        "    hm::HashMap<int, int> map;\n"
+        "    map.init();\n"
+        "    if (map.size() != 0) return 1;\n"
+        "    if (!map.is_empty()) return 2;\n"
+        "    for (int i = 0; i < 30; ++i) {\n"
+        "        map.insert(i * 10, i * 100);\n"
+        "    }\n"
+        "    if (map.size() != 30) return 3;\n"
+        "    if (map.cap() < 32) return 4;\n"
+        "    for (int i = 0; i < 30; ++i) {\n"
+        "        if (!map.contains(i * 10)) return 5;\n"
+        "        if (map.get(i * 10) != i * 100) return 6;\n"
+        "    }\n"
+        "    if (map.contains(999)) return 7;\n"
+        "    if (!map.remove(50)) return 8;\n"
+        "    if (map.contains(50)) return 9;\n"
+        "    if (map.size() != 29) return 10;\n"
+        "    if (map.get_or(999, -1) != -1) return 11;\n"
+        "    map.clear();\n"
+        "    if (map.size() != 0) return 12;\n"
+        "    if (!map.is_empty()) return 13;\n"
+        "    map.release();\n"
+        "    io::println(\"std.collections.hash_map success!\");\n"
+        "    return 0;\n"
+        "}\n");
+
+    SourceManager sm;
+    std::ostringstream errs;
+    DiagnosticEngine diag(sm, errs);
+
+    driver::ModuleGraph graph(sm, diag, { tempDir.string(), getStdlibDir() });
+    bool bgOk = graph.buildGraph(mainPath.string());
+    if (!bgOk) std::cerr << "buildGraph error: " << errs.str() << "\n";
+    EXPECT_TRUE(bgOk);
+
+    sema::Sema sema(diag);
+    bool semaOk = sema.analyzeModules(graph.getTopologicalOrder());
+    if (!semaOk) std::cerr << "sema error: " << errs.str() << "\n";
+    EXPECT_TRUE(semaOk);
+
+    ir::IRBuilder irBuilder(sema.checker());
+    auto mod = irBuilder.buildProgram(graph.getTopologicalOrder(), "main");
+    EXPECT_TRUE(mod != nullptr);
+
+    backend::LLVMCodeGen codegen(*mod, diag);
+    auto llPath  = tempDir / "hm_test.ll";
+    auto exePath = tempDir / "hm_test.exe";
+
+    EXPECT_TRUE(codegen.emitLLVMIRToFile(llPath));
+    EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
+
+    std::string cmd = "\"" + exePath.string() + "\"";
+    int ret = runCommand(cmd);
+    EXPECT_EQ(ret, 0);
+
+    safeRemoveAll(tempDir);
+    return true;
+}
+
+
+TAMARIN_TEST(Stdlib, ImportStdJsonZeroAlloc) {
+    auto tempDir = std::filesystem::temp_directory_path() / "tamarin_test_import_json";
+    safeRemoveAll(tempDir);
+    std::filesystem::create_directories(tempDir);
+
+    auto mainPath = tempDir / "main.tmn";
+    writeStdlibTestFile(mainPath,
+        "import std.json as json;\n"
+        "import std.io as io;\n"
+        "int main() {\n"
+        "    char docStr[] = \"{\\\"name\\\": \\\"tamarin\\\", \\\"version\\\": 17, \\\"active\\\": true, \\\"tags\\\": [\\\"systems\\\", \\\"fast\\\"], \\\"nested\\\": {\\\"ratio\\\": 3.14}}\";\n"
+        "    json::JsonDocument doc;\n"
+        "    doc.init();\n"
+        "    if (!doc.parse(docStr)) return 1;\n"
+        "    int root = doc.root();\n"
+        "    if (!doc.is_object(root)) return 2;\n"
+        "    if (doc.object_size(root) != 5) return 3;\n"
+        "    int nameId = doc.find_field(root, \"name\");\n"
+        "    if (nameId < 0) return 4;\n"
+        "    if (!doc.is_string(nameId)) return 5;\n"
+        "    if (!doc.str_equals(nameId, \"tamarin\")) return 6;\n"
+        "    if (doc.get_int(root, \"version\") != 17) return 7;\n"
+        "    if (!doc.get_bool(root, \"active\")) return 8;\n"
+        "    int tagsId = doc.find_field(root, \"tags\");\n"
+        "    if (tagsId < 0) return 9;\n"
+        "    if (!doc.is_array(tagsId)) return 10;\n"
+        "    if (doc.array_size(tagsId) != 2) return 11;\n"
+        "    int tag0 = doc.array_get(tagsId, 0);\n"
+        "    if (!doc.str_equals(tag0, \"systems\")) return 12;\n"
+        "    int tag1 = doc.array_get(tagsId, 1);\n"
+        "    if (!doc.str_equals(tag1, \"fast\")) return 13;\n"
+        "    int nestId = doc.find_field(root, \"nested\");\n"
+        "    if (nestId < 0) return 14;\n"
+        "    if (!doc.is_object(nestId)) return 15;\n"
+        "    doc.release();\n"
+        "    io::println(\"std.json success!\");\n"
+        "    return 0;\n"
+        "}\n");
+
+    SourceManager sm;
+    std::ostringstream errs;
+    DiagnosticEngine diag(sm, errs);
+
+    driver::ModuleGraph graph(sm, diag, { tempDir.string(), getStdlibDir() });
+    bool bgOk = graph.buildGraph(mainPath.string());
+    if (!bgOk) std::cerr << "buildGraph error: " << errs.str() << "\n";
+    EXPECT_TRUE(bgOk);
+
+    sema::Sema sema(diag);
+    bool semaOk = sema.analyzeModules(graph.getTopologicalOrder());
+    if (!semaOk) std::cerr << "sema error: " << errs.str() << "\n";
+    EXPECT_TRUE(semaOk);
+
+    ir::IRBuilder irBuilder(sema.checker());
+    auto mod = irBuilder.buildProgram(graph.getTopologicalOrder(), "main");
+    EXPECT_TRUE(mod != nullptr);
+
+    backend::LLVMCodeGen codegen(*mod, diag);
+    auto llPath  = tempDir / "json_test.ll";
+    auto exePath = tempDir / "json_test.exe";
+
+    EXPECT_TRUE(codegen.emitLLVMIRToFile(llPath));
+    EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
+
+    std::string cmd = "\"" + exePath.string() + "\"";
+    int ret = runCommand(cmd);
+    EXPECT_EQ(ret, 0);
+
+    safeRemoveAll(tempDir);
+    return true;
+}

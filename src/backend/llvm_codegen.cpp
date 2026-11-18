@@ -535,6 +535,10 @@ void LLVMCodeGen::emitRuntimeHelpers(std::ostream& os) {
     os << "declare i64 @llvm.ctlz.i64(i64, i1 immarg)\n";
     os << "declare i32 @llvm.ctpop.i32(i32)\n";
     os << "declare i64 @llvm.ctpop.i64(i64)\n";
+    os << "declare i32 @llvm.bitreverse.i32(i32)\n";
+    os << "declare i64 @llvm.bitreverse.i64(i64)\n";
+    os << "declare i32 @llvm.bswap.i32(i32)\n";
+    os << "declare i64 @llvm.bswap.i64(i64)\n";
     os << "declare float @llvm.sqrt.f32(float)\n";
     os << "declare double @llvm.sqrt.f64(double)\n";
     os << "declare float @llvm.vector.reduce.fadd.v4f32(float, <4 x float>)\n";
@@ -744,6 +748,107 @@ void LLVMCodeGen::emitRuntimeHelpers(std::ostream& os) {
     os << "  %r = call i64 @llvm.ctpop.i64(i64 %x)\n";
     os << "  %t = trunc i64 %r to i32\n";
     os << "  ret i32 %t\n";
+    os << "}\n\n";
+
+    os << "define private i32 @__tamarin_bitrev32(i32 %x) {\n";
+    os << "entry:\n";
+    os << "  %r = call i32 @llvm.bitreverse.i32(i32 %x)\n";
+    os << "  ret i32 %r\n";
+    os << "}\n\n";
+
+    os << "define private i64 @__tamarin_bitrev64(i64 %x) {\n";
+    os << "entry:\n";
+    os << "  %r = call i64 @llvm.bitreverse.i64(i64 %x)\n";
+    os << "  ret i64 %r\n";
+    os << "}\n\n";
+
+    os << "define private i32 @__tamarin_bswap32(i32 %x) {\n";
+    os << "entry:\n";
+    os << "  %r = call i32 @llvm.bswap.i32(i32 %x)\n";
+    os << "  ret i32 %r\n";
+    os << "}\n\n";
+
+    os << "define private i64 @__tamarin_bswap64(i64 %x) {\n";
+    os << "entry:\n";
+    os << "  %r = call i64 @llvm.bswap.i64(i64 %x)\n";
+    os << "  ret i64 %r\n";
+    os << "}\n\n";
+
+    os << "define private i32 @__tamarin_hash32(i32 %x) {\n";
+    os << "entry:\n";
+    os << "  %s1 = lshr i32 %x, 16\n";
+    os << "  %h1 = xor i32 %x, %s1\n";
+    os << "  %m1 = mul i32 %h1, -2048144789\n";
+    os << "  %s2 = lshr i32 %m1, 13\n";
+    os << "  %h2 = xor i32 %m1, %s2\n";
+    os << "  %m2 = mul i32 %h2, -1028477387\n";
+    os << "  %s3 = lshr i32 %m2, 16\n";
+    os << "  %h3 = xor i32 %m2, %s3\n";
+    os << "  ret i32 %h3\n";
+    os << "}\n\n";
+
+    os << "define private i32 @__tamarin_hash64(i64 %x) {\n";
+    os << "entry:\n";
+    os << "  %s1 = lshr i64 %x, 30\n";
+    os << "  %h1 = xor i64 %x, %s1\n";
+    os << "  %m1 = mul i64 %h1, -4658895280553007463\n";
+    os << "  %s2 = lshr i64 %m1, 27\n";
+    os << "  %h2 = xor i64 %m1, %s2\n";
+    os << "  %m2 = mul i64 %h2, -7723592293117613589\n";
+    os << "  %s3 = lshr i64 %m2, 31\n";
+    os << "  %h3 = xor i64 %m2, %s3\n";
+    os << "  %s4 = lshr i64 %h3, 32\n";
+    os << "  %h4 = xor i64 %h3, %s4\n";
+    os << "  %t = trunc i64 %h4 to i32\n";
+    os << "  ret i32 %t\n";
+    os << "}\n\n";
+
+    os << "define private i32 @__tamarin_hash_f32(float %f) {\n";
+    os << "entry:\n";
+    os << "  %b = bitcast float %f to i32\n";
+    os << "  %h = call i32 @__tamarin_hash32(i32 %b)\n";
+    os << "  ret i32 %h\n";
+    os << "}\n\n";
+
+    os << "define private i32 @__tamarin_hash_f64(double %d) {\n";
+    os << "entry:\n";
+    os << "  %b = bitcast double %d to i64\n";
+    os << "  %h = call i32 @__tamarin_hash64(i64 %b)\n";
+    os << "  ret i32 %h\n";
+    os << "}\n\n";
+
+    os << "define private i32 @__tamarin_hash_bytes(ptr %p, i64 %len) {\n";
+    os << "entry:\n";
+    os << "  %is_null = icmp eq ptr %p, null\n";
+    os << "  br i1 %is_null, label %ret_zero, label %check_len\n";
+    os << "ret_zero:\n";
+    os << "  ret i32 0\n";
+    os << "check_len:\n";
+    os << "  %is_empty = icmp eq i64 %len, 0\n";
+    os << "  br i1 %is_empty, label %ret_fnv, label %loop\n";
+    os << "ret_fnv:\n";
+    os << "  ret i32 -2128831035\n";
+    os << "loop:\n";
+    os << "  %i = phi i64 [ 0, %check_len ], [ %next_i, %loop ]\n";
+    os << "  %h = phi i32 [ -2128831035, %check_len ], [ %h_mul, %loop ]\n";
+    os << "  %ptr_elem = getelementptr inbounds i8, ptr %p, i64 %i\n";
+    os << "  %b_val = load i8, ptr %ptr_elem, align 1\n";
+    os << "  %b_i32 = zext i8 %b_val to i32\n";
+    os << "  %h_xor = xor i32 %h, %b_i32\n";
+    os << "  %h_mul = mul i32 %h_xor, 16777619\n";
+    os << "  %next_i = add i64 %i, 1\n";
+    os << "  %done = icmp eq i64 %next_i, %len\n";
+    os << "  br i1 %done, label %exit, label %loop\n";
+    os << "exit:\n";
+    os << "  ret i32 %h_mul\n";
+    os << "}\n\n";
+
+    os << "define private i32 @__tamarin_hash_view({ ptr, i64 } %view) {\n";
+    os << "entry:\n";
+    os << "  %p = extractvalue { ptr, i64 } %view, 0\n";
+    os << "  %len = extractvalue { ptr, i64 } %view, 1\n";
+    os << "  %h = call i32 @__tamarin_hash_bytes(ptr %p, i64 %len)\n";
+    os << "  ret i32 %h\n";
     os << "}\n\n";
 
     os << "define private float @__tamarin_sqrtf(float %x) alwaysinline mustprogress nounwind {\n";

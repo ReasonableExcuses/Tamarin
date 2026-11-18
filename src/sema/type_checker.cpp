@@ -2152,7 +2152,7 @@ const Type* TypeChecker::checkAssign(AssignExpr& expr) {
         if (baseTy && baseTy->isReference()) baseTy = baseTy->elementType;
         if (baseTy && baseTy->isRecord()) {
             auto f = baseTy->findField(fe.fieldName);
-            if (f && f->isConst) {
+            if (f && f->isConst && (!f->type || !f->type->isArrayView())) {
                 diag_.report(expr.loc, Severity::Error,
                              "cannot assign to const struct field '" + fe.fieldName + "'");
             }
@@ -2792,10 +2792,11 @@ const Type* TypeChecker::checkCall(CallExpr& expr) {
         return tc_.getU64();
     }
 
-    // Bit manipulation builtins: ctz, clz, popcount
+    // Bit manipulation builtins: ctz, clz, popcount, popcnt
     if (expr.callee == "ctz" || expr.callee == "__builtin_ctz" ||
         expr.callee == "clz" || expr.callee == "__builtin_clz" ||
-        expr.callee == "popcount" || expr.callee == "__builtin_popcount") {
+        expr.callee == "popcount" || expr.callee == "__builtin_popcount" ||
+        expr.callee == "popcnt" || expr.callee == "__builtin_popcnt") {
         if (expr.args.size() != 1) {
             diag_.report(expr.loc, Severity::Error, expr.callee + "() takes exactly 1 argument");
             return tc_.getI32();
@@ -2806,6 +2807,33 @@ const Type* TypeChecker::checkCall(CallExpr& expr) {
                          expr.callee + "() argument must be an integer, got " +
                          (argTy ? argTy->toString() : "unknown"));
         }
+        return tc_.getI32();
+    }
+
+    if (expr.callee == "bitrev" || expr.callee == "__builtin_bitrev" ||
+        expr.callee == "bitreverse" || expr.callee == "__builtin_bitreverse" ||
+        expr.callee == "bswap" || expr.callee == "__builtin_bswap") {
+        if (expr.args.size() != 1) {
+            diag_.report(expr.loc, Severity::Error, expr.callee + "() takes exactly 1 argument");
+            return tc_.getI32();
+        }
+        auto argTy = checkExpr(*expr.args[0]);
+        if (!argTy || !argTy->isInteger()) {
+            diag_.report(expr.loc, Severity::Error,
+                         expr.callee + "() argument must be an integer, got " +
+                         (argTy ? argTy->toString() : "unknown"));
+            return tc_.getI32();
+        }
+        return argTy;
+    }
+
+    // Builtin hash
+    if (expr.callee == "__builtin_hash" || expr.callee == "hash") {
+        if (expr.args.size() != 1) {
+            diag_.report(expr.loc, Severity::Error, expr.callee + "() takes exactly 1 argument");
+            return tc_.getI32();
+        }
+        checkExpr(*expr.args[0]);
         return tc_.getI32();
     }
 
@@ -3683,6 +3711,9 @@ const Type* TypeChecker::checkIndex(IndexExpr& expr) {
         return tc_.getArrayView(arrTy->elementType, arrTy->isConst);
     }
 
+    if (idxTy && idxTy->isReference()) {
+        idxTy = idxTy->elementType;
+    }
     if (idxTy && !idxTy->isInteger()) {
         diag_.report(expr.index->loc, Severity::Error,
                      "array index must be an integer, got " + idxTy->toString());

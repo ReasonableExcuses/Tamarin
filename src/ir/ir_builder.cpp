@@ -4983,7 +4983,8 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
 
             if (call.callee == "ctz" || call.callee == "__builtin_ctz" ||
                 call.callee == "clz" || call.callee == "__builtin_clz" ||
-                call.callee == "popcount" || call.callee == "__builtin_popcount") {
+                call.callee == "popcount" || call.callee == "__builtin_popcount" ||
+                call.callee == "popcnt" || call.callee == "__builtin_popcnt") {
                 auto arg = lowerExpr(*call.args[0]);
                 auto argTy = checker_.getExprType(call.args[0].get());
                 bool is64 = (argTy && argTy->size() == 8);
@@ -4994,6 +4995,62 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                     calleeName = is64 ? "__tamarin_clz64" : "__tamarin_clz32";
                 } else {
                     calleeName = is64 ? "__tamarin_popcount64" : "__tamarin_popcount32";
+                }
+                Instruction ci;
+                ci.opcode = Opcode::Call;
+                ci.result = nextValueId();
+                ci.type   = checker_.context().getI32();
+                ci.strImm = calleeName;
+                ci.callArgs.push_back(arg);
+                emit(ci);
+                return ci.result;
+            }
+
+            if (call.callee == "bitrev" || call.callee == "__builtin_bitrev" ||
+                call.callee == "bitreverse" || call.callee == "__builtin_bitreverse") {
+                auto arg = lowerExpr(*call.args[0]);
+                auto argTy = checker_.getExprType(call.args[0].get());
+                bool is64 = (argTy && argTy->size() == 8);
+                std::string calleeName = is64 ? "__tamarin_bitrev64" : "__tamarin_bitrev32";
+                Instruction ci;
+                ci.opcode = Opcode::Call;
+                ci.result = nextValueId();
+                ci.type   = is64 ? checker_.context().getI64() : checker_.context().getI32();
+                ci.strImm = calleeName;
+                ci.callArgs.push_back(arg);
+                emit(ci);
+                return ci.result;
+            }
+
+            if (call.callee == "bswap" || call.callee == "__builtin_bswap") {
+                auto arg = lowerExpr(*call.args[0]);
+                auto argTy = checker_.getExprType(call.args[0].get());
+                bool is64 = (argTy && argTy->size() == 8);
+                std::string calleeName = is64 ? "__tamarin_bswap64" : "__tamarin_bswap32";
+                Instruction ci;
+                ci.opcode = Opcode::Call;
+                ci.result = nextValueId();
+                ci.type   = is64 ? checker_.context().getI64() : checker_.context().getI32();
+                ci.strImm = calleeName;
+                ci.callArgs.push_back(arg);
+                emit(ci);
+                return ci.result;
+            }
+
+            if (call.callee == "__builtin_hash" || call.callee == "hash") {
+                auto arg = lowerExpr(*call.args[0]);
+                auto argTy = checker_.getExprType(call.args[0].get());
+                std::string calleeName = "__tamarin_hash32";
+                if (argTy) {
+                    if (argTy->isArrayView()) {
+                        calleeName = "__tamarin_hash_view";
+                    } else if (argTy->isFloat()) {
+                        calleeName = (argTy->kind == sema::TypeKind::F64) ? "__tamarin_hash_f64" : "__tamarin_hash_f32";
+                    } else if (argTy->size() == 8) {
+                        calleeName = "__tamarin_hash64";
+                    } else {
+                        calleeName = "__tamarin_hash32";
+                    }
                 }
                 Instruction ci;
                 ci.opcode = Opcode::Call;

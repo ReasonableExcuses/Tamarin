@@ -1,0 +1,521 @@
+// ============================================================================
+// std.json - High-Performance Zero-Allocation Streaming JSON for TAMARIN
+// ============================================================================
+
+import std.string as str;
+
+public int JSON_NULL   = 0;
+public int JSON_BOOL   = 1;
+public int JSON_INT    = 2;
+public int JSON_FLOAT  = 3;
+public int JSON_STRING = 4;
+public int JSON_ARRAY  = 5;
+public int JSON_OBJECT = 6;
+
+// ----------------------------------------------------------------------------
+// Non-Owning Zero-Copy String View
+// ----------------------------------------------------------------------------
+
+public struct JsonStringView {
+    const char buffer[];
+    int start;
+    int length;
+
+    bool equals(const char other[]) {
+        int oLen = len(other);
+        if (oLen != this.length) { return false; }
+        for (int i = 0; i < this.length; ++i) {
+            if (this.buffer[this.start + i] != other[i]) { return false; }
+        }
+        return true;
+    }
+};
+
+// ----------------------------------------------------------------------------
+// Flat AST Node Representation (Contiguous Tape)
+// ----------------------------------------------------------------------------
+
+public struct JsonNode {
+    int type;        // JSON_*
+    int int_val;     // For Int (and Bool: 0 or 1)
+    float float_val; // For Float
+    int str_start;   // String start offset in document source
+    int str_len;     // String length
+    int key_start;   // Object member key start offset
+    int key_len;     // Object member key length
+    int first_child; // Index of first child node in tape (-1 if none)
+    int next_sibling;// Index of next sibling node in tape (-1 if none)
+    int child_count; // Number of children (for Array and Object)
+};
+
+// ----------------------------------------------------------------------------
+// JSON Document DOM Parser & Query Engine
+// ----------------------------------------------------------------------------
+
+public struct JsonDocument {
+    const char source[];
+    JsonNode nodes[];
+    int node_count;
+    int node_capacity;
+    int root_node;
+
+    void init() {
+        this.node_capacity = 32;
+        this.node_count = 0;
+        this.root_node = -1;
+        this.nodes = __builtin_alloc<JsonNode>(32);
+    }
+
+    ~JsonDocument() {
+        this.release();
+    }
+
+    void release() {
+        if (this.node_capacity > 0) {
+            __builtin_free(this.nodes);
+            this.node_capacity = 0;
+            this.node_count = 0;
+            this.root_node = -1;
+        }
+    }
+
+    void reserve(int newCap) {
+        if (newCap > this.node_capacity) {
+            this.nodes = __builtin_realloc<JsonNode>(this.nodes, newCap);
+            this.node_capacity = newCap;
+        }
+    }
+
+    int alloc_node() {
+        if (this.node_count >= this.node_capacity) {
+            int newCap = this.node_capacity * 2;
+            if (newCap < 32) { newCap = 32; }
+            this.reserve(newCap);
+        }
+        int id = this.node_count;
+        this.node_count = this.node_count + 1;
+        
+        JsonNode node;
+        node.type = JSON_NULL;
+        node.int_val = 0;
+        node.float_val = 0.0f;
+        node.str_start = 0;
+        node.str_len = 0;
+        node.key_start = 0;
+        node.key_len = 0;
+        node.first_child = -1;
+        node.next_sibling = -1;
+        node.child_count = 0;
+        this.nodes[id] = node;
+        return id;
+    }
+
+    void skip_whitespace(int& pos, int end) {
+        while (pos < end) {
+            char c = this.source[pos];
+            if (c == 32 || c == 9 || c == 10 || c == 13) {
+                pos = pos + 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    bool parse(const char input[]) {
+        this.source = input;
+        this.node_count = 0;
+        int slen = len(input);
+        int pos = 0;
+        this.skip_whitespace(pos, slen);
+        if (pos >= slen) {
+            return false;
+        }
+        this.root_node = this.parse_value(pos, slen);
+        return this.root_node >= 0;
+    }
+
+    int parse_value(int& pos, int end) {
+        this.skip_whitespace(pos, end);
+        if (pos >= end) { return -1; }
+
+        char c = this.source[pos];
+        if (c == 123 /* '{' */) {
+            return this.parse_object(pos, end);
+        } else if (c == 91 /* '[' */) {
+            return this.parse_array(pos, end);
+        } else if (c == 34 /* '"' */) {
+            return this.parse_string(pos, end);
+        } else if (c == 116 /* 't' */) { // true
+            if (pos + 4 <= end &&
+                this.source[pos+1] == 114 && this.source[pos+2] == 117 && this.source[pos+3] == 101) {
+                pos = pos + 4;
+                int nid = this.alloc_node();
+                this.nodes[nid].type = JSON_BOOL;
+                this.nodes[nid].int_val = 1;
+                return nid;
+            }
+        } else if (c == 102 /* 'f' */) { // false
+            if (pos + 5 <= end &&
+                this.source[pos+1] == 97 && this.source[pos+2] == 108 &&
+                this.source[pos+3] == 115 && this.source[pos+4] == 101) {
+                pos = pos + 5;
+                int nid = this.alloc_node();
+                this.nodes[nid].type = JSON_BOOL;
+                this.nodes[nid].int_val = 0;
+                return nid;
+            }
+        } else if (c == 110 /* 'n' */) { // null
+            if (pos + 4 <= end &&
+                this.source[pos+1] == 117 && this.source[pos+2] == 108 && this.source[pos+3] == 108) {
+                pos = pos + 4;
+                int nid = this.alloc_node();
+                this.nodes[nid].type = JSON_NULL;
+                return nid;
+            }
+        } else if (c == 45 /* '-' */ || (c >= 48 && c <= 57 /* '0'-'9' */)) {
+            return this.parse_number(pos, end);
+        }
+        return -1;
+    }
+
+    int parse_string(int& pos, int end) {
+        pos = pos + 1; // skip opening quote '"'
+        int start = pos;
+        while (pos < end) {
+            char c = this.source[pos];
+            if (c == 92 /* '\\' */) {
+                pos = pos + 2; // skip escape
+            } else if (c == 34 /* '"' */) {
+                int length = pos - start;
+                pos = pos + 1; // skip closing quote
+                int nid = this.alloc_node();
+                this.nodes[nid].type = JSON_STRING;
+                this.nodes[nid].str_start = start;
+                this.nodes[nid].str_len = length;
+                return nid;
+            } else {
+                pos = pos + 1;
+            }
+        }
+        return -1;
+    }
+
+    int parse_number(int& pos, int end) {
+        int start = pos;
+        bool isFloat = false;
+        bool isNeg = false;
+
+        if (this.source[pos] == 45 /* '-' */) {
+            isNeg = true;
+            pos = pos + 1;
+        }
+
+        int intPart = 0;
+        while (pos < end) {
+            char c = this.source[pos];
+            if (c >= 48 && c <= 57) {
+                intPart = intPart * 10 + (c - 48);
+                pos = pos + 1;
+            } else {
+                break;
+            }
+        }
+
+        float fracPart = 0.0f;
+        float fracDiv = 1.0f;
+        if (pos < end && this.source[pos] == 46 /* '.' */) {
+            isFloat = true;
+            pos = pos + 1;
+            while (pos < end) {
+                char c = this.source[pos];
+                if (c >= 48 && c <= 57) {
+                    fracPart = fracPart * 10.0f + ((float)(c - 48));
+                    fracDiv = fracDiv * 10.0f;
+                    pos = pos + 1;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        if (pos < end && (this.source[pos] == 101 || this.source[pos] == 69 /* 'e', 'E' */)) {
+            isFloat = true;
+            pos = pos + 1;
+            bool expNeg = false;
+            if (pos < end && this.source[pos] == 45 /* '-' */) {
+                expNeg = true;
+                pos = pos + 1;
+            } else if (pos < end && this.source[pos] == 43 /* '+' */) {
+                pos = pos + 1;
+            }
+            int expVal = 0;
+            while (pos < end && this.source[pos] >= 48 && this.source[pos] <= 57) {
+                expVal = expVal * 10 + (this.source[pos] - 48);
+                pos = pos + 1;
+            }
+            float mul = 1.0f;
+            for (int e = 0; e < expVal; ++e) { mul = mul * 10.0f; }
+            if (expNeg) { fracDiv = fracDiv * mul; }
+            else { fracDiv = fracDiv / mul; }
+        }
+
+        int nid = this.alloc_node();
+        this.nodes[nid].str_start = start;
+        this.nodes[nid].str_len = pos - start;
+
+        if (isFloat) {
+            this.nodes[nid].type = JSON_FLOAT;
+            float f = ((float)intPart) + (fracPart / fracDiv);
+            if (isNeg) { f = -f; }
+            this.nodes[nid].float_val = f;
+        } else {
+            this.nodes[nid].type = JSON_INT;
+            int iv = intPart;
+            if (isNeg) { iv = -iv; }
+            this.nodes[nid].int_val = iv;
+        }
+        return nid;
+    }
+
+    int parse_array(int& pos, int end) {
+        pos = pos + 1; // skip '['
+        int arrId = this.alloc_node();
+        this.nodes[arrId].type = JSON_ARRAY;
+
+        this.skip_whitespace(pos, end);
+        if (pos < end && this.source[pos] == 93 /* ']' */) {
+            pos = pos + 1;
+            return arrId;
+        }
+
+        int prevChild = -1;
+        int count = 0;
+        while (pos < end) {
+            this.skip_whitespace(pos, end);
+            int childId = this.parse_value(pos, end);
+            if (childId < 0) { return -1; }
+
+            if (prevChild < 0) {
+                this.nodes[arrId].first_child = childId;
+            } else {
+                this.nodes[prevChild].next_sibling = childId;
+            }
+            prevChild = childId;
+            count = count + 1;
+
+            this.skip_whitespace(pos, end);
+            if (pos < end && this.source[pos] == 44 /* ',' */) {
+                pos = pos + 1;
+            } else if (pos < end && this.source[pos] == 93 /* ']' */) {
+                pos = pos + 1;
+                break;
+            } else {
+                return -1;
+            }
+        }
+        this.nodes[arrId].child_count = count;
+        return arrId;
+    }
+
+    int parse_object(int& pos, int end) {
+        pos = pos + 1; // skip '{'
+        int objId = this.alloc_node();
+        this.nodes[objId].type = JSON_OBJECT;
+
+        this.skip_whitespace(pos, end);
+        if (pos < end && this.source[pos] == 125 /* '}' */) {
+            pos = pos + 1;
+            return objId;
+        }
+
+        int prevChild = -1;
+        int count = 0;
+        while (pos < end) {
+            this.skip_whitespace(pos, end);
+            if (pos >= end || this.source[pos] != 34 /* '"' */) {
+                return -1;
+            }
+            pos = pos + 1; // skip quote
+            int kStart = pos;
+            while (pos < end && this.source[pos] != 34) {
+                if (this.source[pos] == 92 /* '\\' */) { pos = pos + 2; }
+                else { pos = pos + 1; }
+            }
+            if (pos >= end) { return -1; }
+            int kLen = pos - kStart;
+            pos = pos + 1; // skip closing quote
+
+            this.skip_whitespace(pos, end);
+            if (pos >= end || this.source[pos] != 58 /* ':' */) {
+                return -1;
+            }
+            pos = pos + 1; // skip ':'
+
+            this.skip_whitespace(pos, end);
+            int valId = this.parse_value(pos, end);
+            if (valId < 0) { return -1; }
+
+            this.nodes[valId].key_start = kStart;
+            this.nodes[valId].key_len = kLen;
+
+            if (prevChild < 0) {
+                this.nodes[objId].first_child = valId;
+            } else {
+                this.nodes[prevChild].next_sibling = valId;
+            }
+            prevChild = valId;
+            count = count + 1;
+
+            this.skip_whitespace(pos, end);
+            if (pos < end && this.source[pos] == 44 /* ',' */) {
+                pos = pos + 1;
+            } else if (pos < end && this.source[pos] == 125 /* '}' */) {
+                pos = pos + 1;
+                break;
+            } else {
+                return -1;
+            }
+        }
+        this.nodes[objId].child_count = count;
+        return objId;
+    }
+
+    // ── DOM Query Methods ──────────────────────────────────────────────────
+
+    int root() const {
+        return this.root_node;
+    }
+
+    int type_of(int nid) const {
+        if (nid < 0 || nid >= this.node_count) { return -1; }
+        return this.nodes[nid].type;
+    }
+
+    bool is_null(int nid) const {
+        return this.type_of(nid) == JSON_NULL;
+    }
+
+    bool is_bool(int nid) const {
+        return this.type_of(nid) == JSON_BOOL;
+    }
+
+    bool is_int(int nid) const {
+        return this.type_of(nid) == JSON_INT;
+    }
+
+    bool is_float(int nid) const {
+        return this.type_of(nid) == JSON_FLOAT;
+    }
+
+    bool is_string(int nid) const {
+        return this.type_of(nid) == JSON_STRING;
+    }
+
+    bool is_array(int nid) const {
+        return this.type_of(nid) == JSON_ARRAY;
+    }
+
+    bool is_object(int nid) const {
+        return this.type_of(nid) == JSON_OBJECT;
+    }
+
+    int as_int(int nid) const {
+        if (nid < 0 || nid >= this.node_count) { return 0; }
+        return this.nodes[nid].int_val;
+    }
+
+    float as_float(int nid) const {
+        if (nid < 0 || nid >= this.node_count) { return 0.0f; }
+        if (this.nodes[nid].type == JSON_INT) {
+            return (float)this.nodes[nid].int_val;
+        }
+        return this.nodes[nid].float_val;
+    }
+
+    bool as_bool(int nid) const {
+        if (nid < 0 || nid >= this.node_count) { return false; }
+        return this.nodes[nid].int_val != 0;
+    }
+
+    int str_length(int nid) const {
+        if (nid < 0 || nid >= this.node_count) { return 0; }
+        return this.nodes[nid].str_len;
+    }
+
+    bool str_equals(int nid, const char expected[]) {
+        if (nid < 0 || nid >= this.node_count) { return false; }
+        int expectedLen = len(expected);
+        int nodeLen = this.nodes[nid].str_len;
+        if (expectedLen != nodeLen) { return false; }
+        int start = this.nodes[nid].str_start;
+        for (int i = 0; i < nodeLen; ++i) {
+            if (this.source[start + i] != expected[i]) { return false; }
+        }
+        return true;
+    }
+
+    int array_size(int nid) const {
+        if (nid < 0 || nid >= this.node_count) { return 0; }
+        return this.nodes[nid].child_count;
+    }
+
+    int array_get(int nid, int targetIndex) {
+        if (nid < 0 || nid >= this.node_count) { return -1; }
+        int curr = this.nodes[nid].first_child;
+        int i = 0;
+        while (curr >= 0) {
+            if (i == targetIndex) {
+                return curr;
+            }
+            curr = this.nodes[curr].next_sibling;
+            i = i + 1;
+        }
+        return -1;
+    }
+
+    int object_size(int nid) const {
+        if (nid < 0 || nid >= this.node_count) { return 0; }
+        return this.nodes[nid].child_count;
+    }
+
+    int find_field(int nid, const char key[]) {
+        if (nid < 0 || nid >= this.node_count) { return -1; }
+        int kLen = len(key);
+        int curr = this.nodes[nid].first_child;
+        while (curr >= 0) {
+            if (this.nodes[curr].key_len == kLen) {
+                int ks = this.nodes[curr].key_start;
+                bool isMatch = true;
+                for (int i = 0; i < kLen; ++i) {
+                    if (this.source[ks + i] != key[i]) {
+                        isMatch = false;
+                        break;
+                    }
+                }
+                if (isMatch) {
+                    return curr;
+                }
+            }
+            curr = this.nodes[curr].next_sibling;
+        }
+        return -1;
+    }
+
+    int get_int(int objId, const char key[]) {
+        int fid = this.find_field(objId, key);
+        if (fid >= 0) { return this.as_int(fid); }
+        return 0;
+    }
+
+    float get_float(int objId, const char key[]) {
+        int fid = this.find_field(objId, key);
+        if (fid >= 0) { return this.as_float(fid); }
+        return 0.0f;
+    }
+
+    bool get_bool(int objId, const char key[]) {
+        int fid = this.find_field(objId, key);
+        if (fid >= 0) { return this.as_bool(fid); }
+        return false;
+    }
+};
