@@ -4,8 +4,19 @@
 
 $ErrorActionPreference = "Stop"
 
-$Troop = "E:\Projects\Tamarin\build\Release\troop.exe"
-$Tamarin = "E:\Projects\Tamarin\build\Release\tamarin.exe"
+$Troop = (Get-Command troop -ErrorAction SilentlyContinue).Source
+if (-not $Troop -or -not (Test-Path $Troop)) {
+    $candTroop = Join-Path $PSScriptRoot "..\..\build\Release\troop.exe"
+    if (Test-Path $candTroop) { $Troop = (Resolve-Path $candTroop).Path }
+    else { $Troop = "E:\Projects\Tamarin\build\Release\troop.exe" }
+}
+
+$Tamarin = (Get-Command tamarin -ErrorAction SilentlyContinue).Source
+if (-not $Tamarin -or -not (Test-Path $Tamarin)) {
+    $candTam = Join-Path $PSScriptRoot "..\..\build\Release\tamarin.exe"
+    if (Test-Path $candTam) { $Tamarin = (Resolve-Path $candTam).Path }
+    else { $Tamarin = "E:\Projects\Tamarin\build\Release\tamarin.exe" }
+}
 $TempDir = Join-Path $env:TEMP "troop_custom_test"
 
 if (-not (Test-Path $Troop)) {
@@ -41,10 +52,10 @@ Set-Location $TempDir
 
 # 1. Version output check
 $verTroop = (& $Troop --version)
-Assert-Test "Troop CLI --version reports 0.15.0" ($verTroop -match "troop 0.15.0")
+Assert-Test "Troop CLI --version reports 0.16.0" ($verTroop -match "troop 0.16.0")
 
 $verTamTroop = (& $Tamarin troop --version)
-Assert-Test "Tamarin CLI 'tamarin troop --version' alias works" ($verTamTroop -match "troop 0.15.0")
+Assert-Test "Tamarin CLI 'tamarin troop --version' alias works" ($verTamTroop -match "troop 0.16.0")
 
 # 2. Scaffolding a library
 & $Troop new core_math --lib | Out-Null

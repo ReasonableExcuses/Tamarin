@@ -3160,6 +3160,58 @@ TAMARIN_TEST(Sema, AsyncRejectTaskCAbiExport) {
     return true;
 }
 
+TAMARIN_TEST(Sema, CfgPruningValidProgram) {
+    SourceManager sm;
+    auto fileId = sm.addSource("test_cfg_valid.tam",
+        "@cfg(target_os = \"windows\")\n"
+        "int getCode() { return 100; }\n"
+        "\n"
+        "@cfg(target_os = \"linux\")\n"
+        "int getCode() { return 200; }\n"
+        "\n"
+        "int main() {\n"
+        "    return getCode() - 100;\n"
+        "}\n");
+    std::ostringstream errs;
+    DiagnosticEngine diag(sm, errs);
+    lexer::Lexer lex(sm, fileId, diag);
+    parser::Parser p(lex, diag);
+    p.setTargetTriple(target::TargetTriple::parse("x86_64-pc-windows-msvc"));
+    auto prog = p.parseProgram();
+
+    sema::Sema sema(diag);
+    sema.setTargetTriple(target::TargetTriple::parse("x86_64-pc-windows-msvc"));
+    bool ok = sema.analyze(prog);
+    EXPECT_TRUE(ok);
+    EXPECT_FALSE(diag.hasErrors());
+    return true;
+}
+
+TAMARIN_TEST(Sema, CfgCallingInactiveFunctionFails) {
+    SourceManager sm;
+    auto fileId = sm.addSource("test_cfg_inactive.tam",
+        "@cfg(target_os = \"linux\")\n"
+        "int linuxOnly() { return 42; }\n"
+        "\n"
+        "int main() {\n"
+        "    return linuxOnly();\n"
+        "}\n");
+    std::ostringstream errs;
+    DiagnosticEngine diag(sm, errs);
+    lexer::Lexer lex(sm, fileId, diag);
+    parser::Parser p(lex, diag);
+    p.setTargetTriple(target::TargetTriple::parse("x86_64-pc-windows-msvc"));
+    auto prog = p.parseProgram();
+
+    sema::Sema sema(diag);
+    sema.setTargetTriple(target::TargetTriple::parse("x86_64-pc-windows-msvc"));
+    bool ok = sema.analyze(prog);
+    EXPECT_FALSE(ok);
+    EXPECT_TRUE(diag.hasErrors());
+    EXPECT_TRUE(errs.str().find("undeclared function 'linuxOnly'") != std::string::npos);
+    return true;
+}
+
 
 
 

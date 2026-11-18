@@ -141,6 +141,9 @@ private:
     // Loop target stack for break and continue
     std::vector<LoopTarget> loopStack_;
 
+    // Module-level global variables
+    std::unordered_map<std::string, IRGlobal> globals_;
+
     // Structured concurrency task scope stack
     std::vector<ValueId> taskScopeStack_;
 

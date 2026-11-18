@@ -90,7 +90,7 @@ TAMARIN_TEST(Stdlib, StringLiteralsAndLen) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 87);
 
     safeRemoveAll(tempDir);
@@ -142,7 +142,7 @@ TAMARIN_TEST(Stdlib, BuiltinPrintlnAndPrint) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     if (ret != 0) {
         std::cerr << "FileBufferBoundsSafety failed with ret=" << ret << "\n";
     }
@@ -209,7 +209,7 @@ TAMARIN_TEST(Stdlib, ProceduralFileHandling) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     if (ret != 0) {
         std::cerr << "FileBufferBoundsSafety failed with ret=" << ret << "\n";
     }
@@ -276,7 +276,7 @@ TAMARIN_TEST(Stdlib, ImportStdIo) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     if (ret != 0) {
         std::cerr << "FileBufferBoundsSafety failed with ret=" << ret << "\n";
     }
@@ -331,7 +331,7 @@ TAMARIN_TEST(Stdlib, ImportStdMath) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 66);
 
     safeRemoveAll(tempDir);
@@ -381,8 +381,8 @@ TAMARIN_TEST(Stdlib, GetInput) {
     EXPECT_TRUE(codegen.emitLLVMIRToFile(llPath));
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
-    std::string cmd = "\"\"" + exePath.string() + "\" < \"" + inPath.string() + "\"\"";
-    int ret = std::system(cmd.c_str());
+    std::string cmd = "\"" + exePath.string() + "\" < \"" + inPath.string() + "\"";
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 12); // "TamarinInput" length is 12
 
     safeRemoveAll(tempDir);
@@ -438,7 +438,7 @@ TAMARIN_TEST(Stdlib, DedicatedFileModule) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     if (ret != 0) {
         std::cerr << "FileBufferBoundsSafety failed with ret=" << ret << "\n";
     }
@@ -493,7 +493,7 @@ TAMARIN_TEST(Stdlib, StringLiteralImmutabilityAndEscapes) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     if (ret != 0) {
         std::cerr << "FileBufferBoundsSafety failed with ret=" << ret << "\n";
     }
@@ -541,7 +541,7 @@ TAMARIN_TEST(Stdlib, ConsoleOutputFormatStringSafety) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     if (ret != 0) {
         std::cerr << "FileBufferBoundsSafety failed with ret=" << ret << "\n";
     }
@@ -598,8 +598,8 @@ TAMARIN_TEST(Stdlib, CallerOwnedGetInputMultipleCalls) {
     EXPECT_TRUE(codegen.emitLLVMIRToFile(llPath));
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
-    std::string cmd = "\"\"" + exePath.string() + "\" < \"" + inPath.string() + "\"\"";
-    int ret = std::system(cmd.c_str());
+    std::string cmd = "\"" + exePath.string() + "\" < \"" + inPath.string() + "\"";
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 0);
 
     safeRemoveAll(tempDir);
@@ -672,7 +672,7 @@ TAMARIN_TEST(Stdlib, FileRAIIDoubleCloseAndResourceSafety) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     if (ret != 0) {
         std::cerr << "FileBufferBoundsSafety failed with ret=" << ret << "\n";
     }
@@ -737,7 +737,7 @@ TAMARIN_TEST(Stdlib, FileBufferBoundsSafety) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     if (ret != 0) {
         std::cerr << "FileBufferBoundsSafety failed with ret=" << ret << "\n";
     }
@@ -797,7 +797,7 @@ TAMARIN_TEST(Stdlib, StdMathEdgeCases) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     if (ret != 0) {
         std::cerr << "FileBufferBoundsSafety failed with ret=" << ret << "\n";
     }
@@ -859,7 +859,7 @@ TAMARIN_TEST(Stdlib, ImportStdMem) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 0);
 
     safeRemoveAll(tempDir);
@@ -923,7 +923,7 @@ TAMARIN_TEST(Stdlib, ImportStdCollectionsVec) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 0);
 
     safeRemoveAll(tempDir);
@@ -982,7 +982,7 @@ TAMARIN_TEST(Stdlib, ImportStdString) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 0);
 
     safeRemoveAll(tempDir);
@@ -1052,7 +1052,7 @@ TAMARIN_TEST(Stdlib, ImportStdAlgorithms) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 0);
 
     safeRemoveAll(tempDir);
@@ -1132,7 +1132,7 @@ TAMARIN_TEST(Stdlib, ImportStdSync) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 0);
 
     safeRemoveAll(tempDir);
@@ -1228,7 +1228,7 @@ TAMARIN_TEST(Stdlib, LockFreeMPMCChannelConcurrency) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 0);
 
     safeRemoveAll(tempDir);
@@ -1303,7 +1303,7 @@ TAMARIN_TEST(Stdlib, SelectMultiplexChannels) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 0);
 
     safeRemoveAll(tempDir);

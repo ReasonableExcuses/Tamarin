@@ -93,11 +93,11 @@ int main(int argc, char* argv[]) {
             opts.targetTriple = std::string(arg.substr(9));
         } else if (arg == "--emit=exe") {
             opts.outputKind = tamarin::driver::DriverOptions::OutputKind::Exe;
-        } else if (arg == "--emit=obj") {
+        } else if (arg == "--emit=obj" || arg == "--emit-obj") {
             opts.outputKind = tamarin::driver::DriverOptions::OutputKind::Obj;
-        } else if (arg == "--emit=lib") {
+        } else if (arg == "--emit=lib" || arg == "--emit-lib") {
             opts.outputKind = tamarin::driver::DriverOptions::OutputKind::StaticLib;
-        } else if (arg == "--emit=shared") {
+        } else if (arg == "--emit=shared" || arg == "--emit-shared") {
             opts.outputKind = tamarin::driver::DriverOptions::OutputKind::SharedLib;
         } else if (arg == "--lib") {
             opts.outputKind = tamarin::driver::DriverOptions::OutputKind::StaticLib;

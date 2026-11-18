@@ -1,6 +1,6 @@
 # Tamarin Technical Roadmap: Towards Version 1.0 GA
 
-**Current Version:** 0.15.0  
+**Current Version:** 0.16.0  
 **Target Milestone:** 1.0.0 General Availability  
 **Document Classification:** Systems Engineering & Compiler Architecture Plan  
 
@@ -14,6 +14,7 @@ Tamarin has established a verified, zero-compromise foundation:
 - **Data-Oriented Execution**: First-class `@layout(scan)` Structure-of-Arrays (SoA) layout with automated SIMD vectorization.
 - **Data-Race Freedom**: Static affine injectivity analysis on `parallel for` loops.
 - **Package Management**: Native `troop` CLI with deterministic SemVer 2.0.0 resolution and lockfile generation.
+- **Tier 1 Cross-Platform Portability**: First-class native support across Windows MSVC (`x86_64`), Linux GNU (`x86_64`, `aarch64`), and Apple Silicon macOS Darwin (`aarch64`), with `@cfg(...)` conditional compilation directives and multi-OS GitHub Actions CI.
 
 The path to **Version 1.0 GA** focuses on cross-platform portability, high-performance standard library algorithms, developer tooling (LSP), and self-hosting.
 
@@ -22,10 +23,7 @@ The path to **Version 1.0 GA** focuses on cross-platform portability, high-perfo
 ## 2. Release Schedule and Milestones
 
 ```text
-  [ v0.15.0 Current ] ──► Troop Package Manager & Full Test Gauntlet (426/426 Passed)
-          │
-          ▼
-  [ v0.16.0 ] ──────────► Cross-Platform Portability & Tier 1 Multi-OS CI
+  [ v0.16.0 Current ] ──► Cross-Platform Native Portability, @cfg, Multi-OS CI (436/436 Passed)
           │
           ▼
   [ v0.17.0 ] ──────────► High-Performance Standard Library: Swiss Table & Zero-Alloc JSON
@@ -42,19 +40,20 @@ The path to **Version 1.0 GA** focuses on cross-platform portability, high-perfo
 
 ---
 
-### Milestone v0.16.0: Cross-Platform Portability & Tier 1 Multi-OS CI
-*Target Date:* Q1 2027
+### Milestone v0.16.0: Cross-Platform Portability & Tier 1 Multi-OS CI [COMPLETED]
+*Completed:* November 2026
 
 - **POSIX Platform Support**:
-  - Implement POSIX-compliant virtual memory management in `PageProvider` using `mmap(MAP_ANONYMOUS)`, `mprotect`, and `munmap`.
-  - Add thread management using `pthread` and `clone` for Linux (x86-64 and aarch64).
-  - Add macOS Apple Silicon (Darwin ARM64) support, validating System V AMD64 and ARM64 AAPCS calling conventions.
-- **Continuous Integration Matrix**:
-  - Stand up GitHub Actions workflow building and testing across:
-    - Windows 11 (MSVC 2022 / Clang-cl 20)
-    - Ubuntu 24.04 LTS (GCC 14 / Clang 20)
-    - macOS Sonoma (Apple Clang / Xcode 16)
-  - Automate 100% test pass verification for all pull requests.
+  - Implemented POSIX virtual memory management in `PageProvider` using `mmap(MAP_PRIVATE | MAP_ANONYMOUS)`, `munmap`, and `mprotect`.
+  - Implemented Apple Silicon 16 KB hardware page alignment (`allocGranularity_ = 65536`, `std::max<size_t>(4096, sysconf(_SC_PAGESIZE))`), preventing `mprotect` `EINVAL` aborts.
+  - Portable resident working set reporting via `mach_task_basic_info` (macOS), `getrusage` (Linux), and `K32GetProcessMemoryInfo` (Windows).
+  - Modern C++20 concurrency (`std::chrono::steady_clock`, `std::thread`, `std::mutex`, `std::atomic`).
+- **Conditional Compilation (`@cfg(...)`)**:
+  - Implemented `@cfg(target_os = ...)` and `@cfg(target_arch = ...)` with boolean combinators `all(...)`, `any(...)`, `not(...)`.
+  - Inactive AST declaration and import pruning prior to Sema analysis and codegen.
+- **Continuous Integration Matrix & Unified Test Harness**:
+  - Created `.github/workflows/ci.yml` multi-OS matrix (`ubuntu-24.04`, `macos-15`, `windows-2025`) with explicit `-DLLVM_DIR` discovery across all runners.
+  - Implemented `tests/run_all.py` (Python 3 standard library) executing all 436 tests across 10 suites with 100% pass rate.
 
 ---
 

@@ -767,5 +767,54 @@ TAMARIN_TEST(Parser, ParsePointerTypesAndPrototypes) {
     return true;
 }
 
+TAMARIN_TEST(Parser, ParseCfgDirectives) {
+    SourceManager sm;
+    auto fileId = sm.addSource("cfg_test.tmn",
+        "@cfg(target_os = \"windows\")\n"
+        "import std.os.windows;\n"
+        "\n"
+        "@cfg(target_os = \"linux\")\n"
+        "import std.os.linux;\n"
+        "\n"
+        "@cfg(target_os = \"windows\")\n"
+        "int winOnly() { return 1; }\n"
+        "\n"
+        "@cfg(target_os = \"linux\")\n"
+        "int linuxOnly() { return 2; }\n"
+        "\n"
+        "@cfg(any(target_os = \"windows\", target_os = \"linux\"))\n"
+        "int winOrLinux() { return 3; }\n"
+        "\n"
+        "@cfg(all(target_os = \"linux\", target_arch = \"x86_64\"))\n"
+        "int linuxX64Only() { return 4; }\n"
+        "\n"
+        "@cfg(not(target_os = \"windows\"))\n"
+        "int notWindows() { return 5; }\n"
+    );
+
+    std::ostringstream errs;
+    DiagnosticEngine diag(sm, errs);
+    lexer::Lexer lex(sm, fileId, diag);
+    parser::Parser p(lex, diag);
+    p.setTargetTriple(target::TargetTriple::parse("x86_64-pc-windows-msvc"));
+
+    auto prog = p.parseProgram();
+    EXPECT_FALSE(diag.hasErrors());
+
+    // On Windows target:
+    // imports: only std.os.windows
+    EXPECT_EQ(prog.imports.size(), 1);
+    EXPECT_EQ(prog.imports[0].modulePath, "std.os.windows");
+
+    // decls: winOnly (1), winOrLinux (3) -> total 2 decls
+    EXPECT_EQ(prog.decls.size(), 2);
+    auto& f0 = static_cast<FunctionDecl&>(*prog.decls[0]);
+    EXPECT_EQ(f0.name, "winOnly");
+    auto& f1 = static_cast<FunctionDecl&>(*prog.decls[1]);
+    EXPECT_EQ(f1.name, "winOrLinux");
+
+    return true;
+}
+
 
 

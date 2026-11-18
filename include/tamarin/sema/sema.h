@@ -40,6 +40,11 @@ public:
     void setLibraryMode(bool isLib) noexcept { isLibraryMode_ = isLib; }
     bool isLibraryMode() const noexcept { return isLibraryMode_; }
 
+    void setTargetTriple(target::TargetTriple triple) noexcept { targetTriple_ = std::move(triple); }
+    const target::TargetTriple& getTargetTriple() const noexcept { return targetTriple_; }
+
+    static void pruneInactiveDeclarations(ast::Program& prog, const target::TargetTriple& triple);
+
 private:
     void registerTopDecls(ast::Program& prog);
     void checkFunctionBodies(ast::Program& prog);
@@ -51,6 +56,7 @@ private:
     TypeChecker      checker_;
     std::unordered_map<std::string, std::unique_ptr<ModuleScope>> moduleScopes_;
     bool             isLibraryMode_ = false;
+    target::TargetTriple targetTriple_ = target::TargetTriple::getHost();
 };
 
 } // namespace tamarin::sema

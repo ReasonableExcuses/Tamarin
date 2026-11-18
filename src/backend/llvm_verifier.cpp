@@ -17,6 +17,8 @@
 #include <unistd.h>
 #endif
 
+#include "tamarin/target/target_triple.h"
+
 namespace tamarin::backend {
 
 LLVMVerifier::LLVMVerifier() {
@@ -57,7 +59,12 @@ const std::string& LLVMVerifier::getTargetTriple() const {
 
 static std::string runCommand(const std::string& cmd, int& exitCode) {
     std::string result;
-    FILE* pipe = _popen(cmd.c_str(), "r");
+#ifdef _WIN32
+    std::string wrapped = "\"" + cmd + "\"";
+    FILE* pipe = _popen(wrapped.c_str(), "r");
+#else
+    FILE* pipe = popen(cmd.c_str(), "r");
+#endif
     if (!pipe) {
         exitCode = -1;
         return "failed to open process pipe";
@@ -67,7 +74,11 @@ static std::string runCommand(const std::string& cmd, int& exitCode) {
     while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
         result += buffer;
     }
+#ifdef _WIN32
     exitCode = _pclose(pipe);
+#else
+    exitCode = pclose(pipe);
+#endif
     return result;
 }
 
@@ -75,21 +86,17 @@ VerificationResult LLVMVerifier::verifyFile(const std::filesystem::path& path) {
     VerificationResult res;
     std::string triple = targetTriple_;
     if (triple.empty()) {
-#if defined(_WIN32)
-        triple = "x86_64-pc-windows-msvc";
-#elif defined(__APPLE__)
-        triple = "x86_64-apple-darwin";
-#else
-        triple = "x86_64-unknown-linux-gnu";
-#endif
+        triple = target::TargetTriple::getHost().str();
     }
 #ifdef _WIN32
     std::string devNull = "NUL";
+    std::string cmd = "\"" + clangPath_ + "\" -x ir -c --target=" + triple +
+                      " -Wno-override-module \"" + path.string() + "\" -o " + devNull + " 2>&1";
 #else
     std::string devNull = "/dev/null";
+    std::string cmd = "\"" + clangPath_ + "\" -x ir -c --target=" + triple +
+                      " -Wno-override-module \"" + path.string() + "\" -o " + devNull + " 2>&1";
 #endif
-    std::string cmd = "\"\"" + clangPath_ + "\" -x ir -c --target=" + triple +
-                      " -Wno-override-module \"" + path.string() + "\" -o " + devNull + " 2>&1\"";
 
     int exitCode = 0;
     std::string output = runCommand(cmd, exitCode);

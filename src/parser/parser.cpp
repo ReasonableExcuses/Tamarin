@@ -459,12 +459,94 @@ ast::ImportDecl Parser::parseImport() {
     };
 }
 
+std::shared_ptr<ast::CfgExpr> Parser::parseCfgExpr() {
+    expect(TokenKind::LParen, "expected '(' after '@cfg'");
+    auto expr = parseCfgItem();
+    expect(TokenKind::RParen, "expected ')' after '@cfg' expression");
+    return expr;
+}
+
+std::shared_ptr<ast::CfgExpr> Parser::parseCfgItem() {
+    auto loc = current_.location;
+    auto name = parseIdentifier("expected predicate name or combinator in '@cfg'");
+    if (name == "all" || name == "any") {
+        ast::CfgOp op = (name == "all") ? ast::CfgOp::All : ast::CfgOp::Any;
+        expect(TokenKind::LParen, "expected '(' after '" + name + "'");
+        std::vector<std::shared_ptr<ast::CfgExpr>> children;
+        if (!check(TokenKind::RParen)) {
+            while (true) {
+                children.push_back(parseCfgItem());
+                if (match(TokenKind::Comma)) {
+                    if (check(TokenKind::RParen)) break;
+                    continue;
+                }
+                break;
+            }
+        }
+        expect(TokenKind::RParen, "expected ')' after '" + name + "(...)'");
+        return std::make_shared<ast::CfgExpr>(op, "", std::move(children), loc);
+    } else if (name == "not") {
+        expect(TokenKind::LParen, "expected '(' after 'not'");
+        auto child = parseCfgItem();
+        expect(TokenKind::RParen, "expected ')' after 'not(...)'");
+        std::vector<std::shared_ptr<ast::CfgExpr>> children;
+        if (child) children.push_back(std::move(child));
+        return std::make_shared<ast::CfgExpr>(ast::CfgOp::Not, "", std::move(children), loc);
+    } else if (name == "target_os") {
+        expect(TokenKind::Eq, "expected '=' after 'target_os'");
+        std::string val;
+        if (check(TokenKind::StringLiteral)) {
+            val = current_.stringValue();
+            advance();
+        } else {
+            val = parseIdentifier("expected OS name string or identifier");
+        }
+        return std::make_shared<ast::CfgExpr>(ast::CfgOp::TargetOS, std::move(val), std::vector<std::shared_ptr<ast::CfgExpr>>{}, loc);
+    } else if (name == "target_arch") {
+        expect(TokenKind::Eq, "expected '=' after 'target_arch'");
+        std::string val;
+        if (check(TokenKind::StringLiteral)) {
+            val = current_.stringValue();
+            advance();
+        } else {
+            val = parseIdentifier("expected architecture name string or identifier");
+        }
+        return std::make_shared<ast::CfgExpr>(ast::CfgOp::TargetArch, std::move(val), std::vector<std::shared_ptr<ast::CfgExpr>>{}, loc);
+    } else {
+        diag_.report(loc, Severity::Error, "unknown @cfg predicate or combinator '" + name + "'");
+        return nullptr;
+    }
+}
+
 Program Parser::parseProgram() {
     Program prog;
 
-    // 1. Imports at the beginning of the file
-    while (check(TokenKind::Import)) {
-        prog.imports.push_back(parseImport());
+    // 1. Imports at the beginning of the file (can have @cfg)
+    while (true) {
+        if (check(TokenKind::Import)) {
+            prog.imports.push_back(parseImport());
+        } else if (check(TokenKind::At) && lex_.peek().kind == TokenKind::Identifier && lex_.peek().text == "cfg") {
+            advance(); // eat '@'
+            advance(); // eat 'cfg'
+            auto cfg = parseCfgExpr();
+            if (check(TokenKind::Import)) {
+                auto imp = parseImport();
+                imp.cfg = cfg;
+                if (!cfg || cfg->evaluate(targetTriple_)) {
+                    prog.imports.push_back(std::move(imp));
+                }
+            } else {
+                // Not followed by import -> top-level declaration with this cfg
+                if (auto d = parseTopDecl(/*defaultExtern=*/false, /*defaultLinkage=*/"", cfg)) {
+                    if (!d->cfg || d->cfg->evaluate(targetTriple_)) {
+                        prog.decls.push_back(std::move(d));
+                    }
+                }
+                break;
+            }
+        } else {
+            break;
+        }
     }
 
     // 2. Declarations
@@ -487,20 +569,26 @@ Program Parser::parseProgram() {
                 if (match(TokenKind::LBrace)) {
                     while (!check(TokenKind::RBrace) && !check(TokenKind::Eof)) {
                         if (auto d = parseTopDecl(/*defaultExtern=*/true, linkage)) {
-                            prog.decls.push_back(std::move(d));
+                            if (!d->cfg || d->cfg->evaluate(targetTriple_)) {
+                                prog.decls.push_back(std::move(d));
+                            }
                         }
                     }
                     expect(TokenKind::RBrace, "expected '}' after extern block");
                     continue;
                 } else {
                     if (auto d = parseTopDecl(/*defaultExtern=*/true, linkage)) {
-                        prog.decls.push_back(std::move(d));
+                        if (!d->cfg || d->cfg->evaluate(targetTriple_)) {
+                            prog.decls.push_back(std::move(d));
+                        }
                     }
                     continue;
                 }
             }
             if (auto d = parseTopDecl()) {
-                prog.decls.push_back(std::move(d));
+                if (!d->cfg || d->cfg->evaluate(targetTriple_)) {
+                    prog.decls.push_back(std::move(d));
+                }
             }
         } catch (const std::runtime_error&) {
             // Skip to next semicolon or brace for recovery
@@ -514,7 +602,7 @@ Program Parser::parseProgram() {
     return prog;
 }
 
-DeclPtr Parser::parseTopDecl(bool defaultExtern, const std::string& defaultLinkage) {
+DeclPtr Parser::parseTopDecl(bool defaultExtern, const std::string& defaultLinkage, std::shared_ptr<ast::CfgExpr> initialCfg) {
     auto loc = current_.location;
     bool isPublic = false;
     bool isNoInline = false;
@@ -524,6 +612,7 @@ DeclPtr Parser::parseTopDecl(bool defaultExtern, const std::string& defaultLinka
     bool isExported = false;
     bool isAsync = false;
     LayoutDirective layout = LayoutDirective::Default;
+    std::shared_ptr<ast::CfgExpr> cfg = std::move(initialCfg);
 
     while (true) {
         if (!isPublic && match(TokenKind::Public)) {
@@ -547,7 +636,9 @@ DeclPtr Parser::parseTopDecl(bool defaultExtern, const std::string& defaultLinka
         if (check(TokenKind::At)) {
             advance();
             auto attr = parseIdentifier("expected attribute name after '@'");
-            if (attr == "noinline") {
+            if (attr == "cfg") {
+                cfg = parseCfgExpr();
+            } else if (attr == "noinline") {
                 isNoInline = true;
             } else if (attr == "inline" || attr == "always_inline") {
                 isAlwaysInline = true;
@@ -572,23 +663,30 @@ DeclPtr Parser::parseTopDecl(bool defaultExtern, const std::string& defaultLinka
         break;
     }
 
+    auto attachCfg = [&](DeclPtr d) -> DeclPtr {
+        if (d && cfg) {
+            d->cfg = cfg;
+        }
+        return d;
+    };
+
     if (check(TokenKind::Struct)) {
-        return parseStructOrClassDecl(layout, loc, /*isClass=*/false, /*isInterface=*/false, isPublic);
+        return attachCfg(parseStructOrClassDecl(layout, loc, /*isClass=*/false, /*isInterface=*/false, isPublic));
     }
     if (check(TokenKind::Class)) {
-        return parseStructOrClassDecl(layout, loc, /*isClass=*/true, /*isInterface=*/false, isPublic);
+        return attachCfg(parseStructOrClassDecl(layout, loc, /*isClass=*/true, /*isInterface=*/false, isPublic));
     }
     if (check(TokenKind::Interface)) {
-        return parseStructOrClassDecl(layout, loc, /*isClass=*/false, /*isInterface=*/true, isPublic);
+        return attachCfg(parseStructOrClassDecl(layout, loc, /*isClass=*/false, /*isInterface=*/true, isPublic));
     }
     if (check(TokenKind::Enum)) {
-        return parseEnumDecl(isPublic);
+        return attachCfg(parseEnumDecl(isPublic));
     }
     if (check(TokenKind::Trait)) {
-        return parseTraitDecl(isPublic);
+        return attachCfg(parseTraitDecl(isPublic));
     }
     if (check(TokenKind::Impl)) {
-        return parseImplDecl();
+        return attachCfg(parseImplDecl());
     }
 
     if (layout != LayoutDirective::Default) {
@@ -622,7 +720,7 @@ DeclPtr Parser::parseTopDecl(bool defaultExtern, const std::string& defaultLinka
 
     // Function declaration
     if (check(TokenKind::LParen)) {
-        return parseFunctionDecl(std::move(type), name, loc, isConst, isPublic, isNoInline, isAlwaysInline, std::move(typeParams), std::move(traitBounds), isExtern, linkage, isExported, isAsync);
+        return attachCfg(parseFunctionDecl(std::move(type), name, loc, isConst, isPublic, isNoInline, isAlwaysInline, std::move(typeParams), std::move(traitBounds), isExtern, linkage, isExported, isAsync));
     }
 
     bool isArray = false;
@@ -658,8 +756,8 @@ DeclPtr Parser::parseTopDecl(bool defaultExtern, const std::string& defaultLinka
         expect(TokenKind::Eq, "expected '=' in const declaration");
         auto value = parseExpr();
         expect(TokenKind::Semicolon, "expected ';' after const declaration");
-        return std::make_unique<ConstDecl>(std::move(type), std::move(name),
-                                           std::move(value), loc, isPublic);
+        return attachCfg(std::make_unique<ConstDecl>(std::move(type), std::move(name),
+                                                     std::move(value), loc, isPublic));
     }
 
     // Global variable
@@ -668,9 +766,9 @@ DeclPtr Parser::parseTopDecl(bool defaultExtern, const std::string& defaultLinka
         init = parseExpr();
     }
     expect(TokenKind::Semicolon, "expected ';' after variable declaration");
-    return std::make_unique<GlobalVarDecl>(std::move(type), std::move(name),
-                                          std::move(init), isConst, isArray,
-                                          std::move(arraySize), loc, isPublic);
+    return attachCfg(std::make_unique<GlobalVarDecl>(std::move(type), std::move(name),
+                                                    std::move(init), isConst, isArray,
+                                                    std::move(arraySize), loc, isPublic));
 }
 
 DeclPtr Parser::parseStructOrClassDecl(LayoutDirective layout, SourceLocation loc, bool isClass, bool isInterface, bool isPublic) {

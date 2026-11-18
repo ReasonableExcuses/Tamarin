@@ -87,6 +87,7 @@ const char* tokenKindToString(TokenKind kind) noexcept {
     case TokenKind::Override:       return "override";
     case TokenKind::This:           return "this";
     case TokenKind::Operator:       return "operator";
+    case TokenKind::Fn:             return "fn";
 
     // ── Keywords — literals / values ─────────────────────────────────
     case TokenKind::Null:           return "null";
@@ -170,6 +171,7 @@ const char* tokenKindToString(TokenKind kind) noexcept {
     case TokenKind::Arrow:         return "->";
     case TokenKind::FatArrow:      return "=>";
     case TokenKind::Dot:           return ".";
+    case TokenKind::DotDot:        return "..";
     case TokenKind::ColonColon:    return "::";
     case TokenKind::Colon:         return ":";
 

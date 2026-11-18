@@ -112,6 +112,7 @@ public:
     [[nodiscard]] bool isWindows() const { return os_ == OS::Windows; }
     [[nodiscard]] bool isLinux() const { return os_ == OS::Linux; }
     [[nodiscard]] bool isDarwin() const { return os_ == OS::Darwin; }
+    [[nodiscard]] bool isMacOS() const { return isDarwin(); }
     [[nodiscard]] bool isAArch64() const { return arch_ == Arch::AArch64; }
     [[nodiscard]] bool isX86_64() const { return arch_ == Arch::X86_64; }
 
@@ -165,6 +166,20 @@ public:
 
     [[nodiscard]] std::string objectExtension() const {
         return isWindows() ? ".obj" : ".o";
+    }
+
+    [[nodiscard]] std::string staticLibraryPrefix() const {
+        return isWindows() ? "" : "lib";
+    }
+
+    [[nodiscard]] std::string pathDelimiter() const {
+        return isWindows() ? ";" : ":";
+    }
+
+    [[nodiscard]] std::string cxxStdLibLinkFlags() const {
+        if (isWindows()) return "";
+        if (isDarwin()) return "-lc++ -pthread -lm";
+        return "-lstdc++ -pthread -ldl -lm";
     }
 
 private:

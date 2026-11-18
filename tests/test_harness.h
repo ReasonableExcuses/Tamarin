@@ -47,3 +47,27 @@ struct TestRegistrar {
         } \
     } while (0)
 
+#define EXPECT_NE(a, b) EXPECT_TRUE((a) != (b))
+#define EXPECT_GE(a, b) EXPECT_TRUE((a) >= (b))
+#define EXPECT_LE(a, b) EXPECT_TRUE((a) <= (b))
+#define EXPECT_GT(a, b) EXPECT_TRUE((a) > (b))
+#define EXPECT_LT(a, b) EXPECT_TRUE((a) < (b))
+
+#include <cstdlib>
+#ifndef _WIN32
+#include <sys/wait.h>
+#endif
+
+static inline int runCommand(const std::string& cmd) {
+#ifdef _WIN32
+    std::string wrapped = "\"" + cmd + "\"";
+    return std::system(wrapped.c_str());
+#else
+    int status = std::system(cmd.c_str());
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    return status;
+#endif
+}
+

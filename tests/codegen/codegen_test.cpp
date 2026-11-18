@@ -31,6 +31,8 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include <dlfcn.h>
 #endif
 
 using namespace tamarin;
@@ -472,8 +474,8 @@ TAMARIN_TEST(CodeGen, Optimization_O0vsO2Equivalence) {
     std::string cmdO0 = "\"" + exeO0.string() + "\"";
     std::string cmdO2 = "\"" + exeO2.string() + "\"";
 
-    int exitO0 = std::system(cmdO0.c_str());
-    int exitO2 = std::system(cmdO2.c_str());
+    int exitO0 = runCommand(cmdO0);
+    int exitO2 = runCommand(cmdO2);
 
     EXPECT_EQ(exitO0, 55);
     EXPECT_EQ(exitO2, 55);
@@ -525,7 +527,7 @@ TAMARIN_TEST(CodeGen, Scope_ScalarShadowingArray) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 4);
 
     std::error_code ec;
@@ -571,7 +573,7 @@ TAMARIN_TEST(CodeGen, Scope_ArrayShadowingScalar) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 42);
 
     std::error_code ec;
@@ -622,7 +624,7 @@ TAMARIN_TEST(CodeGen, Scope_InnerArraySizesAndLengthRestoration) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 2);
 
     std::error_code ec;
@@ -672,7 +674,7 @@ TAMARIN_TEST(CodeGen, Scope_ThreeLevelsOfShadowing) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 1);
 
     std::error_code ec;
@@ -721,7 +723,7 @@ TAMARIN_TEST(CodeGen, Scope_NameReuseInDifferentFunctions) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 30);
 
     std::error_code ec;
@@ -789,7 +791,7 @@ TAMARIN_TEST(CodeGen, TypedArray_Operations) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 5);
 
     std::error_code ec;
@@ -840,7 +842,7 @@ TAMARIN_TEST(CodeGen, ControlFlow_ShortCircuitAnd) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 42);
 
     std::error_code ec;
@@ -891,7 +893,7 @@ TAMARIN_TEST(CodeGen, ControlFlow_ShortCircuitOr) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 42);
 
     std::error_code ec;
@@ -938,7 +940,7 @@ TAMARIN_TEST(CodeGen, ControlFlow_BreakAndContinue) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 8);
 
     std::error_code ec;
@@ -983,7 +985,7 @@ TAMARIN_TEST(CodeGen, Array_ZeroInitialization) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 42);
 
     std::error_code ec;
@@ -1041,7 +1043,7 @@ TAMARIN_TEST(CodeGen, Numeric_FloatsAndUnsigned) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 5);
 
     std::error_code ec;
@@ -1089,7 +1091,7 @@ TAMARIN_TEST(CodeGen, StructFieldAccessAndMutation) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 45);
 
     std::error_code ec;
@@ -1140,7 +1142,7 @@ TAMARIN_TEST(CodeGen, StructPassByValueAndReturn) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 47);
 
     std::error_code ec;
@@ -1192,7 +1194,7 @@ TAMARIN_TEST(CodeGen, NestedStructs) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 25);
 
     std::error_code ec;
@@ -1249,10 +1251,10 @@ TAMARIN_TEST(CodeGen, StructOptimizationEquivalence) {
     EXPECT_TRUE(codegen.compileToExecutable(llO2, exeO2, 2));
 
     std::string cmd0 = "\"" + exeO0.string() + "\"";
-    int ret0 = std::system(cmd0.c_str());
+    int ret0 = runCommand(cmd0);
 
     std::string cmd2 = "\"" + exeO2.string() + "\"";
-    int ret2 = std::system(cmd2.c_str());
+    int ret2 = runCommand(cmd2);
 
     EXPECT_EQ(ret0, 26);
     EXPECT_EQ(ret2, 26);
@@ -1314,7 +1316,7 @@ TAMARIN_TEST(CodeGen, StructMethods) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 25);
 
     std::error_code ec;
@@ -1388,7 +1390,7 @@ TAMARIN_TEST(CodeGen, ClassConstructorsAndMethods) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 80);
 
     std::error_code ec;
@@ -1459,7 +1461,7 @@ TAMARIN_TEST(CodeGen, SingleInheritanceAndMethodOverride) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 47);
 
     std::error_code ec;
@@ -1526,7 +1528,7 @@ TAMARIN_TEST(CodeGen, VirtualMethodDynamicDispatch) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 42);
 
     std::error_code ec;
@@ -1579,7 +1581,7 @@ TAMARIN_TEST(CodeGen, ReferencesParamAndMutation) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 50);
 
     std::error_code ec;
@@ -1638,7 +1640,7 @@ TAMARIN_TEST(CodeGen, StructureOfArraysExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 0));
 
     std::string cmd = "\"" + exePath.string() + "\"";
-    int ret = std::system(cmd.c_str());
+    int ret = runCommand(cmd);
     EXPECT_EQ(ret, 60);
 
     std::error_code ec;
@@ -1749,10 +1751,10 @@ TAMARIN_TEST(CodeGen, OOPOptimizationEquivalence) {
     EXPECT_TRUE(codegen.compileToExecutable(llO2, exeO2, 2));
 
     std::string cmd0 = "\"" + exeO0.string() + "\"";
-    int ret0 = std::system(cmd0.c_str());
+    int ret0 = runCommand(cmd0);
 
     std::string cmd2 = "\"" + exeO2.string() + "\"";
-    int ret2 = std::system(cmd2.c_str());
+    int ret2 = runCommand(cmd2);
 
     EXPECT_EQ(ret0, 35);
     EXPECT_EQ(ret2, 35);
@@ -1841,8 +1843,7 @@ static bool compileAndRunProgram(const std::string& src, int optLevel, int& exit
     }
     cmd += " > \"" + outPath.string() + "\" 2>&1";
 
-    std::string fullCmd = "\"" + cmd + "\"";
-    exitCode = std::system(fullCmd.c_str());
+    exitCode = runCommand(cmd);
 
     std::ifstream out(outPath, std::ios::binary);
     if (out) {
@@ -2959,9 +2960,15 @@ TAMARIN_TEST(CodeGen, RegionMultiLevelHelperBorrowingAndAggregateExecution) {
 
 TAMARIN_TEST(PageProvider, WindowsAllocationAndGranularity) {
     using namespace tamarin::runtime;
+#ifdef _WIN32
     WindowsPageProvider provider;
     EXPECT_EQ(provider.allocationGranularity(), 65536ULL);
     EXPECT_EQ(provider.pageSize(), 4096ULL);
+#else
+    PosixPageProvider provider;
+    EXPECT_EQ(provider.allocationGranularity(), 65536ULL);
+    EXPECT_GE(provider.pageSize(), 4096ULL);
+#endif
 
     void* base = provider.reserve(65536);
     EXPECT_TRUE(base != nullptr);
@@ -3692,9 +3699,27 @@ TAMARIN_TEST(CodeGen, ImplicitBaseConstructorNonTrivialMemberOrder) {
     return true;
 }
 
+static inline void setEnvVar(const std::string& name, const std::string& value) {
+#ifdef _WIN32
+    _putenv((name + "=" + value).c_str());
+#else
+    if (value.empty()) {
+        unsetenv(name.c_str());
+    } else {
+        setenv(name.c_str(), value.c_str(), 1);
+    }
+#endif
+}
+
 TAMARIN_TEST(CodeGen, GeneratedAllocatorUsesProviderReportedValues) {
-    _putenv("TAMARIN_ALLOC_GRANULARITY=131072");
-    _putenv("TAMARIN_PAGE_SIZE=8192");
+    struct EnvGuard {
+        ~EnvGuard() {
+            setEnvVar("TAMARIN_ALLOC_GRANULARITY", "");
+            setEnvVar("TAMARIN_PAGE_SIZE", "");
+        }
+    } guard;
+    setEnvVar("TAMARIN_ALLOC_GRANULARITY", "131072");
+    setEnvVar("TAMARIN_PAGE_SIZE", "8192");
     std::string src =
         "int main() {\n"
         "    region r {\n"
@@ -3707,8 +3732,6 @@ TAMARIN_TEST(CodeGen, GeneratedAllocatorUsesProviderReportedValues) {
     std::string out;
     EXPECT_TRUE(compileAndRunProgram(src, 2, exitCode, out, "", true));
     EXPECT_EQ(exitCode, 0);
-    _putenv("TAMARIN_ALLOC_GRANULARITY=");
-    _putenv("TAMARIN_PAGE_SIZE=");
     EXPECT_TRUE(out.find("Virtual reserved:      131072 bytes") != std::string::npos);
     return true;
 }
@@ -3778,10 +3801,10 @@ TAMARIN_TEST(CodeGen, ReservationCacheDirectMultithreadedIsolation) {
     return true;
 }
 
-#ifdef _WIN32
 TAMARIN_TEST(CodeGen, ReservationCacheMultithreadedStress) {
     std::string src =
-        "int runRegionBatch(int seed) {\n"
+        "@export\n"
+        "public int runRegionBatch(int seed) {\n"
         "    int total = 0;\n"
         "    for (int i = 0; i < 50; i++) {\n"
         "        region r(4096) {\n"
@@ -3815,25 +3838,23 @@ TAMARIN_TEST(CodeGen, ReservationCacheMultithreadedStress) {
     auto tempDir = std::filesystem::temp_directory_path();
     static int mtRunId = 0;
     auto llPath = tempDir / ("tamarin_mt_" + std::to_string(++mtRunId) + ".ll");
-    auto dllPath = tempDir / ("tamarin_mt_" + std::to_string(mtRunId) + ".dll");
+    auto dllPath = tempDir / ("tamarin_mt_" + std::to_string(mtRunId) + codegen.getTargetTriple().sharedLibraryExtension());
     EXPECT_TRUE(codegen.emitLLVMIRToFile(llPath));
+    EXPECT_TRUE(codegen.compileToSharedLibrary(llPath, dllPath, 2));
 
-    std::string clang = codegen.getClangPath();
-    
-    std::string rtLib;
-    for (const auto& libPath : {"build/Release/tamarin_runtime.lib", "build/Debug/tamarin_runtime.lib", "Release/tamarin_runtime.lib", "Debug/tamarin_runtime.lib"}) {
-        if (std::filesystem::exists(libPath)) { rtLib = std::filesystem::absolute(libPath).string(); break; }
-    }
-    std::string cmd = "\"\"" + clang + "\" -O2 -shared -Wl,/export:runRegionBatch --target=x86_64-pc-windows-msvc -Wno-override-module -o \"" +
-                      dllPath.string() + "\" \"" + llPath.string() + "\" \"" + rtLib + "\"\"";
-    int ret = std::system(cmd.c_str());
-    EXPECT_EQ(ret, 0);
-
+#ifdef _WIN32
     HMODULE hMod = LoadLibraryA(dllPath.string().c_str());
+#else
+    void* hMod = dlopen(dllPath.string().c_str(), RTLD_NOW | RTLD_LOCAL);
+#endif
     EXPECT_TRUE(hMod != nullptr);
 
     typedef int (*FnType)(int);
+#ifdef _WIN32
     FnType fn = (FnType)GetProcAddress(hMod, "runRegionBatch");
+#else
+    FnType fn = (FnType)dlsym(hMod, "runRegionBatch");
+#endif
     EXPECT_TRUE(fn != nullptr);
 
     constexpr int NUM_THREADS = 8;
@@ -3855,7 +3876,11 @@ TAMARIN_TEST(CodeGen, ReservationCacheMultithreadedStress) {
     }
 
     for (auto& th : threads) th.join();
+#ifdef _WIN32
     FreeLibrary(hMod);
+#else
+    dlclose(hMod);
+#endif
     std::error_code ec;
     std::filesystem::remove(llPath, ec);
     std::filesystem::remove(dllPath, ec);
@@ -3865,6 +3890,7 @@ TAMARIN_TEST(CodeGen, ReservationCacheMultithreadedStress) {
 
 TAMARIN_TEST(CodeGen, SmallRegionPoolSteadyStateZeroVirtualMemoryOps) {
     std::string src =
+        "@export\n"
         "public int runHighChurn(int iters) {\n"
         "    int sum = 0;\n"
         "    for (int iter = 0; iter < iters; iter++) {\n"
@@ -3899,24 +3925,23 @@ TAMARIN_TEST(CodeGen, SmallRegionPoolSteadyStateZeroVirtualMemoryOps) {
     auto tempDir = std::filesystem::temp_directory_path();
     static int zrRunId = 0;
     auto llPath = tempDir / ("tamarin_zero_sys_" + std::to_string(++zrRunId) + ".ll");
-    auto dllPath = tempDir / ("tamarin_zero_sys_" + std::to_string(zrRunId) + ".dll");
+    auto dllPath = tempDir / ("tamarin_zero_sys_" + std::to_string(zrRunId) + codegen.getTargetTriple().sharedLibraryExtension());
     EXPECT_TRUE(codegen.emitLLVMIRToFile(llPath));
+    EXPECT_TRUE(codegen.compileToSharedLibrary(llPath, dllPath, 2));
 
-    std::string clang = codegen.getClangPath();
-    std::string rtLib;
-    for (const auto& libPath : {"build/Release/tamarin_runtime.lib", "build/Debug/tamarin_runtime.lib", "Release/tamarin_runtime.lib", "Debug/tamarin_runtime.lib"}) {
-        if (std::filesystem::exists(libPath)) { rtLib = std::filesystem::absolute(libPath).string(); break; }
-    }
-    std::string cmd = "\"\"" + clang + "\" -O2 -shared -Wl,/export:runHighChurn --target=x86_64-pc-windows-msvc -Wno-override-module -o \"" +
-                      dllPath.string() + "\" \"" + llPath.string() + "\" \"" + rtLib + "\"\"";
-    int ret = std::system(cmd.c_str());
-    EXPECT_EQ(ret, 0);
-
+#ifdef _WIN32
     HMODULE hMod = LoadLibraryA(dllPath.string().c_str());
+#else
+    void* hMod = dlopen(dllPath.string().c_str(), RTLD_NOW | RTLD_LOCAL);
+#endif
     EXPECT_TRUE(hMod != nullptr);
 
     typedef int (*FnType)(int);
+#ifdef _WIN32
     FnType fn = (FnType)GetProcAddress(hMod, "runHighChurn");
+#else
+    FnType fn = (FnType)dlsym(hMod, "runHighChurn");
+#endif
     EXPECT_TRUE(fn != nullptr);
 
     // Warmup iteration: warms up the thread-local pool
@@ -3935,7 +3960,11 @@ TAMARIN_TEST(CodeGen, SmallRegionPoolSteadyStateZeroVirtualMemoryOps) {
     EXPECT_EQ(__tamarin_runtime_get_decommit_count(), 0ULL);
     EXPECT_EQ(__tamarin_runtime_get_release_count(), 0ULL);
 
+#ifdef _WIN32
     FreeLibrary(hMod);
+#else
+    dlclose(hMod);
+#endif
     std::error_code ec;
     std::filesystem::remove(llPath, ec);
     std::filesystem::remove(dllPath, ec);
@@ -5340,6 +5369,10 @@ TAMARIN_TEST(TargetTriple, ParsingAndAccessors) {
     EXPECT_FALSE(host.str().empty());
 #ifdef _WIN32
     EXPECT_TRUE(host.isWindows());
+#elif defined(__APPLE__)
+    EXPECT_TRUE(host.isMacOS());
+#elif defined(__linux__)
+    EXPECT_TRUE(host.isLinux());
 #endif
     return true;
 }
@@ -5605,6 +5638,114 @@ TAMARIN_TEST(CrossCompilation, TargetAArch64LinuxObject) {
     return true;
 }
 
+TAMARIN_TEST(BinaryFormats, CrossTargetDarwinEmission) {
+    SourceManager sm;
+    auto fileId = sm.addSource("cross_darwin.tmn",
+        "int main() {\n"
+        "    return 42;\n"
+        "}\n");
+    std::ostringstream errs;
+    DiagnosticEngine diag(sm, errs);
+    lexer::Lexer lex(sm, fileId, diag);
+    parser::Parser p(lex, diag);
+    p.setTargetTriple(target::TargetTriple::parse("aarch64-apple-darwin"));
+    auto prog = p.parseProgram();
+    EXPECT_FALSE(diag.hasErrors());
+
+    sema::Sema sema(diag);
+    sema.setTargetTriple(target::TargetTriple::parse("aarch64-apple-darwin"));
+    EXPECT_TRUE(sema.analyze(prog));
+
+    ir::IRBuilder irBuilder(sema.checker());
+    auto mod = irBuilder.buildModule(prog, "cross_darwin");
+    EXPECT_TRUE(mod != nullptr);
+
+    backend::LLVMCodeGen codegen(*mod, diag);
+    codegen.setTargetTriple("aarch64-apple-darwin");
+
+    auto tempDir = std::filesystem::temp_directory_path();
+    static int darwinRunId = 0;
+    auto llPath = tempDir / ("tamarin_cross_darwin_" + std::to_string(++darwinRunId) + ".ll");
+    auto oPath = tempDir / ("tamarin_cross_darwin_" + std::to_string(darwinRunId) + ".o");
+
+    EXPECT_TRUE(codegen.emitLLVMIRToFile(llPath));
+
+    std::ifstream inLL(llPath);
+    std::string llContent((std::istreambuf_iterator<char>(inLL)), std::istreambuf_iterator<char>());
+    EXPECT_TRUE(llContent.find("target triple = \"aarch64-apple-darwin\"") != std::string::npos);
+
+    // Cross-compile to Mach-O object file via clang
+    EXPECT_TRUE(codegen.compileToObject(llPath, oPath, 2));
+    EXPECT_TRUE(std::filesystem::exists(oPath));
+    EXPECT_TRUE(std::filesystem::file_size(oPath) > 0);
+
+    // Read header magic to verify Mach-O 64-bit format (0xCF 0xFA 0xED 0xFE)
+    std::ifstream inObj(oPath, std::ios::binary);
+    unsigned char magic[4] = {0};
+    inObj.read(reinterpret_cast<char*>(magic), 4);
+    EXPECT_TRUE((magic[0] == 0xCF && magic[1] == 0xFA && magic[2] == 0xED && magic[3] == 0xFE) ||
+                (magic[0] == 0xFE && magic[1] == 0xED && magic[2] == 0xFA && magic[3] == 0xCF));
+
+    std::error_code ec;
+    std::filesystem::remove(llPath, ec);
+    std::filesystem::remove(oPath, ec);
+    return true;
+}
+
+TAMARIN_TEST(BinaryFormats, CrossTargetWindowsEmission) {
+    SourceManager sm;
+    auto fileId = sm.addSource("cross_windows.tmn",
+        "int main() {\n"
+        "    return 42;\n"
+        "}\n");
+    std::ostringstream errs;
+    DiagnosticEngine diag(sm, errs);
+    lexer::Lexer lex(sm, fileId, diag);
+    parser::Parser p(lex, diag);
+    p.setTargetTriple(target::TargetTriple::parse("x86_64-pc-windows-msvc"));
+    auto prog = p.parseProgram();
+    EXPECT_FALSE(diag.hasErrors());
+
+    sema::Sema sema(diag);
+    sema.setTargetTriple(target::TargetTriple::parse("x86_64-pc-windows-msvc"));
+    EXPECT_TRUE(sema.analyze(prog));
+
+    ir::IRBuilder irBuilder(sema.checker());
+    auto mod = irBuilder.buildModule(prog, "cross_windows");
+    EXPECT_TRUE(mod != nullptr);
+
+    backend::LLVMCodeGen codegen(*mod, diag);
+    codegen.setTargetTriple("x86_64-pc-windows-msvc");
+
+    auto tempDir = std::filesystem::temp_directory_path();
+    static int winRunId = 0;
+    auto llPath = tempDir / ("tamarin_cross_win_" + std::to_string(++winRunId) + ".ll");
+    auto oPath = tempDir / ("tamarin_cross_win_" + std::to_string(winRunId) + ".obj");
+
+    EXPECT_TRUE(codegen.emitLLVMIRToFile(llPath));
+
+    std::ifstream inLL(llPath);
+    std::string llContent((std::istreambuf_iterator<char>(inLL)), std::istreambuf_iterator<char>());
+    EXPECT_TRUE(llContent.find("target triple = \"x86_64-pc-windows-msvc\"") != std::string::npos);
+
+    // Compile to COFF object file via clang
+    EXPECT_TRUE(codegen.compileToObject(llPath, oPath, 2));
+    EXPECT_TRUE(std::filesystem::exists(oPath));
+    EXPECT_TRUE(std::filesystem::file_size(oPath) > 0);
+
+    // Read header machine to verify COFF x86_64 (IMAGE_FILE_MACHINE_AMD64 = 0x8664)
+    std::ifstream inObj(oPath, std::ios::binary);
+    unsigned char header[2] = {0};
+    inObj.read(reinterpret_cast<char*>(header), 2);
+    EXPECT_EQ(header[0], 0x64);
+    EXPECT_EQ(header[1], 0x86);
+
+    std::error_code ec;
+    std::filesystem::remove(llPath, ec);
+    std::filesystem::remove(oPath, ec);
+    return true;
+}
+
 TAMARIN_TEST(BinaryFormats, StaticAndDynamicExecutableEmission) {
     SourceManager sm;
     auto fileId = sm.addSource("linkage_test.tmn",
@@ -5649,6 +5790,7 @@ TAMARIN_TEST(BinaryFormats, StaticAndDynamicExecutableEmission) {
     auto dynSize = std::filesystem::file_size(exeDyn);
     EXPECT_TRUE(dynSize > 0);
 
+#ifndef __APPLE__
     // Static CRT build
     codegen.setCrtLinkage(backend::CrtLinkage::Static);
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exeStat, 2));
@@ -5656,8 +5798,13 @@ TAMARIN_TEST(BinaryFormats, StaticAndDynamicExecutableEmission) {
     auto statSize = std::filesystem::file_size(exeStat);
     EXPECT_TRUE(statSize > 0);
 
-    // Static CRT bundles runtime machinery so it should be larger than dynamic CRT
+#ifdef _WIN32
+    // Static CRT bundles MSVC runtime machinery (libcmt.lib) so it should be larger than dynamic CRT (msvcrt.lib)
     EXPECT_TRUE(statSize > dynSize);
+#else
+    EXPECT_TRUE(statSize > 0);
+#endif
+#endif
 
     std::error_code ec;
     std::filesystem::remove(llPath, ec);
@@ -5732,7 +5879,7 @@ TAMARIN_TEST(CodeGen, TernaryConditionalOperatorExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     if (exitCode != 0) {
         std::cout << "\n>>> OperatorOverloadingExecution FAILED with exit code: " << exitCode << " <<<\n\n";
     }
@@ -5834,7 +5981,7 @@ TAMARIN_TEST(CodeGen, OperatorOverloadingExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     if (exitCode != 0) {
         std::cout << "\n>>> OperatorOverloadingExecution FAILED with exit code: " << exitCode << " <<<\n\n";
     }
@@ -5912,7 +6059,7 @@ TAMARIN_TEST(CodeGen, TypeInferenceAutoExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     EXPECT_EQ(exitCode, 0);
 
     std::error_code ec;
@@ -5988,7 +6135,7 @@ TAMARIN_TEST(CodeGen, DefaultParameterArgumentsExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     if (exitCode != 0) {
         std::cout << "\n>>> DefaultParameterArgumentsExecution FAILED with exit code: " << exitCode << " <<<\n\n";
     }
@@ -6066,7 +6213,7 @@ TAMARIN_TEST(CodeGen, TupleAndDestructuringExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     if (exitCode != 0) {
         std::cout << "\n>>> TupleAndDestructuringExecution FAILED with exit code: " << exitCode << " <<<\n\n";
     }
@@ -6155,7 +6302,7 @@ TAMARIN_TEST(CodeGen, LambdaExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     if (exitCode != 0) {
         std::cout << "\n>>> LambdaExecution FAILED with exit code: " << exitCode << " <<<\n\n";
     }
@@ -6246,7 +6393,7 @@ TAMARIN_TEST(CodeGen, RangeSlicingExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     if (exitCode != 0) {
         std::cout << "\n>>> RangeSlicingExecution FAILED with exit code: " << exitCode << " <<<\n\n";
     }
@@ -6308,7 +6455,7 @@ TAMARIN_TEST(CodeGen, AsyncFunctionExecution) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     EXPECT_EQ(exitCode, 0);
 
     std::error_code ec;
@@ -6360,7 +6507,7 @@ TAMARIN_TEST(CodeGen, AsyncRecursiveWorkStealing) {
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exePath, 2));
     EXPECT_TRUE(std::filesystem::exists(exePath));
 
-    int exitCode = std::system(exePath.string().c_str());
+    int exitCode = runCommand(exePath.string());
     EXPECT_EQ(exitCode, 0);
 
     std::error_code ec;
@@ -6368,7 +6515,31 @@ TAMARIN_TEST(CodeGen, AsyncRecursiveWorkStealing) {
     std::filesystem::remove(exePath, ec);
     return true;
 }
-#endif
+
+TAMARIN_TEST(CodeGen, ModuleLevelGlobalFixedArrayAndScalar) {
+    std::string src =
+        "int gArr[8];\n"
+        "int gScalar;\n"
+        "int main() {\n"
+        "    gScalar = 42;\n"
+        "    for (int i = 0; i < 8; i++) {\n"
+        "        gArr[i] = i * 10;\n"
+        "    }\n"
+        "    int sum = gScalar;\n"
+        "    for (int i = 0; i < 8; i++) {\n"
+        "        sum = sum + gArr[i];\n"
+        "    }\n"
+        "    print(sum);\n"
+        "    return 0;\n"
+        "}\n";
+    int exitCode = -1;
+    std::string out;
+    EXPECT_TRUE(compileAndRunProgram(src, 2, exitCode, out));
+    EXPECT_EQ(exitCode, 0);
+    // 42 + 0 + 10 + 20 + 30 + 40 + 50 + 60 + 70 = 42 + 280 = 322
+    EXPECT_TRUE(out.find("322") != std::string::npos);
+    return true;
+}
 
 
 

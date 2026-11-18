@@ -1,0 +1,88 @@
+name: Tamarin CI
+
+on:
+  push:
+    branches: [ main, master, "feat/**" ]
+  pull_request:
+    branches: [ main, master, "feat/**" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux (x86_64 Ubuntu 24.04)
+            os: ubuntu-24.04
+            cmake_gen: "-G Ninja"
+          - name: macOS (Apple Silicon macOS 15)
+            os: macos-15
+            cmake_gen: "-G Ninja"
+          - name: Windows (x86_64 Windows 2025)
+            os: windows-2025
+            cmake_gen: "-A x64"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+            ninja-build clang llvm-dev libclang-dev
+          LLVM_DIR=$(llvm-config --cmakedir 2>/dev/null || llvm-config-18 --cmakedir 2>/dev/null || llvm-config-19 --cmakedir 2>/dev/null)
+          echo "LLVM_DIR=$LLVM_DIR" >> "$GITHUB_ENV"
+          echo "CC=clang" >> "$GITHUB_ENV"
+          echo "CXX=clang++" >> "$GITHUB_ENV"
+          echo "TAMARIN_CLANG=$(which clang)" >> "$GITHUB_ENV"
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm ninja
+          LLVM_PREFIX="$(brew --prefix llvm)"
+          echo "LLVM_DIR=$LLVM_PREFIX/lib/cmake/llvm" >> "$GITHUB_ENV"
+          echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
+          echo "CC=$LLVM_PREFIX/bin/clang" >> "$GITHUB_ENV"
+          echo "CXX=$LLVM_PREFIX/bin/clang++" >> "$GITHUB_ENV"
+          echo "TAMARIN_CLANG=$LLVM_PREFIX/bin/clang" >> "$GITHUB_ENV"
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          if (-not (Test-Path "C:/Program Files/LLVM/lib/cmake/llvm")) {
+            choco install llvm --version=19.1.5 --allow-downgrade --no-progress -y
+          }
+          echo "LLVM_DIR=C:/Program Files/LLVM/lib/cmake/llvm" >> $env:GITHUB_ENV
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+          echo "TAMARIN_CLANG=C:\Program Files\LLVM\bin\clang.exe" >> $env:GITHUB_ENV
+
+      - name: Initialize MSVC Developer Command Prompt
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure CMake
+        run: |
+          cmake -B build ${{ matrix.cmake_gen }} -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="${{ env.LLVM_DIR }}"
+
+      - name: Build Tamarin & Troop
+        run: |
+          cmake --build build --config Release
+
+      - name: Run Cross-Platform Verification Suite
+        run: |
+          python3 tests/run_all.py || python tests/run_all.py

@@ -934,6 +934,7 @@ void TypeChecker::checkCallSiteBorrowSafety(const std::string& calleeName,
                                             const std::vector<ast::ExprPtr>& args,
                                             const std::vector<const Type*>& paramTypes,
                                             SourceLocation loc) {
+    (void)loc;
     std::vector<ActiveBorrow> tempBorrows;
     for (size_t i = 0; i < args.size(); ++i) {
         if (args[i]->kind == ExprKind::Lambda) {

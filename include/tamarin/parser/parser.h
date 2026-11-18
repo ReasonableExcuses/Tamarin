@@ -6,19 +6,34 @@
 #include "tamarin/ast/ast.h"
 #include "tamarin/lexer/lexer.h"
 #include "tamarin/diagnostics/diagnostic_engine.h"
+#include "tamarin/target/target_triple.h"
 
 #include <unordered_set>
 
 namespace tamarin::parser {
 
+struct LoopAttributes {
+    int unrollCount = 0;
+    int vectorizeWidth = 0;
+    int interleaveCount = 0;
+    int vectorizeEnable = 0;
+
+    LoopAttributes() = default;
+    LoopAttributes(int unroll) : unrollCount(unroll) {}
+};
+
 class Parser {
 public:
+    using LoopAttributes = tamarin::parser::LoopAttributes;
     Parser(lexer::Lexer& lex, DiagnosticEngine& diag);
 
     /// Parse a complete translation unit.
     [[nodiscard]] ast::Program parseProgram();
 
     void addKnownType(const std::string& name) { knownTypes_.insert(name); }
+
+    void setTargetTriple(target::TargetTriple triple) { targetTriple_ = std::move(triple); }
+    const target::TargetTriple& getTargetTriple() const { return targetTriple_; }
 
 private:
     // ── Token access ──────────────────────────────────────────────────
@@ -35,7 +50,8 @@ private:
 
     // ── Declarations ──────────────────────────────────────────────────
     ast::ImportDecl parseImport();
-    ast::DeclPtr parseTopDecl(bool defaultExtern = false, const std::string& defaultLinkage = "");
+    ast::DeclPtr parseTopDecl(bool defaultExtern = false, const std::string& defaultLinkage = "",
+                              std::shared_ptr<ast::CfgExpr> initialCfg = nullptr);
     ast::DeclPtr parseEnumDecl(bool isPublic = false);
     ast::DeclPtr parseTraitDecl(bool isPublic = false);
     ast::DeclPtr parseImplDecl();
@@ -61,15 +77,6 @@ private:
     // ── Statements ────────────────────────────────────────────────────
     ast::StmtPtr parseStmt();
     std::unique_ptr<ast::BlockStmt> parseBlock();
-    struct LoopAttributes {
-        int unrollCount = 0;
-        int vectorizeWidth = 0;
-        int interleaveCount = 0;
-        int vectorizeEnable = 0;
-
-        LoopAttributes() = default;
-        LoopAttributes(int unroll) : unrollCount(unroll) {}
-    };
 
     ast::StmtPtr parseStatementOrBlock();
     ast::StmtPtr parseVarDeclOrExprStmt(bool isConst);
@@ -111,12 +118,17 @@ private:
     ast::MatchCase parseMatchCase();
     ast::ExprPtr parseBracedInitializer(ast::TypePtr explicitType = nullptr);
 
+    // ── Conditional Compilation ────────────────────────────────────────
+    std::shared_ptr<ast::CfgExpr> parseCfgExpr();
+    std::shared_ptr<ast::CfgExpr> parseCfgItem();
+
     // ── State ─────────────────────────────────────────────────────────
     lexer::Lexer& lex_;
     DiagnosticEngine& diag_;
     lexer::Token current_;
     bool hadError_ = false;
     std::unordered_set<std::string> knownTypes_;
+    target::TargetTriple targetTriple_ = target::TargetTriple::getHost();
 };
 
 } // namespace tamarin::parser

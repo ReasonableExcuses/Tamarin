@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.16.0] - 2026-11-18
+
+### Added & Hardened — Milestone v0.16.0: Cross-Platform Native Portability (Linux, macOS Darwin, Windows), Conditional Compilation (`@cfg`), and Multi-OS CI
+- **Cross-Platform Virtual Memory & Concurrency Runtime (`include/tamarin/runtime/`, `src/runtime/`)**:
+  - Abstracted `PageProvider` with `#ifdef _WIN32` (`VirtualAlloc`/`VirtualFree`) and POSIX `#else` (`mmap`/`munmap` using `MAP_PRIVATE | MAP_ANONYMOUS`).
+  - Preserved the 64 KB reservation and 4 KB commitment virtual memory model across all platforms.
+  - Implemented Apple Silicon 16 KB hardware page alignment: `allocGranularity_ = 65536` (64 KB) with `std::max<size_t>(4096, static_cast<size_t>(sysconf(_SC_PAGESIZE)))` for commit/decommit alignment, preventing `mprotect` `EINVAL` crashes on Apple Silicon.
+  - Implemented thread-safe `mmap` reservation tracking via `std::unordered_map<void*, size_t>` guarded by `std::mutex`, ensuring accurate `munmap(base, size)` on POSIX.
+  - Portable resident working set reporting via `mach_task_basic_info` (`TASK_BASIC_INFO_64`) on macOS Darwin, `getrusage(RUSAGE_SELF)` on Linux, and `K32GetProcessMemoryInfo` on Windows.
+  - Replaced Win32 timers and synchronization primitives with portable C++20 (`std::chrono::steady_clock`, `std::thread`, `std::mutex`, `std::atomic`).
+- **Multi-Target LLVM Lowering & Linker Driver (`src/backend/`, `src/driver/`, `troop/src/`)**:
+  - Initialized all LLVM targets (`InitializeAllTargetInfos`, `InitializeAllTargets`, `InitializeAllTargetMCs`, `InitializeAllAsmPrinters`), enabling cross-compilation across `x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu`, and `aarch64-apple-darwin`.
+  - Added `--target <triple>` CLI argument with `TargetTriple::parse` and `llvm::TargetRegistry::lookupTarget`, dynamically configuring module `DataLayout` and target triple.
+  - Target-dependent file extension and linker abstractions in `TargetTriple`: executable extensions (`.exe` on Windows vs `""` on POSIX), static libraries (`.lib` vs `lib*.a`), shared libraries (`.dll`, `.so`, `.dylib`), and static library archiving (`lib.exe` / `llvm-ar` vs `ar rcs`).
+  - Implemented portable C++ standard library linking in `compileToExecutable` and `compileToSharedLibrary`: `-lstdc++ -pthread -ldl -lm` on Linux and `-lc++ -pthread -lm` on macOS.
+  - Portable self-executable location resolution (`getSelfExeDir`) using `GetModuleFileNameW` on Windows, `/proc/self/exe` on Linux, and `_NSGetExecutablePath` on macOS Darwin across `tamarin`, `troop`, and `llvm_codegen`.
+  - Fixed POSIX subprocess invocation: removed outer double-quote wrapping (`""cmd" ... ""` required only by Windows `cmd.exe`), preventing `command not found: ""` on Linux and macOS.
+- **Conditional Compilation Directives (`@cfg(...)`) (`include/tamarin/ast/`, `src/parser/`, `src/sema/`)**:
+  - Added AST representation `CfgExpr` with recursive boolean evaluation (`all(...)`, `any(...)`, `not(...)`) against target platform predicates (`target_os = "windows" | "linux" | "macos" | "darwin"`, `target_arch = "x86_64" | "aarch64"`).
+  - Parser integration: `@cfg(...)` supported on top-level imports and declarations (`FunctionDecl`, `StructDecl`, `VarDecl`).
+  - Implemented inactive declaration pruning in Parser (`parseProgram`) and Sema (`pruneInactiveDeclarations`), cleanly eliminating inactive platform code before semantic analysis, type-checking, and code generation.
+- **Cross-Platform Verification Orchestrator & GitHub Actions CI (`tests/run_all.py`, `.github/workflows/ci.yml`)**:
+  - Implemented `tests/run_all.py` using pure Python 3 standard library (`subprocess`, `pathlib`, `tempfile`, `platform`), unifying C++ unit tests, custom PowerShell gauntlets, and new `@cfg` / cross-target tests.
+  - Portable bounds trap exit-code detection: checks `proc.returncode != 0` portably across Windows Win32 exception codes and POSIX signals (SIGILL/SIGTRAP).
+  - Created `.github/workflows/ci.yml` multi-OS matrix covering `ubuntu-24.04`, `macos-15`, and `windows-2025` with explicit `-DLLVM_DIR` discovery across all three runners.
+- **Test Suite Scorecard**:
+  - Unit tests: **356 / 356 PASSED (100%)** in `tamarin_tests` (added `@cfg` parser, sema pruning, and cross-target Darwin/Windows binary emission tests).
+  - Custom gauntlets: **80 / 80 PASSED (100%)** across Mega Suite (7), Rust Soundness (16), Dark Corners (14), Boss Corners (6), Move Semantics (7), Closures (5), Async Coroutines (10), Troop E2E (10), and @cfg & Cross-Target (5).
+  - Grand total: **436 / 436 PASSED (100%)**.
+
+---
+
 ## [0.15.0] - 2026-11-18
 
 ### Added — Milestone v0.15.0: The Troop Package Manager (`troop` / `tamarin troop`)

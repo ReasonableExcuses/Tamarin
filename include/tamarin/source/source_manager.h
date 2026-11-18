@@ -6,12 +6,32 @@
 #include "tamarin/source/source_location.h"
 
 #include <cstdint>
-#include <expected>
 #include <string>
 #include <string_view>
 #include <vector>
+#include <utility>
 
 namespace tamarin {
+
+template<typename T, typename E>
+class Expected {
+    bool hasVal_{false};
+    T val_{};
+    E err_{};
+
+public:
+    Expected(const T& v) : hasVal_(true), val_(v) {}
+    Expected(T&& v) : hasVal_(true), val_(std::move(v)) {}
+
+    struct Unexpected { E err; };
+    Expected(Unexpected u) : hasVal_(false), err_(std::move(u.err)) {}
+
+    explicit operator bool() const noexcept { return hasVal_; }
+    bool has_value() const noexcept { return hasVal_; }
+    const T& value() const { return val_; }
+    const T& operator*() const { return val_; }
+    const E& error() const noexcept { return err_; }
+};
 
 // ── SourceFileId ────────────────────────────────────────────────────────────
 /// Strongly-typed handle into the SourceManager's file registry.
@@ -47,7 +67,7 @@ public:
     SourceManager& operator=(SourceManager&&) noexcept = default;
 
     /// Load a source file from disk.  Returns its ID, or an error string.
-    [[nodiscard]] std::expected<SourceFileId, std::string>
+    [[nodiscard]] Expected<SourceFileId, std::string>
     loadFile(const std::string& path);
 
     /// Register source text directly (e.g. for REPL or tests).
