@@ -47,3 +47,9 @@ struct TestRegistrar {
         } \
     } while (0)
 
+#define EXPECT_NE(a, b) EXPECT_TRUE((a) != (b))
+#define EXPECT_GE(a, b) EXPECT_TRUE((a) >= (b))
+#define EXPECT_LE(a, b) EXPECT_TRUE((a) <= (b))
+#define EXPECT_GT(a, b) EXPECT_TRUE((a) > (b))
+#define EXPECT_LT(a, b) EXPECT_TRUE((a) < (b))
+

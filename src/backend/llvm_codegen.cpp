@@ -3402,9 +3402,9 @@ bool LLVMCodeGen::compileToExecutable(const std::filesystem::path& llPath,
     std::string crtFlag;
     if (targetTriple_.isWindows()) {
         if (crtLinkage_ == CrtLinkage::Static) {
-            crtFlag = " -fms-runtime-lib=static -Xlinker /DEFAULTLIB:libcmt.lib -Xlinker /NODEFAULTLIB:msvcrt.lib -Xlinker /NODEFAULTLIB:msvcprt.lib";
+            crtFlag = " -fuse-ld=lld -fms-runtime-lib=static -Xlinker /DEFAULTLIB:libcmt.lib -Xlinker /NODEFAULTLIB:msvcrt.lib -Xlinker /NODEFAULTLIB:msvcprt.lib";
         } else {
-            crtFlag = " -fms-runtime-lib=dll -Xlinker /DEFAULTLIB:msvcrt.lib -Xlinker /NODEFAULTLIB:libcmt.lib";
+            crtFlag = " -fuse-ld=lld -fms-runtime-lib=dll -Xlinker /DEFAULTLIB:msvcrt.lib -Xlinker /NODEFAULTLIB:libcmt.lib";
         }
     } else if (targetTriple_.isMacOS()) {
         crtFlag = "";
@@ -3459,7 +3459,7 @@ bool LLVMCodeGen::compileToSharedLibrary(const std::filesystem::path& llPath,
     std::string extraOpt = ((optLevel >= 3) ? " -mllvm -inline-threshold=2500 -mllvm -unroll-threshold=800 -mllvm -vectorize-loops=true -mllvm -vectorize-slp=true" : ((optLevel >= 2) ? " -mllvm -inline-threshold=1000 -mllvm -vectorize-loops=true" : "")) + fastMath;
     std::string crtFlag;
     if (targetTriple_.isWindows()) {
-        crtFlag = " -fms-runtime-lib=dll -Xlinker /DEFAULTLIB:msvcrt.lib -Xlinker /DEFAULTLIB:msvcprt.lib -Xlinker /DEFAULTLIB:kernel32.lib";
+        crtFlag = " -fuse-ld=lld -fms-runtime-lib=dll -Xlinker /DEFAULTLIB:msvcrt.lib -Xlinker /NODEFAULTLIB:libcmt.lib -Xlinker /DEFAULTLIB:kernel32.lib";
     }
     std::string rtLib = findRuntimeLibrary();
     std::string rtFlag;

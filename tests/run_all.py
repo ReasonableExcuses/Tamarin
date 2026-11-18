@@ -148,7 +148,7 @@ class TestHarness:
                 self.suite_results["Unit Tests"]["pass"] += num_passed
             else:
                 lines = output.splitlines()
-                failed_lines = [l for l in lines if "[  FAILED  ]" in l or "FAILED:" in l or "error:" in l]
+                failed_lines = [l for l in lines if "[  FAILED  ]" in l or "FAILED:" in l or "error:" in l or "error " in l or "LNK" in l]
                 fail_summary = "\n       ".join(failed_lines) if failed_lines else "\n       ".join(lines[-25:])
                 self.record("Unit Tests", "tamarin_tests execution", False, f"Return code {p.returncode}\n       {fail_summary}")
         except Exception as e:
@@ -207,6 +207,7 @@ class TestHarness:
                 c_verify_exe = tmp / f"verify_mega_c_abi{EXE_EXT}"
                 clang_args = [self.clang_bin, str(c_abi_src), "-I", str(tmp), "-O2", "-o", str(c_verify_exe)]
                 if IS_WINDOWS:
+                    clang_args.append("-fuse-ld=lld")
                     lib_file = tmp / "tamarin_mega.lib"
                     if lib_file.exists():
                         clang_args.append(str(lib_file))
@@ -226,7 +227,8 @@ class TestHarness:
             elif not self.clang_bin:
                 self.skip("Mega Suite", "Clang C ABI Header & Struct Interop", "clang not found")
             else:
-                self.record("Mega Suite", "Clang C ABI Header & Struct Interop", False, f"Header generation failed: {c3.stderr.strip()}")
+                err_detail = (c3.stderr.strip() + " " + c3.stdout.strip()).strip()
+                self.record("Mega Suite", "Clang C ABI Header & Struct Interop", False, f"Header generation failed: {err_detail}")
 
             # Tests 4-6: Adversarial Soundness Compile-Fail checks
             for fail_src_name in ["fail_1_data_race.tam", "fail_2_dangling_ref.tam", "fail_3_uninit_read.tam"]:
