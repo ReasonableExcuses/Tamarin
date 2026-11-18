@@ -94,9 +94,8 @@ struct ArrayTypeNode : TypeNode {
   TypePtr elementType;
   ExprPtr sizeExpr; // nullptr = unsized (view in param, inferred in local)
   bool isConst = false;
-  ArrayTypeNode(TypePtr elem, ExprPtr size, SourceLocation l, bool isC = false)
-      : TypeNode(TypeNodeKind::Array, l), elementType(std::move(elem)),
-        sizeExpr(std::move(size)), isConst(isC) {}
+  ArrayTypeNode(TypePtr elem, ExprPtr size, SourceLocation l, bool isC = false);
+  ~ArrayTypeNode() override;
 };
 
 struct NamedTypeNode : TypeNode {
@@ -133,9 +132,8 @@ struct TaskTypeNode : TypeNode {
 struct SlabTypeNode : TypeNode {
   TypePtr elementType;
   ExprPtr capacityExpr; // nullptr for default / dynamic
-  SlabTypeNode(TypePtr elem, ExprPtr cap, SourceLocation l)
-      : TypeNode(TypeNodeKind::Slab, l), elementType(std::move(elem)),
-        capacityExpr(std::move(cap)) {}
+  SlabTypeNode(TypePtr elem, ExprPtr cap, SourceLocation l);
+  ~SlabTypeNode() override;
 };
 
 struct AutoTypeNode : TypeNode {
@@ -245,6 +243,16 @@ struct Expr {
 protected:
   Expr(ExprKind k, SourceLocation l) : kind(k), loc(l) {}
 };
+
+inline ArrayTypeNode::ArrayTypeNode(TypePtr elem, ExprPtr size, SourceLocation l, bool isC)
+    : TypeNode(TypeNodeKind::Array, l), elementType(std::move(elem)),
+      sizeExpr(std::move(size)), isConst(isC) {}
+inline ArrayTypeNode::~ArrayTypeNode() = default;
+
+inline SlabTypeNode::SlabTypeNode(TypePtr elem, ExprPtr cap, SourceLocation l)
+    : TypeNode(TypeNodeKind::Slab, l), elementType(std::move(elem)),
+      capacityExpr(std::move(cap)) {}
+inline SlabTypeNode::~SlabTypeNode() = default;
 
 struct IntLiteralExpr : Expr {
   int64_t value;

@@ -3454,6 +3454,10 @@ bool LLVMCodeGen::compileToSharedLibrary(const std::filesystem::path& llPath,
     std::string archFlag = resolveArchFlag(targetCPU_);
     std::string fastMath = fastMath_ ? " -ffast-math" : "";
     std::string extraOpt = ((optLevel >= 3) ? " -mllvm -inline-threshold=2500 -mllvm -unroll-threshold=800 -mllvm -vectorize-loops=true -mllvm -vectorize-slp=true" : ((optLevel >= 2) ? " -mllvm -inline-threshold=1000 -mllvm -vectorize-loops=true" : "")) + fastMath;
+    std::string crtFlag;
+    if (targetTriple_.isWindows()) {
+        crtFlag = " -fms-runtime-lib=dll -Xlinker /DEFAULTLIB:msvcrt.lib -Xlinker /DEFAULTLIB:msvcprt.lib -Xlinker /DEFAULTLIB:kernel32.lib";
+    }
     std::string rtLib = findRuntimeLibrary();
     std::string rtFlag;
     if (targetTriple_.isWindows()) {
@@ -3463,7 +3467,7 @@ bool LLVMCodeGen::compileToSharedLibrary(const std::filesystem::path& llPath,
         rtFlag = (!rtLib.empty() ? (" \"" + rtLib + "\" ") : "") + cxxLibs;
     }
     std::string fpic = targetTriple_.isWindows() ? "" : " -fPIC";
-    std::string cmd = "\"" + clangPath_ + "\" " + optFlag + archFlag + extraOpt + fpic +
+    std::string cmd = "\"" + clangPath_ + "\" " + optFlag + archFlag + extraOpt + crtFlag + fpic +
                       " -shared --target=" + targetTriple_.str() + " -Wno-override-module -o \"" +
                       dylibPath.string() + "\" \"" + llPath.string() + "\"" + rtFlag;
 

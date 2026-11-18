@@ -3821,10 +3821,15 @@ TAMARIN_TEST(CodeGen, ReservationCacheMultithreadedStress) {
     std::string clang = codegen.getClangPath();
     
     std::string rtLib;
-    for (const auto& libPath : {"build/Release/tamarin_runtime.lib", "build/Debug/tamarin_runtime.lib", "Release/tamarin_runtime.lib", "Debug/tamarin_runtime.lib"}) {
-        if (std::filesystem::exists(libPath)) { rtLib = std::filesystem::absolute(libPath).string(); break; }
+    if (const char* env = std::getenv("TAMARIN_RUNTIME_LIB")) {
+        if (std::filesystem::exists(env)) rtLib = env;
     }
-    std::string cmd = "\"\"" + clang + "\" -O2 -shared -Wl,/export:runRegionBatch --target=x86_64-pc-windows-msvc -Wno-override-module -o \"" +
+    if (rtLib.empty()) {
+        for (const auto& libPath : {"build/Release/tamarin_runtime.lib", "build/Debug/tamarin_runtime.lib", "Release/tamarin_runtime.lib", "Debug/tamarin_runtime.lib", "tamarin_runtime.lib"}) {
+            if (std::filesystem::exists(libPath)) { rtLib = std::filesystem::absolute(libPath).string(); break; }
+        }
+    }
+    std::string cmd = "\"\"" + clang + "\" -O2 -shared -fms-runtime-lib=dll -Wl,/export:runRegionBatch --target=x86_64-pc-windows-msvc -Wno-override-module -o \"" +
                       dllPath.string() + "\" \"" + llPath.string() + "\" \"" + rtLib + "\"\"";
     int ret = std::system(cmd.c_str());
     EXPECT_EQ(ret, 0);
@@ -3904,10 +3909,15 @@ TAMARIN_TEST(CodeGen, SmallRegionPoolSteadyStateZeroVirtualMemoryOps) {
 
     std::string clang = codegen.getClangPath();
     std::string rtLib;
-    for (const auto& libPath : {"build/Release/tamarin_runtime.lib", "build/Debug/tamarin_runtime.lib", "Release/tamarin_runtime.lib", "Debug/tamarin_runtime.lib"}) {
-        if (std::filesystem::exists(libPath)) { rtLib = std::filesystem::absolute(libPath).string(); break; }
+    if (const char* env = std::getenv("TAMARIN_RUNTIME_LIB")) {
+        if (std::filesystem::exists(env)) rtLib = env;
     }
-    std::string cmd = "\"\"" + clang + "\" -O2 -shared -Wl,/export:runHighChurn --target=x86_64-pc-windows-msvc -Wno-override-module -o \"" +
+    if (rtLib.empty()) {
+        for (const auto& libPath : {"build/Release/tamarin_runtime.lib", "build/Debug/tamarin_runtime.lib", "Release/tamarin_runtime.lib", "Debug/tamarin_runtime.lib", "tamarin_runtime.lib"}) {
+            if (std::filesystem::exists(libPath)) { rtLib = std::filesystem::absolute(libPath).string(); break; }
+        }
+    }
+    std::string cmd = "\"\"" + clang + "\" -O2 -shared -fms-runtime-lib=dll -Wl,/export:runHighChurn --target=x86_64-pc-windows-msvc -Wno-override-module -o \"" +
                       dllPath.string() + "\" \"" + llPath.string() + "\" \"" + rtLib + "\"\"";
     int ret = std::system(cmd.c_str());
     EXPECT_EQ(ret, 0);

@@ -66,6 +66,17 @@ class TestHarness:
         self.clang_bin = clang_bin
         if self.tamarin_bin and self.tamarin_bin.exists():
             os.environ["TAMARIN_EXE"] = str(self.tamarin_bin)
+            bin_dir = self.tamarin_bin.parent
+            for rt_name in ["tamarin_runtime.lib", "libtamarin_runtime.a", "tamarin_runtime.a"]:
+                rt_p = bin_dir / rt_name
+                if rt_p.exists():
+                    os.environ["TAMARIN_RUNTIME_LIB"] = str(rt_p.resolve())
+                    break
+            for rt_static_name in ["tamarin_runtime_static.lib", "libtamarin_runtime_static.a", "tamarin_runtime_static.a"]:
+                rt_sp = bin_dir / rt_static_name
+                if rt_sp.exists():
+                    os.environ["TAMARIN_RUNTIME_STATIC_LIB"] = str(rt_sp.resolve())
+                    break
         self.passed = 0
         self.failed = 0
         self.skipped = 0

@@ -30,17 +30,17 @@ void SourceFile::buildLineOffsets() const {
 
 // ── SourceManager ───────────────────────────────────────────────────────────
 
-std::expected<SourceFileId, std::string>
+Expected<SourceFileId, std::string>
 SourceManager::loadFile(const std::string& path) {
     std::ifstream file(path, std::ios::in | std::ios::binary);
     if (!file) {
-        return std::unexpected("could not open file: " + path);
+        return Expected<SourceFileId, std::string>::Unexpected{"could not open file: " + path};
     }
 
     std::ostringstream ss;
     ss << file.rdbuf();
     if (file.bad()) {
-        return std::unexpected("error reading file: " + path);
+        return Expected<SourceFileId, std::string>::Unexpected{"error reading file: " + path};
     }
 
     std::string content = ss.str();
