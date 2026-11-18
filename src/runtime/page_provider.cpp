@@ -112,36 +112,72 @@ PosixPageProvider::PosixPageProvider() {
     const char* envPs = std::getenv("TAMARIN_PAGE_SIZE");
     if (envPs && *envPs) {
         size_t val = static_cast<size_t>(std::strtoull(envPs, nullptr, 10));
-        if (val > 0) pageSize_ = val;
+        if (val > 0) pageSize_ = std::max(val, osPage);
     }
     const char* envAg = std::getenv("TAMARIN_ALLOC_GRANULARITY");
     if (envAg && *envAg) {
         size_t val = static_cast<size_t>(std::strtoull(envAg, nullptr, 10));
-        if (val > 0) allocGranularity_ = val;
+        if (val > 0) allocGranularity_ = std::max(val, pageSize_);
     }
 }
 
 PosixPageProvider::PosixPageProvider(size_t customPageSize, size_t customAllocGran)
-    : pageSize_(customPageSize), allocGranularity_(customAllocGran) {}
+    : pageSize_(customPageSize), allocGranularity_(customAllocGran) {
+    long sz = sysconf(_SC_PAGESIZE);
+    size_t osPage = sz > 0 ? static_cast<size_t>(sz) : 4096;
+    if (pageSize_ < osPage) pageSize_ = osPage;
+    if (allocGranularity_ < pageSize_) allocGranularity_ = pageSize_;
+}
 
 void* PosixPageProvider::reserve(size_t size) {
     if (size == 0) return nullptr;
-    size_t alignedSize = (size + allocGranularity_ - 1) & ~(allocGranularity_ - 1);
+    long sz = sysconf(_SC_PAGESIZE);
+    size_t osPage = sz > 0 ? static_cast<size_t>(sz) : 4096;
+    size_t gran = (allocGranularity_ > 0) ? allocGranularity_ : 65536;
+    if (gran < osPage) gran = osPage;
+
+    size_t alignedSize = (size + gran - 1) & ~(gran - 1);
     s_stats.reserve_count.fetch_add(1, std::memory_order_relaxed);
-    void* ptr = mmap(nullptr, alignedSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (ptr == MAP_FAILED) return nullptr;
+
+    void* finalPtr = nullptr;
+    if (gran <= osPage) {
+        finalPtr = mmap(nullptr, alignedSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (finalPtr == MAP_FAILED) return nullptr;
+    } else {
+        size_t totalReserve = alignedSize + gran;
+        void* raw = mmap(nullptr, totalReserve, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (raw == MAP_FAILED) return nullptr;
+
+        uintptr_t rawAddr = reinterpret_cast<uintptr_t>(raw);
+        uintptr_t alignedAddr = (rawAddr + gran - 1) & ~(gran - 1);
+
+        size_t prefix = alignedAddr - rawAddr;
+        if (prefix > 0) {
+            munmap(raw, prefix);
+        }
+
+        size_t suffix = totalReserve - prefix - alignedSize;
+        if (suffix > 0) {
+            munmap(reinterpret_cast<void*>(alignedAddr + alignedSize), suffix);
+        }
+
+        finalPtr = reinterpret_cast<void*>(alignedAddr);
+    }
+
     {
         std::lock_guard<std::mutex> lock(s_posixReservationMtx);
-        s_posixReservations[ptr] = alignedSize;
+        s_posixReservations[finalPtr] = alignedSize;
     }
-    return ptr;
+    return finalPtr;
 }
 
 bool PosixPageProvider::commit(void* base, size_t offset, size_t size) {
     if (!base || size == 0) return false;
+    long sz = sysconf(_SC_PAGESIZE);
+    size_t osPage = sz > 0 ? static_cast<size_t>(sz) : 4096;
     uintptr_t addr = reinterpret_cast<uintptr_t>(base) + offset;
-    uintptr_t alignedStart = addr & ~(pageSize_ - 1);
-    uintptr_t alignedEnd = (addr + size + pageSize_ - 1) & ~(pageSize_ - 1);
+    uintptr_t alignedStart = addr & ~(osPage - 1);
+    uintptr_t alignedEnd = (addr + size + osPage - 1) & ~(osPage - 1);
     size_t alignedLen = alignedEnd - alignedStart;
     s_stats.commit_count.fetch_add(1, std::memory_order_relaxed);
     return mprotect(reinterpret_cast<void*>(alignedStart), alignedLen, PROT_READ | PROT_WRITE) == 0;
@@ -149,9 +185,11 @@ bool PosixPageProvider::commit(void* base, size_t offset, size_t size) {
 
 bool PosixPageProvider::decommit(void* base, size_t offset, size_t size) {
     if (!base || size == 0) return false;
+    long sz = sysconf(_SC_PAGESIZE);
+    size_t osPage = sz > 0 ? static_cast<size_t>(sz) : 4096;
     uintptr_t addr = reinterpret_cast<uintptr_t>(base) + offset;
-    uintptr_t alignedStart = addr & ~(pageSize_ - 1);
-    uintptr_t alignedEnd = (addr + size + pageSize_ - 1) & ~(pageSize_ - 1);
+    uintptr_t alignedStart = addr & ~(osPage - 1);
+    uintptr_t alignedEnd = (addr + size + osPage - 1) & ~(osPage - 1);
     size_t alignedLen = alignedEnd - alignedStart;
     s_stats.decommit_count.fetch_add(1, std::memory_order_relaxed);
 #ifdef MADV_DONTNEED

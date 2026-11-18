@@ -3712,6 +3712,12 @@ static inline void setEnvVar(const std::string& name, const std::string& value) 
 }
 
 TAMARIN_TEST(CodeGen, GeneratedAllocatorUsesProviderReportedValues) {
+    struct EnvGuard {
+        ~EnvGuard() {
+            setEnvVar("TAMARIN_ALLOC_GRANULARITY", "");
+            setEnvVar("TAMARIN_PAGE_SIZE", "");
+        }
+    } guard;
     setEnvVar("TAMARIN_ALLOC_GRANULARITY", "131072");
     setEnvVar("TAMARIN_PAGE_SIZE", "8192");
     std::string src =
@@ -3726,8 +3732,6 @@ TAMARIN_TEST(CodeGen, GeneratedAllocatorUsesProviderReportedValues) {
     std::string out;
     EXPECT_TRUE(compileAndRunProgram(src, 2, exitCode, out, "", true));
     EXPECT_EQ(exitCode, 0);
-    setEnvVar("TAMARIN_ALLOC_GRANULARITY", "");
-    setEnvVar("TAMARIN_PAGE_SIZE", "");
     EXPECT_TRUE(out.find("Virtual reserved:      131072 bytes") != std::string::npos);
     return true;
 }
