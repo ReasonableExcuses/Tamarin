@@ -50,6 +50,7 @@ enum class Opcode {
     Return,
     Call,
     FunctionPtr,   // Pointer to function or lambda: strImm = fn_name, type = fn_type, result = ptr
+    GlobalPtr,     // Pointer to global variable: strImm = global_name, type = ptr, result = ptr
 
     // Tamarin-specific: safety and arrays
     ArrayAlloc,    // Allocate local array with length: (elementType, length) -> {ptr, len}
@@ -204,10 +205,21 @@ struct IRFunction {
     }
 };
 
+// ── IR Global Variable ──────────────────────────────────────────────────────
+struct IRGlobal {
+    std::string name;
+    const sema::Type* type = nullptr;
+    int64_t initialValue = 0;
+    bool isConst = false;
+    bool isArray = false;
+    int64_t arraySize = 0;
+};
+
 // ── IR Module ───────────────────────────────────────────────────────────────
 struct IRModule {
     std::string name;
     std::vector<std::unique_ptr<IRFunction>> functions;
+    std::vector<IRGlobal> globals;
     std::vector<const sema::Type*> recordTypes;
     std::vector<const sema::Type*> enumTypes;
     std::vector<std::string> stringLiterals;

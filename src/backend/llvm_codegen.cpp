@@ -167,6 +167,9 @@ const sema::Type* LLVMCodeGen::getValueType(ir::ValueId id) const {
 }
 
 std::string LLVMCodeGen::formatOperand(ir::ValueId id, const sema::Type* ty) const {
+    if (id == ir::InvalidValue) {
+        return "undef";
+    }
     auto it = intConstants_.find(id);
     if (it != intConstants_.end()) {
         return std::to_string(it->second);
@@ -454,6 +457,20 @@ void LLVMCodeGen::emitHeader(std::ostream& os) {
         int64_t totalBytes = static_cast<int64_t>(str.size()) + 1;
         os << "@.str." << i << " = private unnamed_addr constant ["
            << totalBytes << " x i8] c\"" << escapeLLVMString(str) << "\", align 1\n";
+    }
+
+    // Emit module global variables
+    for (const auto& g : module_.globals) {
+        if (g.isArray) {
+            std::string elemStr = (g.type && g.type->elementType) ? llvmType(g.type->elementType) : "i32";
+            int64_t arrCount = g.arraySize > 0 ? g.arraySize : (g.type ? g.type->arraySize : 0);
+            if (arrCount <= 0) arrCount = 1;
+            os << "@" << g.name << " = internal global [" << arrCount << " x " << elemStr
+               << "] zeroinitializer, align 16\n";
+        } else {
+            std::string tyStr = g.type ? llvmType(g.type) : "i32";
+            os << "@" << g.name << " = internal global " << tyStr << " 0, align 8\n";
+        }
     }
 
     os << "\n";
@@ -2495,6 +2512,11 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
             } else {
                 os << "  %v" << inst.result << " = insertvalue { ptr, ptr } %f0_" << inst.result << ", ptr null, 1\n";
             }
+            break;
+        }
+
+        case ir::Opcode::GlobalPtr: {
+            os << "  %v" << inst.result << " = getelementptr i8, ptr @" << inst.strImm << ", i64 0\n";
             break;
         }
 

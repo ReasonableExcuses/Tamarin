@@ -53,6 +53,8 @@ static const char* opcodeToString(Opcode op) {
         case Opcode::Jump:        return "jump";
         case Opcode::Return:      return "ret";
         case Opcode::Call:        return "call";
+        case Opcode::FunctionPtr: return "fn.ptr";
+        case Opcode::GlobalPtr:   return "global.ptr";
         case Opcode::ArrayAlloc:  return "array.alloc";
         case Opcode::ArrayLoad:   return "array.load";
         case Opcode::ArrayStore:  return "array.store";

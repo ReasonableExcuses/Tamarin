@@ -221,6 +221,35 @@ std::unique_ptr<IRModule> IRBuilder::buildModule(Program& prog, const std::strin
     mod->name = moduleName;
     currentModule_ = mod.get();
 
+    // 0. Collect module globals
+    globals_.clear();
+    for (auto& decl : prog.decls) {
+        if (decl->kind == DeclKind::Var) {
+            auto& gv = static_cast<GlobalVarDecl&>(*decl);
+            auto sym = checker_.findSymbol(gv.name, gv.loc);
+            const sema::Type* varTy = sym ? sym->type : nullptr;
+            int64_t arrSz = gv.evaluatedArraySize;
+            if (arrSz < 0 && varTy && varTy->isArray()) arrSz = varTy->arraySize;
+            IRGlobal g;
+            g.name = gv.name;
+            g.type = varTy;
+            g.isArray = gv.isArray || (varTy && varTy->isArray());
+            g.arraySize = arrSz > 0 ? arrSz : 0;
+            g.isConst = gv.isConst;
+            mod->globals.push_back(g);
+            globals_[gv.name] = g;
+        } else if (decl->kind == DeclKind::Const) {
+            auto& cd = static_cast<ConstDecl&>(*decl);
+            auto sym = checker_.findSymbol(cd.name, cd.loc);
+            IRGlobal g;
+            g.name = cd.name;
+            g.type = sym ? sym->type : nullptr;
+            g.isConst = true;
+            mod->globals.push_back(g);
+            globals_[cd.name] = g;
+        }
+    }
+
     // 1. Collect all record types and enum types
     for (auto& decl : prog.decls) {
         if (decl->kind == DeclKind::Struct) {
@@ -280,6 +309,38 @@ std::unique_ptr<IRModule> IRBuilder::buildProgram(
     auto mod = std::make_unique<IRModule>();
     mod->name = programName;
     currentModule_ = mod.get();
+
+    // 0. Collect module globals across all modules
+    globals_.clear();
+    for (const auto& m : modules) {
+        if (!m || !m->ast) continue;
+        for (auto& decl : m->ast->decls) {
+            if (decl->kind == DeclKind::Var) {
+                auto& gv = static_cast<GlobalVarDecl&>(*decl);
+                auto sym = checker_.findSymbol(gv.name, gv.loc);
+                const sema::Type* varTy = sym ? sym->type : nullptr;
+                int64_t arrSz = gv.evaluatedArraySize;
+                if (arrSz < 0 && varTy && varTy->isArray()) arrSz = varTy->arraySize;
+                IRGlobal g;
+                g.name = gv.name;
+                g.type = varTy;
+                g.isArray = gv.isArray || (varTy && varTy->isArray());
+                g.arraySize = arrSz > 0 ? arrSz : 0;
+                g.isConst = gv.isConst;
+                mod->globals.push_back(g);
+                globals_[gv.name] = g;
+            } else if (decl->kind == DeclKind::Const) {
+                auto& cd = static_cast<ConstDecl&>(*decl);
+                auto sym = checker_.findSymbol(cd.name, cd.loc);
+                IRGlobal g;
+                g.name = cd.name;
+                g.type = sym ? sym->type : nullptr;
+                g.isConst = true;
+                mod->globals.push_back(g);
+                globals_[cd.name] = g;
+            }
+        }
+    }
 
     // 1. Collect all record types and enum types across all modules
     mod->recordTypes = checker_.context().getRecordTypes();
@@ -3758,6 +3819,38 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                 return load.result;
             }
 
+            auto git = globals_.find(id.name);
+            if (git != globals_.end()) {
+                const auto& g = git->second;
+                Instruction gptr;
+                gptr.opcode = Opcode::GlobalPtr;
+                gptr.result = nextValueId();
+                gptr.strImm = g.name;
+                gptr.type   = checker_.context().getReference(g.type, false, true);
+                emit(gptr);
+
+                if (g.type && g.type->isArray()) {
+                    int64_t len = g.arraySize > 0 ? g.arraySize : g.type->arraySize;
+                    auto lenVal = emitIntConstant(len, checker_.context().getI32());
+                    Instruction mkView;
+                    mkView.opcode = Opcode::MakeView;
+                    mkView.result = nextValueId();
+                    mkView.op1    = gptr.result;
+                    mkView.op2    = lenVal;
+                    mkView.type   = checker_.context().getArrayView(g.type->elementType);
+                    emit(mkView);
+                    return mkView.result;
+                }
+
+                Instruction load;
+                load.opcode = Opcode::Load;
+                load.result = nextValueId();
+                load.op1    = gptr.result;
+                load.type   = g.type;
+                emit(load);
+                return load.result;
+            }
+
             // Unqualified member access on 'this'
             if (currentRecord_ && currentRecord_->findField(id.name)) {
                 int fIdx = currentRecord_->getFieldIndex(id.name);
@@ -4309,6 +4402,16 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                             }
                             return b->ptr;
                         }
+                        auto git = globals_.find(id.name);
+                        if (git != globals_.end()) {
+                            Instruction gptr;
+                            gptr.opcode = Opcode::GlobalPtr;
+                            gptr.result = nextValueId();
+                            gptr.strImm = git->second.name;
+                            gptr.type   = checker_.context().getReference(git->second.type, false, true);
+                            emit(gptr);
+                            return gptr.result;
+                        }
                     } else if (un.operand->kind == ExprKind::Field) {
                         return getStructPointer(*un.operand);
                     } else if (un.operand->kind == ExprKind::Index) {
@@ -4371,6 +4474,18 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                     gfp.strImm = currentRecord_->structName;
                     emit(gfp);
                     ptr = gfp.result;
+                } else {
+                    auto git = globals_.find(id.name);
+                    if (git != globals_.end()) {
+                        Instruction gptr;
+                        gptr.opcode = Opcode::GlobalPtr;
+                        gptr.result = nextValueId();
+                        gptr.strImm = git->second.name;
+                        gptr.type   = checker_.context().getReference(git->second.type, false, true);
+                        emit(gptr);
+                        ptr = gptr.result;
+                        ty  = git->second.type;
+                    }
                 }
 
                 val = emitCastIfNeeded(val, valTy, ty);
@@ -6346,6 +6461,16 @@ ValueId IRBuilder::getStructPointer(Expr& objExpr) {
             gfp.strImm = currentRecord_->structName;
             emit(gfp);
             return gfp.result;
+        }
+        auto git = globals_.find(id.name);
+        if (git != globals_.end()) {
+            Instruction gptr;
+            gptr.opcode = Opcode::GlobalPtr;
+            gptr.result = nextValueId();
+            gptr.strImm = git->second.name;
+            gptr.type   = checker_.context().getReference(git->second.type, false, true);
+            emit(gptr);
+            return gptr.result;
         }
         return InvalidValue;
     } else if (objExpr.kind == ExprKind::Field) {

@@ -6516,6 +6516,31 @@ TAMARIN_TEST(CodeGen, AsyncRecursiveWorkStealing) {
     return true;
 }
 
+TAMARIN_TEST(CodeGen, ModuleLevelGlobalFixedArrayAndScalar) {
+    std::string src =
+        "int gArr[8];\n"
+        "int gScalar;\n"
+        "int main() {\n"
+        "    gScalar = 42;\n"
+        "    for (int i = 0; i < 8; i++) {\n"
+        "        gArr[i] = i * 10;\n"
+        "    }\n"
+        "    int sum = gScalar;\n"
+        "    for (int i = 0; i < 8; i++) {\n"
+        "        sum = sum + gArr[i];\n"
+        "    }\n"
+        "    print(sum);\n"
+        "    return 0;\n"
+        "}\n";
+    int exitCode = -1;
+    std::string out;
+    EXPECT_TRUE(compileAndRunProgram(src, 2, exitCode, out));
+    EXPECT_EQ(exitCode, 0);
+    // 42 + 0 + 10 + 20 + 30 + 40 + 50 + 60 + 70 = 42 + 280 = 322
+    EXPECT_TRUE(out.find("322") != std::string::npos);
+    return true;
+}
+
 
 
 
