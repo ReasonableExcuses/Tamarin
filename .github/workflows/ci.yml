@@ -71,6 +71,10 @@ jobs:
           echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
           echo "TAMARIN_CLANG=C:\Program Files\LLVM\bin\clang.exe" >> $env:GITHUB_ENV
 
+      - name: Initialize MSVC Developer Command Prompt
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Configure CMake
         run: |
           cmake -B build ${{ matrix.cmake_gen }} -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="${{ env.LLVM_DIR }}"

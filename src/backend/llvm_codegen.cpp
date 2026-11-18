@@ -3406,8 +3406,10 @@ bool LLVMCodeGen::compileToExecutable(const std::filesystem::path& llPath,
         } else {
             crtFlag = " -fms-runtime-lib=dll -Xlinker /DEFAULTLIB:msvcrt.lib -Xlinker /NODEFAULTLIB:libcmt.lib";
         }
+    } else if (targetTriple_.isMacOS()) {
+        crtFlag = "";
     } else {
-        crtFlag = (crtLinkage_ == CrtLinkage::Static) ? " -static" : "";
+        crtFlag = (crtLinkage_ == CrtLinkage::Static) ? " -static-libstdc++ -static-libgcc" : "";
     }
     std::string rtLib = findRuntimeLibrary(crtLinkage_ == CrtLinkage::Static);
     std::string rtFlag;

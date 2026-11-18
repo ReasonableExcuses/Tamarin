@@ -31,6 +31,8 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include <dlfcn.h>
 #endif
 
 using namespace tamarin;
@@ -2959,9 +2961,15 @@ TAMARIN_TEST(CodeGen, RegionMultiLevelHelperBorrowingAndAggregateExecution) {
 
 TAMARIN_TEST(PageProvider, WindowsAllocationAndGranularity) {
     using namespace tamarin::runtime;
+#ifdef _WIN32
     WindowsPageProvider provider;
     EXPECT_EQ(provider.allocationGranularity(), 65536ULL);
     EXPECT_EQ(provider.pageSize(), 4096ULL);
+#else
+    PosixPageProvider provider;
+    EXPECT_EQ(provider.allocationGranularity(), 65536ULL);
+    EXPECT_GE(provider.pageSize(), 4096ULL);
+#endif
 
     void* base = provider.reserve(65536);
     EXPECT_TRUE(base != nullptr);
@@ -3692,9 +3700,21 @@ TAMARIN_TEST(CodeGen, ImplicitBaseConstructorNonTrivialMemberOrder) {
     return true;
 }
 
+static inline void setEnvVar(const std::string& name, const std::string& value) {
+#ifdef _WIN32
+    _putenv((name + "=" + value).c_str());
+#else
+    if (value.empty()) {
+        unsetenv(name.c_str());
+    } else {
+        setenv(name.c_str(), value.c_str(), 1);
+    }
+#endif
+}
+
 TAMARIN_TEST(CodeGen, GeneratedAllocatorUsesProviderReportedValues) {
-    _putenv("TAMARIN_ALLOC_GRANULARITY=131072");
-    _putenv("TAMARIN_PAGE_SIZE=8192");
+    setEnvVar("TAMARIN_ALLOC_GRANULARITY", "131072");
+    setEnvVar("TAMARIN_PAGE_SIZE", "8192");
     std::string src =
         "int main() {\n"
         "    region r {\n"
@@ -3707,8 +3727,8 @@ TAMARIN_TEST(CodeGen, GeneratedAllocatorUsesProviderReportedValues) {
     std::string out;
     EXPECT_TRUE(compileAndRunProgram(src, 2, exitCode, out, "", true));
     EXPECT_EQ(exitCode, 0);
-    _putenv("TAMARIN_ALLOC_GRANULARITY=");
-    _putenv("TAMARIN_PAGE_SIZE=");
+    setEnvVar("TAMARIN_ALLOC_GRANULARITY", "");
+    setEnvVar("TAMARIN_PAGE_SIZE", "");
     EXPECT_TRUE(out.find("Virtual reserved:      131072 bytes") != std::string::npos);
     return true;
 }
@@ -3778,10 +3798,10 @@ TAMARIN_TEST(CodeGen, ReservationCacheDirectMultithreadedIsolation) {
     return true;
 }
 
-#ifdef _WIN32
 TAMARIN_TEST(CodeGen, ReservationCacheMultithreadedStress) {
     std::string src =
-        "int runRegionBatch(int seed) {\n"
+        "@export\n"
+        "public int runRegionBatch(int seed) {\n"
         "    int total = 0;\n"
         "    for (int i = 0; i < 50; i++) {\n"
         "        region r(4096) {\n"
@@ -3815,30 +3835,23 @@ TAMARIN_TEST(CodeGen, ReservationCacheMultithreadedStress) {
     auto tempDir = std::filesystem::temp_directory_path();
     static int mtRunId = 0;
     auto llPath = tempDir / ("tamarin_mt_" + std::to_string(++mtRunId) + ".ll");
-    auto dllPath = tempDir / ("tamarin_mt_" + std::to_string(mtRunId) + ".dll");
+    auto dllPath = tempDir / ("tamarin_mt_" + std::to_string(mtRunId) + codegen.getTargetTriple().sharedLibraryExtension());
     EXPECT_TRUE(codegen.emitLLVMIRToFile(llPath));
+    EXPECT_TRUE(codegen.compileToSharedLibrary(llPath, dllPath, 2));
 
-    std::string clang = codegen.getClangPath();
-    
-    std::string rtLib;
-    if (const char* env = std::getenv("TAMARIN_RUNTIME_LIB")) {
-        if (std::filesystem::exists(env)) rtLib = env;
-    }
-    if (rtLib.empty()) {
-        for (const auto& libPath : {"build/Release/tamarin_runtime.lib", "build/Debug/tamarin_runtime.lib", "Release/tamarin_runtime.lib", "Debug/tamarin_runtime.lib", "tamarin_runtime.lib"}) {
-            if (std::filesystem::exists(libPath)) { rtLib = std::filesystem::absolute(libPath).string(); break; }
-        }
-    }
-    std::string cmd = "\"\"" + clang + "\" -O2 -shared -fms-runtime-lib=dll -Wl,/export:runRegionBatch --target=x86_64-pc-windows-msvc -Wno-override-module -o \"" +
-                      dllPath.string() + "\" \"" + llPath.string() + "\" \"" + rtLib + "\"\"";
-    int ret = std::system(cmd.c_str());
-    EXPECT_EQ(ret, 0);
-
+#ifdef _WIN32
     HMODULE hMod = LoadLibraryA(dllPath.string().c_str());
+#else
+    void* hMod = dlopen(dllPath.string().c_str(), RTLD_NOW | RTLD_LOCAL);
+#endif
     EXPECT_TRUE(hMod != nullptr);
 
     typedef int (*FnType)(int);
+#ifdef _WIN32
     FnType fn = (FnType)GetProcAddress(hMod, "runRegionBatch");
+#else
+    FnType fn = (FnType)dlsym(hMod, "runRegionBatch");
+#endif
     EXPECT_TRUE(fn != nullptr);
 
     constexpr int NUM_THREADS = 8;
@@ -3860,7 +3873,11 @@ TAMARIN_TEST(CodeGen, ReservationCacheMultithreadedStress) {
     }
 
     for (auto& th : threads) th.join();
+#ifdef _WIN32
     FreeLibrary(hMod);
+#else
+    dlclose(hMod);
+#endif
     std::error_code ec;
     std::filesystem::remove(llPath, ec);
     std::filesystem::remove(dllPath, ec);
@@ -3870,6 +3887,7 @@ TAMARIN_TEST(CodeGen, ReservationCacheMultithreadedStress) {
 
 TAMARIN_TEST(CodeGen, SmallRegionPoolSteadyStateZeroVirtualMemoryOps) {
     std::string src =
+        "@export\n"
         "public int runHighChurn(int iters) {\n"
         "    int sum = 0;\n"
         "    for (int iter = 0; iter < iters; iter++) {\n"
@@ -3904,29 +3922,23 @@ TAMARIN_TEST(CodeGen, SmallRegionPoolSteadyStateZeroVirtualMemoryOps) {
     auto tempDir = std::filesystem::temp_directory_path();
     static int zrRunId = 0;
     auto llPath = tempDir / ("tamarin_zero_sys_" + std::to_string(++zrRunId) + ".ll");
-    auto dllPath = tempDir / ("tamarin_zero_sys_" + std::to_string(zrRunId) + ".dll");
+    auto dllPath = tempDir / ("tamarin_zero_sys_" + std::to_string(zrRunId) + codegen.getTargetTriple().sharedLibraryExtension());
     EXPECT_TRUE(codegen.emitLLVMIRToFile(llPath));
+    EXPECT_TRUE(codegen.compileToSharedLibrary(llPath, dllPath, 2));
 
-    std::string clang = codegen.getClangPath();
-    std::string rtLib;
-    if (const char* env = std::getenv("TAMARIN_RUNTIME_LIB")) {
-        if (std::filesystem::exists(env)) rtLib = env;
-    }
-    if (rtLib.empty()) {
-        for (const auto& libPath : {"build/Release/tamarin_runtime.lib", "build/Debug/tamarin_runtime.lib", "Release/tamarin_runtime.lib", "Debug/tamarin_runtime.lib", "tamarin_runtime.lib"}) {
-            if (std::filesystem::exists(libPath)) { rtLib = std::filesystem::absolute(libPath).string(); break; }
-        }
-    }
-    std::string cmd = "\"\"" + clang + "\" -O2 -shared -fms-runtime-lib=dll -Wl,/export:runHighChurn --target=x86_64-pc-windows-msvc -Wno-override-module -o \"" +
-                      dllPath.string() + "\" \"" + llPath.string() + "\" \"" + rtLib + "\"\"";
-    int ret = std::system(cmd.c_str());
-    EXPECT_EQ(ret, 0);
-
+#ifdef _WIN32
     HMODULE hMod = LoadLibraryA(dllPath.string().c_str());
+#else
+    void* hMod = dlopen(dllPath.string().c_str(), RTLD_NOW | RTLD_LOCAL);
+#endif
     EXPECT_TRUE(hMod != nullptr);
 
     typedef int (*FnType)(int);
+#ifdef _WIN32
     FnType fn = (FnType)GetProcAddress(hMod, "runHighChurn");
+#else
+    FnType fn = (FnType)dlsym(hMod, "runHighChurn");
+#endif
     EXPECT_TRUE(fn != nullptr);
 
     // Warmup iteration: warms up the thread-local pool
@@ -3945,7 +3957,11 @@ TAMARIN_TEST(CodeGen, SmallRegionPoolSteadyStateZeroVirtualMemoryOps) {
     EXPECT_EQ(__tamarin_runtime_get_decommit_count(), 0ULL);
     EXPECT_EQ(__tamarin_runtime_get_release_count(), 0ULL);
 
+#ifdef _WIN32
     FreeLibrary(hMod);
+#else
+    dlclose(hMod);
+#endif
     std::error_code ec;
     std::filesystem::remove(llPath, ec);
     std::filesystem::remove(dllPath, ec);
@@ -5350,6 +5366,10 @@ TAMARIN_TEST(TargetTriple, ParsingAndAccessors) {
     EXPECT_FALSE(host.str().empty());
 #ifdef _WIN32
     EXPECT_TRUE(host.isWindows());
+#elif defined(__APPLE__)
+    EXPECT_TRUE(host.isMacOS());
+#elif defined(__linux__)
+    EXPECT_TRUE(host.isLinux());
 #endif
     return true;
 }
@@ -5767,6 +5787,7 @@ TAMARIN_TEST(BinaryFormats, StaticAndDynamicExecutableEmission) {
     auto dynSize = std::filesystem::file_size(exeDyn);
     EXPECT_TRUE(dynSize > 0);
 
+#ifndef __APPLE__
     // Static CRT build
     codegen.setCrtLinkage(backend::CrtLinkage::Static);
     EXPECT_TRUE(codegen.compileToExecutable(llPath, exeStat, 2));
@@ -5776,6 +5797,7 @@ TAMARIN_TEST(BinaryFormats, StaticAndDynamicExecutableEmission) {
 
     // Static CRT bundles runtime machinery so it should be larger than dynamic CRT
     EXPECT_TRUE(statSize > dynSize);
+#endif
 
     std::error_code ec;
     std::filesystem::remove(llPath, ec);
@@ -6486,7 +6508,6 @@ TAMARIN_TEST(CodeGen, AsyncRecursiveWorkStealing) {
     std::filesystem::remove(exePath, ec);
     return true;
 }
-#endif
 
 
 
