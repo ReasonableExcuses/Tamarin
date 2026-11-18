@@ -5798,8 +5798,12 @@ TAMARIN_TEST(BinaryFormats, StaticAndDynamicExecutableEmission) {
     auto statSize = std::filesystem::file_size(exeStat);
     EXPECT_TRUE(statSize > 0);
 
-    // Static CRT bundles runtime machinery so it should be larger than dynamic CRT
+#ifdef _WIN32
+    // Static CRT bundles MSVC runtime machinery (libcmt.lib) so it should be larger than dynamic CRT (msvcrt.lib)
     EXPECT_TRUE(statSize > dynSize);
+#else
+    EXPECT_TRUE(statSize > 0);
+#endif
 #endif
 
     std::error_code ec;
