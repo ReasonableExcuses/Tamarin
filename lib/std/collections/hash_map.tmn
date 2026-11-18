@@ -1,0 +1,238 @@
+// ============================================================================
+// std.collections.hash_map - Production Swiss Table Flat Hash Map for TAMARIN
+// ============================================================================
+
+import std.bits as bits;
+
+// ----------------------------------------------------------------------------
+// Generic Swiss Table: HashMap<K, V>
+// Uses 1-byte control metadata with 16-way SIMD/group probing and 87.5% load factor.
+// Control byte invariants (u8):
+//   EMPTY   = 128 (0x80)
+//   DELETED = 254 (0xFE)
+//   FULL    = 0..127 (7-bit hash fingerprint hTag)
+// ----------------------------------------------------------------------------
+
+public struct HashMap<K, V> {
+    char ctrl[];
+    K keys[];
+    V values[];
+    int count;
+    int capacity;
+    int growth_left;
+
+    void init() {
+        this.init_with_capacity(16);
+    }
+
+    void init_with_capacity(int minCap) {
+        int cap = 16;
+        while (cap < minCap) {
+            cap = cap * 2;
+        }
+        this.capacity = cap;
+        this.count = 0;
+        this.growth_left = (cap * 7) / 8;
+        this.ctrl = __builtin_alloc<char>(cap + 16);
+        for (int i = 0; i < cap + 16; ++i) {
+            this.ctrl[i] = 128; // EMPTY (0x80)
+        }
+        this.keys = __builtin_alloc<K>(cap);
+        this.values = __builtin_alloc<V>(cap);
+    }
+
+    ~HashMap() {
+        this.release();
+    }
+
+    void release() {
+        if (this.capacity > 0) {
+            __builtin_free(this.ctrl);
+            __builtin_free(this.keys);
+            __builtin_free(this.values);
+            this.capacity = 0;
+            this.count = 0;
+            this.growth_left = 0;
+        }
+    }
+
+    int size() const {
+        return this.count;
+    }
+
+    int cap() const {
+        return this.capacity;
+    }
+
+    bool is_empty() const {
+        return this.count == 0;
+    }
+
+    void clear() {
+        for (int i = 0; i < this.capacity + 16; ++i) {
+            this.ctrl[i] = 128;
+        }
+        this.count = 0;
+        this.growth_left = (this.capacity * 7) / 8;
+    }
+
+    int find_index(K key, int h) {
+        int hTag = h & 127;
+        int grp = ((h >> 7) & 33554431) & (this.capacity - 1);
+        int stride = 0;
+        int checked = 0;
+        while (checked < this.capacity) {
+            for (int i = 0; i < 16; ++i) {
+                char c = this.ctrl[grp + i];
+                if (c == hTag) {
+                    int idx = (grp + i) & (this.capacity - 1);
+                    if (this.keys[idx] == key) {
+                        return idx;
+                    }
+                }
+                if (c == 128) { // EMPTY
+                    return -1;
+                }
+            }
+            stride = stride + 16;
+            grp = (grp + stride) & (this.capacity - 1);
+            checked = checked + 16;
+        }
+        return -1;
+    }
+
+    int find_insert_slot(int h) {
+        int grp = ((h >> 7) & 33554431) & (this.capacity - 1);
+        int stride = 0;
+        while (true) {
+            for (int i = 0; i < 16; ++i) {
+                char c = this.ctrl[grp + i];
+                if (c >= 128) { // EMPTY (128) or DELETED (254)
+                    return (grp + i) & (this.capacity - 1);
+                }
+            }
+            stride = stride + 16;
+            grp = (grp + stride) & (this.capacity - 1);
+        }
+        return 0;
+    }
+
+    void set_ctrl(int idx, int hTag) {
+        this.ctrl[idx] = hTag;
+        if (idx < 16) {
+            this.ctrl[this.capacity + idx] = hTag;
+        }
+    }
+
+    void rehash(int newCap) {
+        char oldCtrl[] = this.ctrl;
+        K oldKeys[] = this.keys;
+        V oldVals[] = this.values;
+        int oldCap = this.capacity;
+
+        char newCtrl[] = __builtin_alloc<char>(newCap + 16);
+        for (int i = 0; i < newCap + 16; ++i) {
+            newCtrl[i] = 128;
+        }
+        K newKeys[] = __builtin_alloc<K>(newCap);
+        V newVals[] = __builtin_alloc<V>(newCap);
+
+        for (int i = 0; i < oldCap; ++i) {
+            char c = oldCtrl[i];
+            if (c < 128) { // Full bucket
+                K k = oldKeys[i];
+                V v = oldVals[i];
+                int h = __builtin_hash(k);
+                int grp = ((h >> 7) & 33554431) & (newCap - 1);
+                int stride = 0;
+                int slot = -1;
+                while (slot < 0) {
+                    for (int j = 0; j < 16; ++j) {
+                        if (newCtrl[grp + j] >= 128) { // empty slot in new table
+                            slot = (grp + j) & (newCap - 1);
+                            break;
+                        }
+                    }
+                    stride = stride + 16;
+                    grp = (grp + stride) & (newCap - 1);
+                }
+                newKeys[slot] = k;
+                newVals[slot] = v;
+                int hTag = h & 127;
+                newCtrl[slot] = hTag;
+                if (slot < 16) {
+                    newCtrl[newCap + slot] = hTag;
+                }
+            }
+        }
+
+        __builtin_free(oldCtrl);
+        __builtin_free(oldKeys);
+        __builtin_free(oldVals);
+
+        this.ctrl = newCtrl;
+        this.keys = newKeys;
+        this.values = newVals;
+        this.capacity = newCap;
+        this.growth_left = (newCap * 7) / 8 - this.count;
+    }
+
+    bool insert(K key, V val) {
+        int h = __builtin_hash(key);
+        int existing = this.find_index(key, h);
+        if (existing >= 0) {
+            this.values[existing] = val;
+            return false;
+        }
+        if (this.growth_left <= 0) {
+            this.rehash(this.capacity * 2);
+        }
+        int slot = this.find_insert_slot(h);
+        this.keys[slot] = key;
+        this.values[slot] = val;
+        int hTag = h & 127;
+        this.set_ctrl(slot, hTag);
+        this.count = this.count + 1;
+        this.growth_left = this.growth_left - 1;
+        return true;
+    }
+
+    bool contains(K key) {
+        int h = __builtin_hash(key);
+        return this.find_index(key, h) >= 0;
+    }
+
+    V get(K key) {
+        int h = __builtin_hash(key);
+        int idx = this.find_index(key, h);
+        if (idx >= 0) {
+            return this.values[idx];
+        }
+        return this.values[0];
+    }
+
+    V get_or(K key, V fallback) {
+        int h = __builtin_hash(key);
+        int idx = this.find_index(key, h);
+        if (idx >= 0) {
+            return this.values[idx];
+        }
+        return fallback;
+    }
+
+    bool remove(K key) {
+        int h = __builtin_hash(key);
+        int idx = this.find_index(key, h);
+        if (idx >= 0) {
+            this.set_ctrl(idx, 254); // DELETED
+            this.count = this.count - 1;
+            return true;
+        }
+        return false;
+    }
+
+    bool is_slot_full(int slot) const {
+        if (slot < 0 || slot >= this.capacity) { return false; }
+        return this.ctrl[slot] < 128;
+    }
+};
