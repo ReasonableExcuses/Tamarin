@@ -20,13 +20,13 @@ jobs:
         include:
           - name: Linux (x86_64 Ubuntu 24.04)
             os: ubuntu-24.04
-            generator: Ninja
+            cmake_gen: "-G Ninja"
           - name: macOS (Apple Silicon macOS 15)
             os: macos-15
-            generator: Ninja
+            cmake_gen: "-G Ninja"
           - name: Windows (x86_64 Windows 2025)
             os: windows-2025
-            generator: Visual Studio 17 2022
+            cmake_gen: '-G "Visual Studio 17 2022" -A x64'
 
     steps:
       - name: Checkout repository
@@ -40,13 +40,14 @@ jobs:
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-19-dev libclang-19-dev clang-19 ninja-build || \
-          sudo apt-get install -y llvm-dev libclang-dev clang ninja-build
-          LLVM_DIR=$(llvm-config-19 --cmakedir 2>/dev/null || llvm-config --cmakedir)
+          sudo apt-get update -q
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+            ninja-build clang llvm-dev libclang-dev
+          LLVM_DIR=$(llvm-config --cmakedir 2>/dev/null || llvm-config-18 --cmakedir 2>/dev/null || llvm-config-19 --cmakedir 2>/dev/null)
           echo "LLVM_DIR=$LLVM_DIR" >> "$GITHUB_ENV"
-          echo "CC=clang-19" >> "$GITHUB_ENV"
-          echo "CXX=clang++-19" >> "$GITHUB_ENV"
+          echo "CC=clang" >> "$GITHUB_ENV"
+          echo "CXX=clang++" >> "$GITHUB_ENV"
+          echo "TAMARIN_CLANG=$(which clang)" >> "$GITHUB_ENV"
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -57,6 +58,7 @@ jobs:
           echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
           echo "CC=$LLVM_PREFIX/bin/clang" >> "$GITHUB_ENV"
           echo "CXX=$LLVM_PREFIX/bin/clang++" >> "$GITHUB_ENV"
+          echo "TAMARIN_CLANG=$LLVM_PREFIX/bin/clang" >> "$GITHUB_ENV"
 
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
@@ -67,10 +69,11 @@ jobs:
           }
           echo "LLVM_DIR=C:/Program Files/LLVM/lib/cmake/llvm" >> $env:GITHUB_ENV
           echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+          echo "TAMARIN_CLANG=C:\Program Files\LLVM\bin\clang.exe" >> $env:GITHUB_ENV
 
       - name: Configure CMake
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="${{ env.LLVM_DIR }}"
+          cmake -B build ${{ matrix.cmake_gen }} -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="${{ env.LLVM_DIR }}"
 
       - name: Build Tamarin & Troop
         run: |

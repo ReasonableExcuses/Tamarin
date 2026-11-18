@@ -166,20 +166,26 @@ const sema::Type* LLVMCodeGen::getValueType(ir::ValueId id) const {
 }
 
 std::string LLVMCodeGen::formatOperand(ir::ValueId id, const sema::Type* ty) const {
-    (void)ty;
     auto it = intConstants_.find(id);
     if (it != intConstants_.end()) {
         return std::to_string(it->second);
     }
     auto fIt = floatConstants_.find(id);
     if (fIt != floatConstants_.end()) {
-        std::ostringstream ss;
-        ss << std::setprecision(16) << fIt->second;
-        std::string s = ss.str();
-        if (s.find('.') == std::string::npos && s.find('e') == std::string::npos && s.find('E') == std::string::npos) {
-            s += ".0";
+        double d = fIt->second;
+        if (d == 0.0) {
+            return "0.0";
         }
-        return s;
+        auto vTy = getValueType(id);
+        const sema::Type* actualTy = ty ? ty : vTy;
+        if (actualTy && actualTy->isFloat() && actualTy->kind == sema::TypeKind::F32) {
+            d = static_cast<double>(static_cast<float>(d));
+        }
+        uint64_t bits = 0;
+        std::memcpy(&bits, &d, sizeof(bits));
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "0x%016llX", static_cast<unsigned long long>(bits));
+        return std::string(buf);
     }
     auto bIt = boolConstants_.find(id);
     if (bIt != boolConstants_.end()) {

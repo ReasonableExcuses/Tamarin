@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(Tamarin
     VERSION 0.16.0
-    LANGUAGES CXX
+    LANGUAGES C CXX
     DESCRIPTION "Tamarin - A C-Simple, Memory-Safe Systems Language Compiler"
 )
 

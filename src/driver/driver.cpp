@@ -355,7 +355,12 @@ int Driver::execute() {
 
     auto absExe = std::filesystem::absolute(exePath);
     std::string cmd = "\"" + absExe.string() + "\"";
+#ifdef _WIN32
+    std::string wrapped = "\"" + cmd + "\"";
+    int ret = std::system(wrapped.c_str());
+#else
     int ret = std::system(cmd.c_str());
+#endif
     return ret;
 }
 

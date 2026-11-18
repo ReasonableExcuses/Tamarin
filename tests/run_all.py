@@ -64,6 +64,8 @@ class TestHarness:
         self.troop_bin = troop_bin
         self.tamarin_tests_bin = tamarin_tests_bin
         self.clang_bin = clang_bin
+        if self.tamarin_bin and self.tamarin_bin.exists():
+            os.environ["TAMARIN_EXE"] = str(self.tamarin_bin)
         self.passed = 0
         self.failed = 0
         self.skipped = 0
@@ -134,7 +136,10 @@ class TestHarness:
                 self.passed += num_passed
                 self.suite_results["Unit Tests"]["pass"] += num_passed
             else:
-                self.record("Unit Tests", "tamarin_tests execution", False, f"Return code {p.returncode}\n{output[:500]}")
+                lines = output.splitlines()
+                failed_lines = [l for l in lines if "[  FAILED  ]" in l or "FAILED:" in l or "error:" in l]
+                fail_summary = "\n       ".join(failed_lines) if failed_lines else "\n       ".join(lines[-25:])
+                self.record("Unit Tests", "tamarin_tests execution", False, f"Return code {p.returncode}\n       {fail_summary}")
         except Exception as e:
             self.record("Unit Tests", "tamarin_tests execution", False, str(e))
 
@@ -648,7 +653,7 @@ def main():
     tamarin_bin = find_binary("tamarin", args.tamarin or os.environ.get("TAMARIN_BIN"), candidates)
     troop_bin = find_binary("troop", args.troop or os.environ.get("TROOP_BIN"), candidates)
     tamarin_tests_bin = find_binary("tamarin_tests", args.tamarin_tests or os.environ.get("TAMARIN_TESTS_BIN"), candidates)
-    clang_bin = args.clang or shutil.which("clang") or shutil.which("gcc") or shutil.which("cc")
+    clang_bin = args.clang or os.environ.get("TAMARIN_CLANG") or shutil.which("clang") or shutil.which("gcc") or shutil.which("cc")
 
     print(cyan("======================================================================"))
     print(cyan(f" Tamarin Cross-Platform Verification Orchestrator (v0.16.0)"))

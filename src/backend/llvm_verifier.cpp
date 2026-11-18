@@ -60,7 +60,8 @@ const std::string& LLVMVerifier::getTargetTriple() const {
 static std::string runCommand(const std::string& cmd, int& exitCode) {
     std::string result;
 #ifdef _WIN32
-    FILE* pipe = _popen(cmd.c_str(), "r");
+    std::string wrapped = "\"" + cmd + "\"";
+    FILE* pipe = _popen(wrapped.c_str(), "r");
 #else
     FILE* pipe = popen(cmd.c_str(), "r");
 #endif
@@ -89,8 +90,8 @@ VerificationResult LLVMVerifier::verifyFile(const std::filesystem::path& path) {
     }
 #ifdef _WIN32
     std::string devNull = "NUL";
-    std::string cmd = "\"\"" + clangPath_ + "\" -x ir -c --target=" + triple +
-                      " -Wno-override-module \"" + path.string() + "\" -o " + devNull + " 2>&1\"";
+    std::string cmd = "\"" + clangPath_ + "\" -x ir -c --target=" + triple +
+                      " -Wno-override-module \"" + path.string() + "\" -o " + devNull + " 2>&1";
 #else
     std::string devNull = "/dev/null";
     std::string cmd = "\"" + clangPath_ + "\" -x ir -c --target=" + triple +
