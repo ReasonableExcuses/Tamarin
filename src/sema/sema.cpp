@@ -110,7 +110,24 @@ static void collectReturnProvenances(const ast::Stmt& stmt, const TypeChecker& c
 Sema::Sema(DiagnosticEngine& diag)
     : diag_(diag), checker_(tc_, syms_, diag) {}
 
+void Sema::pruneInactiveDeclarations(ast::Program& prog, const target::TargetTriple& triple) {
+    prog.imports.erase(
+        std::remove_if(prog.imports.begin(), prog.imports.end(),
+                       [&](const ast::ImportDecl& imp) {
+                           return imp.cfg && !imp.cfg->evaluate(triple);
+                       }),
+        prog.imports.end());
+
+    prog.decls.erase(
+        std::remove_if(prog.decls.begin(), prog.decls.end(),
+                       [&](const ast::DeclPtr& d) {
+                           return d && d->cfg && !d->cfg->evaluate(triple);
+                       }),
+        prog.decls.end());
+}
+
 bool Sema::analyze(ast::Program& prog) {
+    pruneInactiveDeclarations(prog, targetTriple_);
     auto mod = std::make_shared<driver::Module>();
     mod->id.logicalName = "main";
     mod->id.canonicalPath = "main.tmn";
@@ -123,6 +140,12 @@ bool Sema::analyze(ast::Program& prog) {
 
 bool Sema::analyzeModules(const std::vector<std::shared_ptr<driver::Module>>& modules) {
     if (modules.empty()) return true;
+
+    for (const auto& mod : modules) {
+        if (mod && mod->ast) {
+            pruneInactiveDeclarations(*mod->ast, targetTriple_);
+        }
+    }
 
     auto entryMod = modules.back();
 

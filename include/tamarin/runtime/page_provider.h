@@ -87,7 +87,7 @@ public:
 
 private:
     size_t pageSize_{4096};
-    size_t allocGranularity_{4096};
+    size_t allocGranularity_{65536};
 };
 #endif
 

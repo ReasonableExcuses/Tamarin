@@ -23,9 +23,39 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <unistd.h>
+#else
+#include <unistd.h>
 #endif
 
 namespace tamarin::driver {
+
+static std::filesystem::path getSelfExeDir() {
+#ifdef _WIN32
+    wchar_t exeBuf[MAX_PATH];
+    if (GetModuleFileNameW(nullptr, exeBuf, MAX_PATH) > 0) {
+        return std::filesystem::path(exeBuf).parent_path();
+    }
+#elif defined(__APPLE__)
+    char pathBuf[1024];
+    uint32_t size = sizeof(pathBuf);
+    if (_NSGetExecutablePath(pathBuf, &size) == 0) {
+        std::error_code ec;
+        return std::filesystem::canonical(pathBuf, ec).parent_path();
+    }
+#else
+    char pathBuf[1024];
+    ssize_t len = readlink("/proc/self/exe", pathBuf, sizeof(pathBuf) - 1);
+    if (len > 0) {
+        pathBuf[len] = '\0';
+        std::error_code ec;
+        return std::filesystem::canonical(pathBuf, ec).parent_path();
+    }
+#endif
+    return std::filesystem::current_path();
+}
 
 static std::vector<std::string> gatherSearchRoots(const DriverOptions& options) {
     std::vector<std::string> searchRoots;
@@ -42,18 +72,18 @@ static std::vector<std::string> gatherSearchRoots(const DriverOptions& options) 
 
     if (const char* envPath = std::getenv("TAMARIN_PATH")) {
         std::string envStr(envPath);
-        std::string delim = ";";
-        size_t start = 0;
-        size_t end;
-        while ((end = envStr.find(delim, start)) != std::string::npos) {
-            std::string item = envStr.substr(start, end - start);
-            if (!item.empty()) searchRoots.push_back(item);
-            start = end + delim.length();
+        std::string item;
+        for (char c : envStr) {
+            if (c == ';' || c == ':') {
+                if (!item.empty()) {
+                    searchRoots.push_back(item);
+                    item.clear();
+                }
+            } else {
+                item.push_back(c);
+            }
         }
-        if (start < envStr.size()) {
-            std::string item = envStr.substr(start);
-            if (!item.empty()) searchRoots.push_back(item);
-        }
+        if (!item.empty()) searchRoots.push_back(item);
     }
 
     // Standard library search roots
@@ -66,15 +96,11 @@ static std::vector<std::string> gatherSearchRoots(const DriverOptions& options) 
         stdlibCandidates.push_back(std::filesystem::absolute(inputPath.parent_path()) / "lib");
         stdlibCandidates.push_back(std::filesystem::absolute(inputPath.parent_path()).parent_path() / "lib");
     }
-#ifdef _WIN32
-    wchar_t exeBuf[MAX_PATH];
-    if (GetModuleFileNameW(nullptr, exeBuf, MAX_PATH) > 0) {
-        std::filesystem::path exePath(exeBuf);
-        stdlibCandidates.push_back(exePath.parent_path() / "lib");
-        stdlibCandidates.push_back(exePath.parent_path().parent_path() / "lib");
-        stdlibCandidates.push_back(exePath.parent_path().parent_path().parent_path() / "lib");
-    }
-#endif
+
+    auto exeDir = getSelfExeDir();
+    stdlibCandidates.push_back(exeDir / "lib");
+    stdlibCandidates.push_back(exeDir.parent_path() / "lib");
+    stdlibCandidates.push_back(exeDir.parent_path().parent_path() / "lib");
 
     for (const auto& candidate : stdlibCandidates) {
         std::error_code ec;
@@ -106,14 +132,19 @@ int Driver::run() {
 }
 
 int Driver::check() {
+    auto triple = options_.targetTriple.empty()
+        ? target::TargetTriple::getHost()
+        : target::TargetTriple::parse(options_.targetTriple);
     auto searchRoots = gatherSearchRoots(options_);
     ModuleGraph graph(sm_, diag_, std::move(searchRoots));
+    graph.setTargetTriple(triple);
     if (!graph.buildGraph(options_.inputFile) || diag_.hasErrors()) {
         std::cerr << "TAMARIN compilation failed.\n";
         return 1;
     }
 
     sema::Sema sema(diag_);
+    sema.setTargetTriple(triple);
     if (!sema.analyzeModules(graph.getTopologicalOrder())) {
         std::cerr << "TAMARIN compilation failed.\n";
         return 1;
@@ -128,14 +159,19 @@ int Driver::check() {
 }
 
 int Driver::build() {
+    auto triple = options_.targetTriple.empty()
+        ? target::TargetTriple::getHost()
+        : target::TargetTriple::parse(options_.targetTriple);
     auto searchRoots = gatherSearchRoots(options_);
     ModuleGraph graph(sm_, diag_, std::move(searchRoots));
+    graph.setTargetTriple(triple);
     if (!graph.buildGraph(options_.inputFile) || diag_.hasErrors()) {
         std::cerr << "TAMARIN compilation failed.\n";
         return 1;
     }
 
     sema::Sema sema(diag_);
+    sema.setTargetTriple(triple);
     if (!sema.analyzeModules(graph.getTopologicalOrder())) {
         std::cerr << "TAMARIN compilation failed.\n";
         return 1;
@@ -164,9 +200,6 @@ int Driver::build() {
         backend::LLVMVerifier::instance().setClangPath(options_.clangPath);
     }
 
-    auto triple = options_.targetTriple.empty()
-        ? target::TargetTriple::getHost()
-        : target::TargetTriple::parse(options_.targetTriple);
     backend::LLVMVerifier::instance().setTargetTriple(triple.str());
 
     // C Header generation

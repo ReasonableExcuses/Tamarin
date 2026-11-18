@@ -3,6 +3,7 @@
 // ============================================================================
 #include "troop/package_manager.h"
 #include "troop/version.h"
+#include "tamarin/target/target_triple.h"
 
 #include <iostream>
 #include <fstream>
@@ -10,7 +11,13 @@
 #include <sstream>
 
 #if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <unistd.h>
 #else
 #include <unistd.h>
 #endif
@@ -23,6 +30,21 @@ static std::filesystem::path getSelfExeDir() {
     DWORD len = GetModuleFileNameW(nullptr, buf, 1024);
     if (len > 0) {
         return std::filesystem::path(buf).parent_path();
+    }
+#elif defined(__APPLE__)
+    char pathBuf[1024];
+    uint32_t size = sizeof(pathBuf);
+    if (_NSGetExecutablePath(pathBuf, &size) == 0) {
+        std::error_code ec;
+        return std::filesystem::canonical(pathBuf, ec).parent_path();
+    }
+#else
+    char pathBuf[1024];
+    ssize_t len = readlink("/proc/self/exe", pathBuf, sizeof(pathBuf) - 1);
+    if (len > 0) {
+        pathBuf[len] = '\0';
+        std::error_code ec;
+        return std::filesystem::canonical(pathBuf, ec).parent_path();
     }
 #endif
     return std::filesystem::current_path();
@@ -51,8 +73,16 @@ std::filesystem::path PackageManager::getCompilerExecutable() {
 
     auto cand3 = selfDir.parent_path() / "Release" / "tamarin.exe";
     if (std::filesystem::exists(cand3)) return cand3;
+    auto cand4 = selfDir.parent_path() / "Release" / "tamarin";
+    if (std::filesystem::exists(cand4)) return cand4;
+    auto cand5 = selfDir.parent_path() / "tamarin";
+    if (std::filesystem::exists(cand5)) return cand5;
 
+#if defined(_WIN32)
     return "tamarin.exe";
+#else
+    return "tamarin";
+#endif
 }
 
 std::optional<std::filesystem::path> PackageManager::findManifest(const std::filesystem::path& startDir) {
@@ -195,7 +225,10 @@ int PackageManager::buildPackage(const std::filesystem::path& manifestPath, bool
         return 1;
     }
 
-    std::string ext = (manifest->package.kind == "lib") ? ".lib" : ".exe";
+    tamarin::target::TargetTriple triple = targetTriple.empty()
+        ? tamarin::target::TargetTriple::getHost()
+        : tamarin::target::TargetTriple::parse(targetTriple);
+    std::string ext = (manifest->package.kind == "lib") ? triple.staticLibraryExtension() : triple.executableExtension();
     auto outBinary = binDir / (manifest->package.name + ext);
 
     auto compiler = getCompilerExecutable();
@@ -265,7 +298,8 @@ int PackageManager::runPackage(const std::filesystem::path& manifestPath, bool i
 
     auto rootDir = manifest->getPackageRootDir();
     auto binDir = rootDir / "bin" / (isRelease ? "release" : "debug");
-    auto exePath = binDir / (manifest->package.name + ".exe");
+    auto hostTriple = tamarin::target::TargetTriple::getHost();
+    auto exePath = binDir / (manifest->package.name + hostTriple.executableExtension());
 
     if (!std::filesystem::exists(exePath)) {
         std::cerr << "troop: executable not found at: " << exePath.string() << "\n";
@@ -312,7 +346,8 @@ int PackageManager::testPackage(const std::filesystem::path& manifestPath, bool 
     for (const auto& entry : std::filesystem::directory_iterator(testsDir)) {
         if (entry.is_regular_file() && entry.path().extension() == ".tam") {
             auto testName = entry.path().stem().string();
-            auto outTestExe = binTestsDir / (testName + ".exe");
+            auto hostTriple = tamarin::target::TargetTriple::getHost();
+            auto outTestExe = binTestsDir / (testName + hostTriple.executableExtension());
 
             std::ostringstream cmd;
             cmd << "\"" << compiler.string() << "\" build \"" << entry.path().string() << "\"";

@@ -111,6 +111,7 @@ std::shared_ptr<Module> ModuleGraph::loadModule(const std::string& canonicalPath
     // Lex and Parse
     lexer::Lexer lex(sm_, fileId, diag_);
     parser::Parser p(lex, diag_);
+    p.setTargetTriple(targetTriple_);
     auto prog = p.parseProgram();
 
     if (diag_.hasErrors()) {

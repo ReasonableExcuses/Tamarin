@@ -19,10 +19,55 @@
 #include <unordered_set>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <unistd.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace tamarin::backend {
 
+static std::filesystem::path getCurrentExecutableDir() {
+#ifdef _WIN32
+    wchar_t exePathBuf[MAX_PATH];
+    if (GetModuleFileNameW(nullptr, exePathBuf, MAX_PATH)) {
+        return std::filesystem::path(exePathBuf).parent_path();
+    }
+#elif defined(__APPLE__)
+    char pathBuf[1024];
+    uint32_t size = sizeof(pathBuf);
+    if (_NSGetExecutablePath(pathBuf, &size) == 0) {
+        std::error_code ec;
+        return std::filesystem::canonical(pathBuf, ec).parent_path();
+    }
+#else
+    char pathBuf[1024];
+    ssize_t len = readlink("/proc/self/exe", pathBuf, sizeof(pathBuf) - 1);
+    if (len > 0) {
+        pathBuf[len] = '\0';
+        std::error_code ec;
+        return std::filesystem::canonical(pathBuf, ec).parent_path();
+    }
+#endif
+    return std::filesystem::current_path();
+}
+
+static int runSystemCommand(const std::string& cmd) {
+#ifdef _WIN32
+    std::string wrapped = "\"" + cmd + "\"";
+    return std::system(wrapped.c_str());
+#else
+    return std::system(cmd.c_str());
+#endif
+}
+
 static std::string findRuntimeLibrary(bool isStatic = false) {
-    std::string libName = isStatic ? "tamarin_runtime_static.lib" : "tamarin_runtime.lib";
     if (isStatic) {
         if (const char* env = std::getenv("TAMARIN_RUNTIME_STATIC_LIB")) {
             if (std::filesystem::exists(env)) return env;
@@ -32,34 +77,53 @@ static std::string findRuntimeLibrary(bool isStatic = false) {
             if (std::filesystem::exists(env)) return env;
         }
     }
-#ifdef _WIN32
-    wchar_t exePathBuf[MAX_PATH];
-    if (GetModuleFileNameW(nullptr, exePathBuf, MAX_PATH)) {
-        std::filesystem::path exeDir = std::filesystem::path(exePathBuf).parent_path();
-        if (std::filesystem::exists(exeDir / libName)) {
-            return (exeDir / libName).string();
-        }
-        if (std::filesystem::exists(exeDir.parent_path() / libName)) {
-            return (exeDir.parent_path() / libName).string();
-        }
+
+    std::vector<std::string> libNames;
+    if (isStatic) {
+        libNames = {
+            "tamarin_runtime_static.lib",
+            "libtamarin_runtime_static.a",
+            "tamarin_runtime_static.a",
+            "libtamarin_runtime.a",
+            "tamarin_runtime.lib"
+        };
+    } else {
+        libNames = {
+            "tamarin_runtime.lib",
+            "libtamarin_runtime.a",
+            "tamarin_runtime.a",
+            "tamarin_runtime_static.lib",
+            "libtamarin_runtime_static.a"
+        };
     }
-#endif
-    std::vector<std::filesystem::path> candidates = {
-        "build/Release/" + libName,
-        "build/Debug/" + libName,
-        "../build/Release/" + libName,
-        "../build/Debug/" + libName,
-        libName,
-        "Release/" + libName,
-        "Debug/" + libName,
-        "build/src/runtime/Release/" + libName,
-        "build/src/runtime/Debug/" + libName
+
+    auto exeDir = getCurrentExecutableDir();
+    std::vector<std::filesystem::path> searchDirs = {
+        exeDir,
+        exeDir.parent_path(),
+        exeDir.parent_path() / "Release",
+        exeDir.parent_path() / "Debug",
+        exeDir.parent_path().parent_path() / "build",
+        exeDir.parent_path().parent_path() / "build" / "Release",
+        exeDir.parent_path().parent_path() / "build" / "Debug",
+        std::filesystem::current_path(),
+        std::filesystem::current_path() / "build",
+        std::filesystem::current_path() / "build" / "Release",
+        std::filesystem::current_path() / "build" / "Debug",
+        std::filesystem::current_path() / "Release",
+        std::filesystem::current_path() / "Debug"
     };
-    for (const auto& p : candidates) {
-        if (std::filesystem::exists(p)) {
-            return std::filesystem::absolute(p).string();
+
+    for (const auto& dir : searchDirs) {
+        for (const auto& name : libNames) {
+            auto cand = dir / name;
+            std::error_code ec;
+            if (std::filesystem::exists(cand, ec) && !std::filesystem::is_directory(cand, ec)) {
+                return std::filesystem::absolute(cand).string();
+            }
         }
     }
+
     if (isStatic) {
         return findRuntimeLibrary(false);
     }
@@ -3290,11 +3354,11 @@ bool LLVMCodeGen::optimizeLLVMIR(const std::filesystem::path& inputLL,
     std::string archFlag = resolveArchFlag(targetCPU_);
     std::string fastMath = fastMath_ ? " -ffast-math" : "";
     std::string extraOpt = ((optLevel >= 3) ? " -mllvm -inline-threshold=2500 -mllvm -unroll-threshold=800 -mllvm -vectorize-loops=true -mllvm -vectorize-slp=true" : ((optLevel >= 2) ? " -mllvm -inline-threshold=1000 -mllvm -vectorize-loops=true" : "")) + fastMath;
-    std::string cmd = "\"\"" + clangPath_ + "\" -x ir " + optFlag + archFlag + extraOpt +
+    std::string cmd = "\"" + clangPath_ + "\" -x ir " + optFlag + archFlag + extraOpt +
                       " -S -emit-llvm --target=" + targetTriple_.str() + " -Wno-override-module -o \"" +
-                      outputLL.string() + "\" \"" + inputLL.string() + "\"\"";
+                      outputLL.string() + "\" \"" + inputLL.string() + "\"";
 
-    int ret = std::system(cmd.c_str());
+    int ret = runSystemCommand(cmd);
     if (ret != 0) {
         diag_.report(Severity::Error, "LLVM optimization pipeline failed with code " + std::to_string(ret));
         return false;
@@ -3309,11 +3373,11 @@ bool LLVMCodeGen::compileToAssembly(const std::filesystem::path& llPath,
     std::string archFlag = resolveArchFlag(targetCPU_);
     std::string fastMath = fastMath_ ? " -ffast-math" : "";
     std::string extraOpt = ((optLevel >= 3) ? " -mllvm -inline-threshold=2500 -mllvm -unroll-threshold=800 -mllvm -vectorize-loops=true -mllvm -vectorize-slp=true" : ((optLevel >= 2) ? " -mllvm -inline-threshold=1000 -mllvm -vectorize-loops=true" : "")) + fastMath;
-    std::string cmd = "\"\"" + clangPath_ + "\" -x ir " + optFlag + archFlag + extraOpt +
+    std::string cmd = "\"" + clangPath_ + "\" -x ir " + optFlag + archFlag + extraOpt +
                       " -S --target=" + targetTriple_.str() + " -Wno-override-module -o \"" +
-                      asmPath.string() + "\" \"" + llPath.string() + "\"\"";
+                      asmPath.string() + "\" \"" + llPath.string() + "\"";
 
-    int ret = std::system(cmd.c_str());
+    int ret = runSystemCommand(cmd);
     if (ret != 0) {
         diag_.report(Severity::Error, "clang assembly generation failed with code " + std::to_string(ret));
         return false;
@@ -3339,12 +3403,18 @@ bool LLVMCodeGen::compileToExecutable(const std::filesystem::path& llPath,
         crtFlag = (crtLinkage_ == CrtLinkage::Static) ? " -static" : "";
     }
     std::string rtLib = findRuntimeLibrary(crtLinkage_ == CrtLinkage::Static);
-    std::string rtFlag = (targetTriple_.isWindows() && !rtLib.empty()) ? (" \"" + rtLib + "\"") : "";
-    std::string cmd = "\"\"" + clangPath_ + "\" " + optFlag + archFlag + extraOpt + crtFlag +
+    std::string rtFlag;
+    if (targetTriple_.isWindows()) {
+        rtFlag = !rtLib.empty() ? (" \"" + rtLib + "\"") : "";
+    } else {
+        std::string cxxLibs = targetTriple_.cxxStdLibLinkFlags();
+        rtFlag = (!rtLib.empty() ? (" \"" + rtLib + "\" ") : "") + cxxLibs;
+    }
+    std::string cmd = "\"" + clangPath_ + "\" " + optFlag + archFlag + extraOpt + crtFlag +
                       " --target=" + targetTriple_.str() + " -Wno-override-module -o \"" +
-                      exePath.string() + "\" \"" + llPath.string() + "\"" + rtFlag + "\"";
+                      exePath.string() + "\" \"" + llPath.string() + "\"" + rtFlag;
 
-    int ret = std::system(cmd.c_str());
+    int ret = runSystemCommand(cmd);
     if (ret != 0) {
         diag_.report(Severity::Error, "clang compilation failed with code " + std::to_string(ret));
         return false;
@@ -3359,11 +3429,11 @@ bool LLVMCodeGen::compileToObject(const std::filesystem::path& llPath,
     std::string archFlag = resolveArchFlag(targetCPU_);
     std::string fastMath = fastMath_ ? " -ffast-math" : "";
     std::string extraOpt = ((optLevel >= 3) ? " -mllvm -inline-threshold=2500 -mllvm -unroll-threshold=800 -mllvm -vectorize-loops=true -mllvm -vectorize-slp=true" : ((optLevel >= 2) ? " -mllvm -inline-threshold=1000 -mllvm -vectorize-loops=true" : "")) + fastMath;
-    std::string cmd = "\"\"" + clangPath_ + "\" -x ir " + optFlag + archFlag + extraOpt +
+    std::string cmd = "\"" + clangPath_ + "\" -x ir " + optFlag + archFlag + extraOpt +
                       " -c --target=" + targetTriple_.str() + " -Wno-override-module -o \"" +
-                      objPath.string() + "\" \"" + llPath.string() + "\"\"";
+                      objPath.string() + "\" \"" + llPath.string() + "\"";
 
-    int ret = std::system(cmd.c_str());
+    int ret = runSystemCommand(cmd);
     if (ret != 0) {
         diag_.report(Severity::Error, "clang object compilation failed with code " + std::to_string(ret));
         return false;
@@ -3379,13 +3449,19 @@ bool LLVMCodeGen::compileToSharedLibrary(const std::filesystem::path& llPath,
     std::string fastMath = fastMath_ ? " -ffast-math" : "";
     std::string extraOpt = ((optLevel >= 3) ? " -mllvm -inline-threshold=2500 -mllvm -unroll-threshold=800 -mllvm -vectorize-loops=true -mllvm -vectorize-slp=true" : ((optLevel >= 2) ? " -mllvm -inline-threshold=1000 -mllvm -vectorize-loops=true" : "")) + fastMath;
     std::string rtLib = findRuntimeLibrary();
-    std::string rtFlag = (targetTriple_.isWindows() && !rtLib.empty()) ? (" \"" + rtLib + "\"") : "";
+    std::string rtFlag;
+    if (targetTriple_.isWindows()) {
+        rtFlag = !rtLib.empty() ? (" \"" + rtLib + "\"") : "";
+    } else {
+        std::string cxxLibs = targetTriple_.cxxStdLibLinkFlags();
+        rtFlag = (!rtLib.empty() ? (" \"" + rtLib + "\" ") : "") + cxxLibs;
+    }
     std::string fpic = targetTriple_.isWindows() ? "" : " -fPIC";
-    std::string cmd = "\"\"" + clangPath_ + "\" " + optFlag + archFlag + extraOpt + fpic +
+    std::string cmd = "\"" + clangPath_ + "\" " + optFlag + archFlag + extraOpt + fpic +
                       " -shared --target=" + targetTriple_.str() + " -Wno-override-module -o \"" +
-                      dylibPath.string() + "\" \"" + llPath.string() + "\"" + rtFlag + "\"";
+                      dylibPath.string() + "\" \"" + llPath.string() + "\"" + rtFlag;
 
-    int ret = std::system(cmd.c_str());
+    int ret = runSystemCommand(cmd);
     if (ret != 0) {
         diag_.report(Severity::Error, "clang shared library compilation failed with code " + std::to_string(ret));
         return false;
@@ -3412,7 +3488,7 @@ bool LLVMCodeGen::compileToStaticLibrary(const std::filesystem::path& llPath,
 
     std::string arCmd;
     if (std::filesystem::exists(llvmAr)) {
-        arCmd = "\"\"" + llvmAr.string() + "\" rcs \"" + libPath.string() + "\" \"" + tempObj.string() + "\"\"";
+        arCmd = "\"" + llvmAr.string() + "\" rcs \"" + libPath.string() + "\" \"" + tempObj.string() + "\"";
     } else {
 #ifdef _WIN32
         arCmd = "lib.exe /NOLOGO /OUT:\"" + libPath.string() + "\" \"" + tempObj.string() + "\"";
@@ -3421,7 +3497,7 @@ bool LLVMCodeGen::compileToStaticLibrary(const std::filesystem::path& llPath,
 #endif
     }
 
-    int ret = std::system(arCmd.c_str());
+    int ret = runSystemCommand(arCmd);
     std::error_code ec;
     std::filesystem::remove(tempObj, ec);
 

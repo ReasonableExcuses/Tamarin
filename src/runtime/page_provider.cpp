@@ -92,17 +92,32 @@ size_t WindowsPageProvider::getResidentWorkingSet() const {
 
 #ifndef _WIN32
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <unistd.h>
+#include <mutex>
+#include <unordered_map>
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#endif
+
+static std::mutex s_posixReservationMtx;
+static std::unordered_map<void*, size_t> s_posixReservations;
 
 PosixPageProvider::PosixPageProvider() {
     long sz = sysconf(_SC_PAGESIZE);
-    pageSize_ = sz > 0 ? static_cast<size_t>(sz) : 4096;
-    allocGranularity_ = pageSize_;
+    size_t osPage = sz > 0 ? static_cast<size_t>(sz) : 4096;
+    pageSize_ = std::max<size_t>(4096, osPage);
+    allocGranularity_ = 65536; // 64 KB reservation granularity across all platforms
 
     const char* envPs = std::getenv("TAMARIN_PAGE_SIZE");
     if (envPs && *envPs) {
         size_t val = static_cast<size_t>(std::strtoull(envPs, nullptr, 10));
         if (val > 0) pageSize_ = val;
+    }
+    const char* envAg = std::getenv("TAMARIN_ALLOC_GRANULARITY");
+    if (envAg && *envAg) {
+        size_t val = static_cast<size_t>(std::strtoull(envAg, nullptr, 10));
+        if (val > 0) allocGranularity_ = val;
     }
 }
 
@@ -111,35 +126,69 @@ PosixPageProvider::PosixPageProvider(size_t customPageSize, size_t customAllocGr
 
 void* PosixPageProvider::reserve(size_t size) {
     if (size == 0) return nullptr;
+    size_t alignedSize = (size + allocGranularity_ - 1) & ~(allocGranularity_ - 1);
     s_stats.reserve_count.fetch_add(1, std::memory_order_relaxed);
-    void* ptr = mmap(nullptr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    return (ptr == MAP_FAILED) ? nullptr : ptr;
+    void* ptr = mmap(nullptr, alignedSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (ptr == MAP_FAILED) return nullptr;
+    {
+        std::lock_guard<std::mutex> lock(s_posixReservationMtx);
+        s_posixReservations[ptr] = alignedSize;
+    }
+    return ptr;
 }
 
 bool PosixPageProvider::commit(void* base, size_t offset, size_t size) {
     if (!base || size == 0) return false;
-    char* target = static_cast<char*>(base) + offset;
+    uintptr_t addr = reinterpret_cast<uintptr_t>(base) + offset;
+    uintptr_t alignedStart = addr & ~(pageSize_ - 1);
+    uintptr_t alignedEnd = (addr + size + pageSize_ - 1) & ~(pageSize_ - 1);
+    size_t alignedLen = alignedEnd - alignedStart;
     s_stats.commit_count.fetch_add(1, std::memory_order_relaxed);
-    return mprotect(target, size, PROT_READ | PROT_WRITE) == 0;
+    return mprotect(reinterpret_cast<void*>(alignedStart), alignedLen, PROT_READ | PROT_WRITE) == 0;
 }
 
 bool PosixPageProvider::decommit(void* base, size_t offset, size_t size) {
     if (!base || size == 0) return false;
-    char* target = static_cast<char*>(base) + offset;
+    uintptr_t addr = reinterpret_cast<uintptr_t>(base) + offset;
+    uintptr_t alignedStart = addr & ~(pageSize_ - 1);
+    uintptr_t alignedEnd = (addr + size + pageSize_ - 1) & ~(pageSize_ - 1);
+    size_t alignedLen = alignedEnd - alignedStart;
     s_stats.decommit_count.fetch_add(1, std::memory_order_relaxed);
 #ifdef MADV_DONTNEED
-    madvise(target, size, MADV_DONTNEED);
+    madvise(reinterpret_cast<void*>(alignedStart), alignedLen, MADV_DONTNEED);
 #endif
-    return mprotect(target, size, PROT_NONE) == 0;
+    return mprotect(reinterpret_cast<void*>(alignedStart), alignedLen, PROT_NONE) == 0;
 }
 
 bool PosixPageProvider::release(void* base) {
     if (!base) return false;
+    size_t size = 0;
+    {
+        std::lock_guard<std::mutex> lock(s_posixReservationMtx);
+        auto it = s_posixReservations.find(base);
+        if (it != s_posixReservations.end()) {
+            size = it->second;
+            s_posixReservations.erase(it);
+        }
+    }
+    if (size == 0) return false;
     s_stats.release_count.fetch_add(1, std::memory_order_relaxed);
-    return munmap(base, 0) == 0;
+    return munmap(base, size) == 0;
 }
 
 size_t PosixPageProvider::getResidentWorkingSet() const {
+#if defined(__APPLE__)
+    mach_task_basic_info info;
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS) {
+        return static_cast<size_t>(info.resident_size);
+    }
+#else
+    struct rusage usage;
+    if (getrusage(RUSAGE_SELF, &usage) == 0) {
+        return static_cast<size_t>(usage.ru_maxrss) * 1024;
+    }
+#endif
     return 0;
 }
 #endif

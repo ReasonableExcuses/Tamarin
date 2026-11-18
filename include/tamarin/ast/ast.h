@@ -4,6 +4,7 @@
 #pragma once
 
 #include "tamarin/source/source_location.h"
+#include "tamarin/target/target_triple.h"
 
 #include <cstdint>
 #include <memory>
@@ -718,21 +719,78 @@ struct AwaitExpr : Expr {
       : Expr(ExprKind::Await, l), operand(std::move(op)) {}
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  CONDITIONAL COMPILATION (@cfg)
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum class CfgOp {
+  TargetOS,
+  TargetArch,
+  All,
+  Any,
+  Not
+};
+
+struct CfgExpr {
+  CfgOp op;
+  std::string value; // e.g. "windows", "linux", "macos", "x86_64", "aarch64"
+  std::vector<std::shared_ptr<CfgExpr>> children;
+  SourceLocation loc;
+
+  CfgExpr(CfgOp o, std::string v, std::vector<std::shared_ptr<CfgExpr>> ch, SourceLocation l)
+      : op(o), value(std::move(v)), children(std::move(ch)), loc(l) {}
+
+  bool evaluate(const target::TargetTriple& triple) const {
+    switch (op) {
+      case CfgOp::TargetOS: {
+        if (value == "windows") return triple.isWindows();
+        if (value == "linux") return triple.isLinux();
+        if (value == "macos" || value == "darwin") return triple.isDarwin();
+        return false;
+      }
+      case CfgOp::TargetArch: {
+        if (value == "x86_64" || value == "amd64" || value == "x64") return triple.isX86_64();
+        if (value == "aarch64" || value == "arm64") return triple.isAArch64();
+        return false;
+      }
+      case CfgOp::All: {
+        for (const auto& child : children) {
+          if (!child || !child->evaluate(triple)) return false;
+        }
+        return true;
+      }
+      case CfgOp::Any: {
+        for (const auto& child : children) {
+          if (child && child->evaluate(triple)) return true;
+        }
+        return false;
+      }
+      case CfgOp::Not: {
+        if (children.empty() || !children[0]) return true;
+        return !children[0]->evaluate(triple);
+      }
+    }
+    return false;
+  }
+};
+
 struct ImportDecl {
   std::string modulePath; // e.g. "math.vector"
   std::string alias;      // e.g. "vector" or "vec"
   SourceLocation loc;
+  std::shared_ptr<CfgExpr> cfg = nullptr;
 };
 
 struct Decl {
   DeclKind kind;
   SourceLocation loc;
   bool isPublic = false;
+  std::shared_ptr<CfgExpr> cfg = nullptr;
   virtual ~Decl() = default;
 
 protected:
-  Decl(DeclKind k, SourceLocation l, bool pub = false)
-      : kind(k), loc(l), isPublic(pub) {}
+  Decl(DeclKind k, SourceLocation l, bool pub = false, std::shared_ptr<CfgExpr> c = nullptr)
+      : kind(k), loc(l), isPublic(pub), cfg(std::move(c)) {}
 };
 
 using DeclPtr = std::unique_ptr<Decl>;

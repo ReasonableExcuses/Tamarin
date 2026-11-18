@@ -167,6 +167,20 @@ public:
         return isWindows() ? ".obj" : ".o";
     }
 
+    [[nodiscard]] std::string staticLibraryPrefix() const {
+        return isWindows() ? "" : "lib";
+    }
+
+    [[nodiscard]] std::string pathDelimiter() const {
+        return isWindows() ? ";" : ":";
+    }
+
+    [[nodiscard]] std::string cxxStdLibLinkFlags() const {
+        if (isWindows()) return "";
+        if (isDarwin()) return "-lc++ -pthread -lm";
+        return "-lstdc++ -pthread -ldl -lm";
+    }
+
 private:
     Arch arch_ = Arch::X86_64;
     Vendor vendor_ = Vendor::PC;

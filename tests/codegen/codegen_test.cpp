@@ -5605,6 +5605,114 @@ TAMARIN_TEST(CrossCompilation, TargetAArch64LinuxObject) {
     return true;
 }
 
+TAMARIN_TEST(BinaryFormats, CrossTargetDarwinEmission) {
+    SourceManager sm;
+    auto fileId = sm.addSource("cross_darwin.tmn",
+        "int main() {\n"
+        "    return 42;\n"
+        "}\n");
+    std::ostringstream errs;
+    DiagnosticEngine diag(sm, errs);
+    lexer::Lexer lex(sm, fileId, diag);
+    parser::Parser p(lex, diag);
+    p.setTargetTriple(target::TargetTriple::parse("aarch64-apple-darwin"));
+    auto prog = p.parseProgram();
+    EXPECT_FALSE(diag.hasErrors());
+
+    sema::Sema sema(diag);
+    sema.setTargetTriple(target::TargetTriple::parse("aarch64-apple-darwin"));
+    EXPECT_TRUE(sema.analyze(prog));
+
+    ir::IRBuilder irBuilder(sema.checker());
+    auto mod = irBuilder.buildModule(prog, "cross_darwin");
+    EXPECT_TRUE(mod != nullptr);
+
+    backend::LLVMCodeGen codegen(*mod, diag);
+    codegen.setTargetTriple("aarch64-apple-darwin");
+
+    auto tempDir = std::filesystem::temp_directory_path();
+    static int darwinRunId = 0;
+    auto llPath = tempDir / ("tamarin_cross_darwin_" + std::to_string(++darwinRunId) + ".ll");
+    auto oPath = tempDir / ("tamarin_cross_darwin_" + std::to_string(darwinRunId) + ".o");
+
+    EXPECT_TRUE(codegen.emitLLVMIRToFile(llPath));
+
+    std::ifstream inLL(llPath);
+    std::string llContent((std::istreambuf_iterator<char>(inLL)), std::istreambuf_iterator<char>());
+    EXPECT_TRUE(llContent.find("target triple = \"aarch64-apple-darwin\"") != std::string::npos);
+
+    // Cross-compile to Mach-O object file via clang
+    EXPECT_TRUE(codegen.compileToObject(llPath, oPath, 2));
+    EXPECT_TRUE(std::filesystem::exists(oPath));
+    EXPECT_TRUE(std::filesystem::file_size(oPath) > 0);
+
+    // Read header magic to verify Mach-O 64-bit format (0xCF 0xFA 0xED 0xFE)
+    std::ifstream inObj(oPath, std::ios::binary);
+    unsigned char magic[4] = {0};
+    inObj.read(reinterpret_cast<char*>(magic), 4);
+    EXPECT_TRUE((magic[0] == 0xCF && magic[1] == 0xFA && magic[2] == 0xED && magic[3] == 0xFE) ||
+                (magic[0] == 0xFE && magic[1] == 0xED && magic[2] == 0xFA && magic[3] == 0xCF));
+
+    std::error_code ec;
+    std::filesystem::remove(llPath, ec);
+    std::filesystem::remove(oPath, ec);
+    return true;
+}
+
+TAMARIN_TEST(BinaryFormats, CrossTargetWindowsEmission) {
+    SourceManager sm;
+    auto fileId = sm.addSource("cross_windows.tmn",
+        "int main() {\n"
+        "    return 42;\n"
+        "}\n");
+    std::ostringstream errs;
+    DiagnosticEngine diag(sm, errs);
+    lexer::Lexer lex(sm, fileId, diag);
+    parser::Parser p(lex, diag);
+    p.setTargetTriple(target::TargetTriple::parse("x86_64-pc-windows-msvc"));
+    auto prog = p.parseProgram();
+    EXPECT_FALSE(diag.hasErrors());
+
+    sema::Sema sema(diag);
+    sema.setTargetTriple(target::TargetTriple::parse("x86_64-pc-windows-msvc"));
+    EXPECT_TRUE(sema.analyze(prog));
+
+    ir::IRBuilder irBuilder(sema.checker());
+    auto mod = irBuilder.buildModule(prog, "cross_windows");
+    EXPECT_TRUE(mod != nullptr);
+
+    backend::LLVMCodeGen codegen(*mod, diag);
+    codegen.setTargetTriple("x86_64-pc-windows-msvc");
+
+    auto tempDir = std::filesystem::temp_directory_path();
+    static int winRunId = 0;
+    auto llPath = tempDir / ("tamarin_cross_win_" + std::to_string(++winRunId) + ".ll");
+    auto oPath = tempDir / ("tamarin_cross_win_" + std::to_string(winRunId) + ".obj");
+
+    EXPECT_TRUE(codegen.emitLLVMIRToFile(llPath));
+
+    std::ifstream inLL(llPath);
+    std::string llContent((std::istreambuf_iterator<char>(inLL)), std::istreambuf_iterator<char>());
+    EXPECT_TRUE(llContent.find("target triple = \"x86_64-pc-windows-msvc\"") != std::string::npos);
+
+    // Compile to COFF object file via clang
+    EXPECT_TRUE(codegen.compileToObject(llPath, oPath, 2));
+    EXPECT_TRUE(std::filesystem::exists(oPath));
+    EXPECT_TRUE(std::filesystem::file_size(oPath) > 0);
+
+    // Read header machine to verify COFF x86_64 (IMAGE_FILE_MACHINE_AMD64 = 0x8664)
+    std::ifstream inObj(oPath, std::ios::binary);
+    unsigned char header[2] = {0};
+    inObj.read(reinterpret_cast<char*>(header), 2);
+    EXPECT_EQ(header[0], 0x64);
+    EXPECT_EQ(header[1], 0x86);
+
+    std::error_code ec;
+    std::filesystem::remove(llPath, ec);
+    std::filesystem::remove(oPath, ec);
+    return true;
+}
+
 TAMARIN_TEST(BinaryFormats, StaticAndDynamicExecutableEmission) {
     SourceManager sm;
     auto fileId = sm.addSource("linkage_test.tmn",

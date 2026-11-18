@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(Tamarin
-    VERSION 0.15.0
+    VERSION 0.16.0
     LANGUAGES CXX
     DESCRIPTION "Tamarin - A C-Simple, Memory-Safe Systems Language Compiler"
 )
@@ -10,17 +10,46 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ── MSVC Options ──────────────────────────────────────────────────────
+# ── Compiler Options ──────────────────────────────────────────────────
 if(MSVC)
     add_compile_options(/W4 /utf-8 /Zc:__cplusplus /EHsc /permissive-)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX)
+else()
+    add_compile_options(-Wall -Wextra)
+endif()
+
+find_package(Threads REQUIRED)
+
+# ── LLVM Discovery ────────────────────────────────────────────────────
+find_package(LLVM CONFIG QUIET)
+if(LLVM_FOUND)
+    message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} at ${LLVM_DIR}")
 endif()
 
 # ── Configurable Product Name ─────────────────────────────────────────
 set(TAMARIN_PRODUCT_NAME "Tamarin" CACHE STRING "Public product name")
 set(TAMARIN_CODENAME "tamarin" CACHE STRING "Internal codename")
 set(TAMARIN_FILE_EXTENSION ".tmn" CACHE STRING "Source file extension")
-set(TAMARIN_CLANG_PATH "C:/Program Files/LLVM/bin/clang.exe" CACHE FILEPATH "Path to clang compiler executable")
+
+if(LLVM_FOUND AND EXISTS "${LLVM_TOOLS_BINARY_DIR}/clang")
+    set(TAMARIN_CLANG_DETECT "${LLVM_TOOLS_BINARY_DIR}/clang")
+elseif(LLVM_FOUND AND EXISTS "${LLVM_TOOLS_BINARY_DIR}/clang.exe")
+    set(TAMARIN_CLANG_DETECT "${LLVM_TOOLS_BINARY_DIR}/clang.exe")
+elseif(WIN32)
+    find_program(TAMARIN_CLANG_DETECT NAMES clang.exe clang PATHS "C:/Program Files/LLVM/bin" ENV PATH)
+else()
+    find_program(TAMARIN_CLANG_DETECT NAMES clang clang-21 clang-20 clang-19 clang-18 clang-17 PATHS ENV PATH)
+endif()
+
+if(TAMARIN_CLANG_DETECT)
+    set(TAMARIN_CLANG_PATH "${TAMARIN_CLANG_DETECT}" CACHE FILEPATH "Path to clang compiler executable")
+else()
+    if(WIN32)
+        set(TAMARIN_CLANG_PATH "clang.exe" CACHE FILEPATH "Path to clang compiler executable")
+    else()
+        set(TAMARIN_CLANG_PATH "clang" CACHE FILEPATH "Path to clang compiler executable")
+    endif()
+endif()
 
 configure_file(
     "${CMAKE_SOURCE_DIR}/include/tamarin/config.h.in"
@@ -43,6 +72,10 @@ target_include_directories(tamarin_runtime PUBLIC
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_BINARY_DIR}/generated
 )
+target_link_libraries(tamarin_runtime PUBLIC Threads::Threads)
+if(CMAKE_DL_LIBS)
+    target_link_libraries(tamarin_runtime PUBLIC ${CMAKE_DL_LIBS})
+endif()
 
 # ── Tamarin Runtime Library Static CRT (for statically linked executables) ──
 add_library(tamarin_runtime_static STATIC
@@ -53,6 +86,10 @@ target_include_directories(tamarin_runtime_static PUBLIC
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_BINARY_DIR}/generated
 )
+target_link_libraries(tamarin_runtime_static PUBLIC Threads::Threads)
+if(CMAKE_DL_LIBS)
+    target_link_libraries(tamarin_runtime_static PUBLIC ${CMAKE_DL_LIBS})
+endif()
 if(MSVC)
     set_property(TARGET tamarin_runtime_static PROPERTY
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

@@ -6,6 +6,7 @@
 #include "tamarin/ast/ast.h"
 #include "tamarin/lexer/lexer.h"
 #include "tamarin/diagnostics/diagnostic_engine.h"
+#include "tamarin/target/target_triple.h"
 
 #include <unordered_set>
 
@@ -19,6 +20,9 @@ public:
     [[nodiscard]] ast::Program parseProgram();
 
     void addKnownType(const std::string& name) { knownTypes_.insert(name); }
+
+    void setTargetTriple(target::TargetTriple triple) { targetTriple_ = std::move(triple); }
+    const target::TargetTriple& getTargetTriple() const { return targetTriple_; }
 
 private:
     // ── Token access ──────────────────────────────────────────────────
@@ -35,7 +39,8 @@ private:
 
     // ── Declarations ──────────────────────────────────────────────────
     ast::ImportDecl parseImport();
-    ast::DeclPtr parseTopDecl(bool defaultExtern = false, const std::string& defaultLinkage = "");
+    ast::DeclPtr parseTopDecl(bool defaultExtern = false, const std::string& defaultLinkage = "",
+                              std::shared_ptr<ast::CfgExpr> initialCfg = nullptr);
     ast::DeclPtr parseEnumDecl(bool isPublic = false);
     ast::DeclPtr parseTraitDecl(bool isPublic = false);
     ast::DeclPtr parseImplDecl();
@@ -111,12 +116,17 @@ private:
     ast::MatchCase parseMatchCase();
     ast::ExprPtr parseBracedInitializer(ast::TypePtr explicitType = nullptr);
 
+    // ── Conditional Compilation ────────────────────────────────────────
+    std::shared_ptr<ast::CfgExpr> parseCfgExpr();
+    std::shared_ptr<ast::CfgExpr> parseCfgItem();
+
     // ── State ─────────────────────────────────────────────────────────
     lexer::Lexer& lex_;
     DiagnosticEngine& diag_;
     lexer::Token current_;
     bool hadError_ = false;
     std::unordered_set<std::string> knownTypes_;
+    target::TargetTriple targetTriple_ = target::TargetTriple::getHost();
 };
 
 } // namespace tamarin::parser

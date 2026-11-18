@@ -6,6 +6,7 @@
 #include "tamarin/ast/ast.h"
 #include "tamarin/source/source_manager.h"
 #include "tamarin/diagnostics/diagnostic_engine.h"
+#include "tamarin/target/target_triple.h"
 
 #include <filesystem>
 #include <memory>
@@ -62,6 +63,9 @@ public:
     /// Resolve a dotted module path to a canonical filesystem path.
     std::optional<std::string> resolveModulePath(const std::string& dottedName, SourceLocation loc);
 
+    void setTargetTriple(target::TargetTriple triple) { targetTriple_ = std::move(triple); }
+    const target::TargetTriple& getTargetTriple() const { return targetTriple_; }
+
 private:
     std::shared_ptr<Module> loadModule(const std::string& canonicalPath, const std::string& logicalName, SourceLocation importLoc);
     bool checkCyclesAndOrder();
@@ -69,6 +73,7 @@ private:
     SourceManager& sm_;
     DiagnosticEngine& diag_;
     std::vector<std::string> searchRoots_;
+    target::TargetTriple targetTriple_ = target::TargetTriple::getHost();
 
     std::shared_ptr<Module> entryModule_;
     std::unordered_map<std::string, std::shared_ptr<Module>> modulesByPath_;
