@@ -57,6 +57,19 @@ static std::filesystem::path getSelfExeDir() {
     return std::filesystem::current_path();
 }
 
+static std::filesystem::path resolveOutputPath(const std::filesystem::path& inputPath,
+                                              const std::string& explicitOutput,
+                                              const std::string& outExt) {
+    if (!explicitOutput.empty()) {
+        return std::filesystem::path(explicitOutput);
+    }
+    if (inputPath.has_extension()) {
+        auto p = inputPath;
+        return p.replace_extension(outExt);
+    }
+    return std::filesystem::path(inputPath.string() + outExt);
+}
+
 static std::vector<std::string> gatherSearchRoots(const DriverOptions& options) {
     std::vector<std::string> searchRoots;
     std::filesystem::path inputPath(options.inputFile);
@@ -296,9 +309,7 @@ int Driver::build() {
     // 7. Output emission based on OutputKind
     if (options_.outputKind == DriverOptions::OutputKind::Obj) {
         auto outExt = triple.objectExtension();
-        auto objPath = options_.outputFile.empty()
-            ? (inputPath.has_extension() ? inputPath.replace_extension(outExt) : (inputPath.string() + outExt))
-            : std::filesystem::path(options_.outputFile);
+        auto objPath = resolveOutputPath(inputPath, options_.outputFile, outExt);
         if (!codegen.compileToObject(finalLLPath, objPath, options_.optLevel)) {
             return 1;
         }
@@ -306,9 +317,7 @@ int Driver::build() {
         return 0;
     } else if (options_.outputKind == DriverOptions::OutputKind::StaticLib) {
         auto outExt = triple.staticLibraryExtension();
-        auto libPath = options_.outputFile.empty()
-            ? (inputPath.has_extension() ? inputPath.replace_extension(outExt) : (inputPath.string() + outExt))
-            : std::filesystem::path(options_.outputFile);
+        auto libPath = resolveOutputPath(inputPath, options_.outputFile, outExt);
         if (!codegen.compileToStaticLibrary(finalLLPath, libPath, options_.optLevel)) {
             return 1;
         }
@@ -316,9 +325,7 @@ int Driver::build() {
         return 0;
     } else if (options_.outputKind == DriverOptions::OutputKind::SharedLib) {
         auto outExt = triple.sharedLibraryExtension();
-        auto dylibPath = options_.outputFile.empty()
-            ? (inputPath.has_extension() ? inputPath.replace_extension(outExt) : (inputPath.string() + outExt))
-            : std::filesystem::path(options_.outputFile);
+        auto dylibPath = resolveOutputPath(inputPath, options_.outputFile, outExt);
         if (!codegen.compileToSharedLibrary(finalLLPath, dylibPath, options_.optLevel)) {
             return 1;
         }
@@ -326,9 +333,7 @@ int Driver::build() {
         return 0;
     } else {
         auto outExt = triple.executableExtension();
-        auto exePath = options_.outputFile.empty()
-            ? (inputPath.has_extension() ? inputPath.replace_extension(outExt) : (inputPath.string() + outExt))
-            : std::filesystem::path(options_.outputFile);
+        auto exePath = resolveOutputPath(inputPath, options_.outputFile, outExt);
 
         if (!codegen.compileToExecutable(finalLLPath, exePath, options_.optLevel)) {
             return 1;
@@ -349,9 +354,7 @@ int Driver::execute() {
     auto outExt = triple.executableExtension();
 
     std::filesystem::path inputPath(options_.inputFile);
-    auto exePath = options_.outputFile.empty()
-        ? (inputPath.has_extension() ? inputPath.replace_extension(outExt) : (inputPath.string() + outExt))
-        : std::filesystem::path(options_.outputFile);
+    auto exePath = resolveOutputPath(inputPath, options_.outputFile, outExt);
 
     auto absExe = std::filesystem::absolute(exePath);
     std::string cmd = "\"" + absExe.string() + "\"";
