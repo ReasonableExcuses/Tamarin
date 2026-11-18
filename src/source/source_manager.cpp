@@ -58,9 +58,10 @@ SourceFileId
 SourceManager::addSource(std::string filename, std::string content) {
     auto id = static_cast<SourceFileId>(static_cast<uint32_t>(files_.size()));
     files_.push_back(SourceFile{
-        .id       = id,
-        .filename = std::move(filename),
-        .content  = std::move(content),
+        .id          = id,
+        .filename    = std::move(filename),
+        .content     = std::move(content),
+        .lineOffsets = {},
     });
     return id;
 }

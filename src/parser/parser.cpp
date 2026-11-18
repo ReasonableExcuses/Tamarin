@@ -460,7 +460,6 @@ ast::ImportDecl Parser::parseImport() {
 }
 
 std::shared_ptr<ast::CfgExpr> Parser::parseCfgExpr() {
-    auto loc = current_.location;
     expect(TokenKind::LParen, "expected '(' after '@cfg'");
     auto expr = parseCfgItem();
     expect(TokenKind::RParen, "expected ')' after '@cfg' expression");

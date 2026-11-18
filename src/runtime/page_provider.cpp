@@ -9,6 +9,8 @@
 #include <memory>
 #include <algorithm>
 #include <vector>
+#include <mutex>
+#include <unordered_map>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -16,6 +18,13 @@
 #endif
 #include <windows.h>
 #include <psapi.h>
+#else
+#include <sys/mman.h>
+#include <sys/resource.h>
+#include <unistd.h>
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#endif
 #endif
 
 namespace tamarin::runtime {
@@ -91,15 +100,6 @@ size_t WindowsPageProvider::getResidentWorkingSet() const {
 #endif
 
 #ifndef _WIN32
-#include <sys/mman.h>
-#include <sys/resource.h>
-#include <unistd.h>
-#include <mutex>
-#include <unordered_map>
-#if defined(__APPLE__)
-#include <mach/mach.h>
-#endif
-
 static std::mutex s_posixReservationMtx;
 static std::unordered_map<void*, size_t> s_posixReservations;
 

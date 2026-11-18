@@ -12,8 +12,19 @@
 
 namespace tamarin::parser {
 
+struct LoopAttributes {
+    int unrollCount = 0;
+    int vectorizeWidth = 0;
+    int interleaveCount = 0;
+    int vectorizeEnable = 0;
+
+    LoopAttributes() = default;
+    LoopAttributes(int unroll) : unrollCount(unroll) {}
+};
+
 class Parser {
 public:
+    using LoopAttributes = tamarin::parser::LoopAttributes;
     Parser(lexer::Lexer& lex, DiagnosticEngine& diag);
 
     /// Parse a complete translation unit.
@@ -66,15 +77,6 @@ private:
     // ── Statements ────────────────────────────────────────────────────
     ast::StmtPtr parseStmt();
     std::unique_ptr<ast::BlockStmt> parseBlock();
-    struct LoopAttributes {
-        int unrollCount = 0;
-        int vectorizeWidth = 0;
-        int interleaveCount = 0;
-        int vectorizeEnable = 0;
-
-        LoopAttributes() = default;
-        LoopAttributes(int unroll) : unrollCount(unroll) {}
-    };
 
     ast::StmtPtr parseStatementOrBlock();
     ast::StmtPtr parseVarDeclOrExprStmt(bool isConst);

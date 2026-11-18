@@ -57,7 +57,7 @@ public:
     DiagnosticEngine(const DiagnosticEngine&) = delete;
     DiagnosticEngine& operator=(const DiagnosticEngine&) = delete;
     DiagnosticEngine(DiagnosticEngine&&) noexcept = default;
-    DiagnosticEngine& operator=(DiagnosticEngine&&) noexcept = default;
+    DiagnosticEngine& operator=(DiagnosticEngine&&) = delete;
 
     /// Report a diagnostic at the given source location.
     void report(SourceLocation loc, Severity sev, std::string message);
