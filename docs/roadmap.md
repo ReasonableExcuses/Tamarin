@@ -23,13 +23,13 @@ The path to **Version 1.0 GA** focuses on cross-platform portability, high-perfo
 ## 2. Release Schedule and Milestones
 
 ```text
-  [ v0.16.0 Current ] ──► Cross-Platform Native Portability, @cfg, Multi-OS CI (436/436 Passed)
+  [ v0.16.0 Current ] ──► Cross-Platform Native Portability, @cfg, Multi-OS CI (437/437 Passed)
           │
           ▼
   [ v0.17.0 ] ──────────► High-Performance Standard Library: Swiss Table & Zero-Alloc JSON
           │
           ▼
-  [ v0.18.0 ] ──────────► Tooling: Language Server Protocol (tamarin-lsp) & tamarin-bindgen
+  [ v0.18.0 ] ──────────► Tooling & Ecosystem: tamarin-lsp, tamarin-bindgen, & GUI Packages (Raylib/SDL3)
           │
           ▼
   [ v0.19.0 ] ──────────► Self-Hosting Compiler Prototype (Tamarin Frontend in Tamarin)
@@ -71,7 +71,7 @@ The path to **Version 1.0 GA** focuses on cross-platform portability, high-perfo
 
 ---
 
-### Milestone v0.18.0: Language Server Protocol (`tamarin-lsp`) and `tamarin-bindgen`
+### Milestone v0.18.0: Developer Tooling (`tamarin-lsp`), `tamarin-bindgen`, and GUI Ecosystem
 *Target Date:* Q3 2027
 
 - **`tamarin-lsp` (Language Server Protocol Engine)**:
@@ -79,8 +79,16 @@ The path to **Version 1.0 GA** focuses on cross-platform portability, high-perfo
   - Provide real-time semantic diagnostics, error squiggles, and warning reporting.
   - Implement autocompletion, hover documentation, go-to-definition, and find-all-references using persistent AST symbol graphs.
   - Publish official VS Code, Neovim, and Helix editor extensions.
-- **`tamarin-bindgen`**:
+- **`tamarin-bindgen` (Automatic C/C++ Binding Generator)**:
   - Clang LibTooling-based C/C++ header parser that automatically generates idiomatic `@c_layout` and `extern "C"` Tamarin bindings from arbitrary C headers.
+  - Automates type translation (`char*` -> `string_view` / raw pointer, C structs -> `@c_layout struct`, enums, and callback function pointers).
+- **GUI & Graphics Ecosystem (Option B Architecture)**:
+  - Clean separation of concerns: GUI and graphics run via high-performance C ABI interop in package space, keeping the compiler core and standard library lightweight, embeddable, and free of massive C++ graphics engine dependencies.
+  - Use `tamarin-bindgen` to generate and maintain official community bindings:
+    - **Raylib (`tamarin-raylib`)**: Fast, lightweight 2D/3D hardware-accelerated graphics, windowing, audio, and game loop primitives.
+    - **SDL3 (`tamarin-sdl3`)**: Industry-standard cross-platform window management, hardware event handling, and GPU rendering pipelines.
+    - **Dear ImGui (`tamarin-imgui`)**: High-performance immediate-mode GUI for developer tooling, debuggers, game UI, and native desktop dashboards.
+  - Showcase example applications distributed via `troop add` templates (`tamarin init --template=raylib-game`).
 
 ---
 
