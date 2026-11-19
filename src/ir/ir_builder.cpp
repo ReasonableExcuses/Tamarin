@@ -205,6 +205,23 @@ ValueId IRBuilder::emitCastIfNeeded(ValueId val, const sema::Type* fromTy, const
     if (fromTy->isArray() && toTy->isArrayView() && *fromTy->elementType == *toTy->elementType) {
         return val;
     }
+    if ((fromTy->isArrayView() || fromTy->isArray()) && toTy->isPointer()) {
+        Instruction zeroConst;
+        zeroConst.opcode = Opcode::IConst;
+        zeroConst.result = nextValueId();
+        zeroConst.intImm = 0;
+        zeroConst.type   = checker_.context().getI64();
+        emit(zeroConst);
+
+        Instruction gep;
+        gep.opcode = Opcode::GetArrayElemPtr;
+        gep.result = nextValueId();
+        gep.op1    = val;
+        gep.op2    = zeroConst.result;
+        gep.type   = (fromTy->elementType) ? fromTy->elementType : checker_.context().getU8();
+        emit(gep);
+        return gep.result;
+    }
     Instruction castInst;
     castInst.opcode = Opcode::Cast;
     castInst.result = nextValueId();
@@ -2143,12 +2160,18 @@ void IRBuilder::lowerVarDecl(VarDeclStmt& decl) {
 
         if (decl.initializer) {
             ValueId refVal = InvalidValue;
-            if (decl.initializer->kind == ExprKind::Identifier ||
-                decl.initializer->kind == ExprKind::Field ||
-                decl.initializer->kind == ExprKind::This) {
-                refVal = getStructPointer(*decl.initializer);
-            } else {
+            auto initTy = checker_.getExprType(decl.initializer.get());
+            if (varTy->isPointer()) {
                 refVal = lowerExpr(*decl.initializer);
+                refVal = emitCastIfNeeded(refVal, initTy, varTy);
+            } else {
+                if (decl.initializer->kind == ExprKind::Identifier ||
+                    decl.initializer->kind == ExprKind::Field ||
+                    decl.initializer->kind == ExprKind::This) {
+                    refVal = getStructPointer(*decl.initializer);
+                } else {
+                    refVal = lowerExpr(*decl.initializer);
+                }
             }
 
             Instruction store;
@@ -3784,7 +3807,7 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                     loadRef.type   = ty; // ptr
                     emit(loadRef);
 
-                    if (!ty->isPointer) {
+                    if (ty->isRef()) {
                         Instruction loadVal;
                         loadVal.opcode = Opcode::Load;
                         loadVal.result = nextValueId();
@@ -4129,21 +4152,84 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
             auto rhs = lowerExpr(*bin.rhs);
             auto lhsTy = checker_.getExprType(bin.lhs.get());
             auto rhsTy = checker_.getExprType(bin.rhs.get());
-            if (lhsTy && lhsTy->isReference()) lhsTy = lhsTy->elementType;
-            if (rhsTy && rhsTy->isReference()) rhsTy = rhsTy->elementType;
+            if (lhsTy && lhsTy->isRef()) lhsTy = lhsTy->elementType;
+            if (rhsTy && rhsTy->isRef()) rhsTy = rhsTy->elementType;
             auto ty = checker_.getExprType(&expr);
-            if (ty && ty->isReference()) ty = ty->elementType;
+            if (ty && ty->isRef()) ty = ty->elementType;
+
+            // Pointer arithmetic
+            if (bin.op == BinaryOp::Add) {
+                if (lhsTy && lhsTy->isPointer() && rhsTy && rhsTy->isInteger()) {
+                    Instruction gep;
+                    gep.opcode = Opcode::GetArrayElemPtr;
+                    gep.result = nextValueId();
+                    gep.op1    = lhs;
+                    gep.op2    = rhs;
+                    gep.type   = lhsTy->elementType ? lhsTy->elementType : checker_.context().getI8();
+                    emit(gep);
+                    return gep.result;
+                }
+                if (rhsTy && rhsTy->isPointer() && lhsTy && lhsTy->isInteger()) {
+                    Instruction gep;
+                    gep.opcode = Opcode::GetArrayElemPtr;
+                    gep.result = nextValueId();
+                    gep.op1    = rhs;
+                    gep.op2    = lhs;
+                    gep.type   = rhsTy->elementType ? rhsTy->elementType : checker_.context().getI8();
+                    emit(gep);
+                    return gep.result;
+                }
+            }
+            if (bin.op == BinaryOp::Sub) {
+                if (lhsTy && lhsTy->isPointer() && rhsTy && rhsTy->isInteger()) {
+                    Instruction zeroConst;
+                    zeroConst.opcode = Opcode::IConst;
+                    zeroConst.result = nextValueId();
+                    zeroConst.intImm = 0;
+                    zeroConst.type   = rhsTy;
+                    emit(zeroConst);
+
+                    Instruction neg;
+                    neg.opcode = Opcode::Sub;
+                    neg.result = nextValueId();
+                    neg.op1    = zeroConst.result;
+                    neg.op2    = rhs;
+                    neg.type   = rhsTy;
+                    emit(neg);
+
+                    Instruction gep;
+                    gep.opcode = Opcode::GetArrayElemPtr;
+                    gep.result = nextValueId();
+                    gep.op1    = lhs;
+                    gep.op2    = neg.result;
+                    gep.type   = lhsTy->elementType ? lhsTy->elementType : checker_.context().getI8();
+                    emit(gep);
+                    return gep.result;
+                }
+            }
 
             if (bin.op == BinaryOp::Lt || bin.op == BinaryOp::LtEq ||
                 bin.op == BinaryOp::Gt || bin.op == BinaryOp::GtEq ||
                 bin.op == BinaryOp::EqEq || bin.op == BinaryOp::NotEq) {
-                const sema::Type* commonTy = lhsTy;
-                if (lhsTy && rhsTy && *lhsTy != *rhsTy) {
-                    commonTy = checker_.context().getCommonArithmeticType(lhsTy, rhsTy);
-                    lhs = emitCastIfNeeded(lhs, lhsTy, commonTy);
-                    rhs = emitCastIfNeeded(rhs, rhsTy, commonTy);
-                    lhsTy = commonTy;
-                    rhsTy = commonTy;
+                if (lhsTy && rhsTy && lhsTy->isPointer() && rhsTy->isPointer()) {
+                    // Direct pointer comparison
+                } else if (lhsTy && rhsTy && ((lhsTy->isPointer() && rhsTy->isInteger()) || (rhsTy->isPointer() && lhsTy->isInteger()))) {
+                    if (lhsTy->isPointer()) {
+                        rhs = emitCastIfNeeded(rhs, rhsTy, lhsTy);
+                        rhsTy = lhsTy;
+                    } else {
+                        lhs = emitCastIfNeeded(lhs, lhsTy, rhsTy);
+                        lhsTy = rhsTy;
+                    }
+                } else {
+                    const sema::Type* commonTy = lhsTy;
+                    if (lhsTy && rhsTy && *lhsTy != *rhsTy) {
+                        commonTy = checker_.context().getCommonArithmeticType(lhsTy, rhsTy);
+                        lhs = emitCastIfNeeded(lhs, lhsTy, commonTy);
+                        rhs = emitCastIfNeeded(rhs, rhsTy, commonTy);
+                        lhsTy = commonTy;
+                        rhsTy = commonTy;
+                    }
                 }
             } else {
                 if (lhsTy && lhsTy->isSIMDVector() && rhsTy && rhsTy->isNumeric()) {
@@ -4449,7 +4535,7 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                     ptr = b->ptr;
                     ty  = b->type;
                     if (ty && ty->isReference()) {
-                        if (!ty->isPointer) {
+                        if (ty->isRef()) {
                             Instruction loadRef;
                             loadRef.opcode = Opcode::Load;
                             loadRef.result = nextValueId();

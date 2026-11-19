@@ -1723,7 +1723,7 @@ const Type* TypeChecker::checkIdentifier(IdentifierExpr& expr) {
     }
 
     if (!sym->isFunction && !sym->isParameter && !sym->isConst && !sym->type->isArray() &&
-        !sym->type->isReference() && !isAssigned(expr.name)) {
+        !sym->type->isRef() && !isAssigned(expr.name)) {
         if (isMoved(expr.name)) {
             diag_.report(expr.loc, Severity::Error,
                          "use of moved variable '" + expr.name + "'");
@@ -1838,6 +1838,13 @@ const Type* TypeChecker::checkBinary(BinaryExpr& expr) {
                 if (lhsTy->isNumeric() && rhsTy->isNumeric()) {
                     return tc_.getBool();
                 }
+                if (lhsTy->isPointer() && rhsTy->isPointer()) {
+                    return tc_.getBool();
+                }
+                if ((expr.op == BinaryOp::EqEq || expr.op == BinaryOp::NotEq) &&
+                    ((lhsTy->isPointer() && rhsTy->isInteger()) || (rhsTy->isPointer() && lhsTy->isInteger()))) {
+                    return tc_.getBool();
+                }
                 diag_.report(expr.loc, Severity::Error,
                              "type mismatch in comparison: " + lhsTy->toString() +
                              " vs " + rhsTy->toString());
@@ -1853,6 +1860,16 @@ const Type* TypeChecker::checkBinary(BinaryExpr& expr) {
             return tc_.getBool();
 
         default:
+            // Pointer arithmetic
+            if (expr.op == BinaryOp::Add) {
+                if (lhsTy->isPointer() && rhsTy->isInteger()) return lhsTy;
+                if (lhsTy->isInteger() && rhsTy->isPointer()) return rhsTy;
+            }
+            if (expr.op == BinaryOp::Sub) {
+                if (lhsTy->isPointer() && rhsTy->isInteger()) return lhsTy;
+                if (lhsTy->isPointer() && rhsTy->isPointer()) return tc_.getI64();
+            }
+
             // Shift operations: result type is always the type of the left operand
             if (expr.op == BinaryOp::Shl || expr.op == BinaryOp::Shr) {
                 if (!lhsTy->isInteger() || !rhsTy->isInteger()) {
@@ -2097,11 +2114,11 @@ const Type* TypeChecker::checkAssign(AssignExpr& expr) {
                 diag_.report(expr.loc, Severity::Error,
                              "cannot assign to const variable '" + id.name + "'");
             }
-            if (sym->type->isReference() && sym->type->isConstRef) {
+            if (sym->type->isRef() && sym->type->isConstRef) {
                 diag_.report(expr.loc, Severity::Error,
                              "cannot assign to const reference '" + id.name + "'");
             }
-            if (expr.op != AssignOp::Assign && !sym->type->isReference() && !isAssigned(id.name)) {
+            if (expr.op != AssignOp::Assign && !sym->type->isRef() && !isAssigned(id.name)) {
                 diag_.report(expr.loc, Severity::Error,
                              "variable '" + id.name + "' is used before being initialized");
                 if (isMoved(id.name)) {
@@ -2112,7 +2129,7 @@ const Type* TypeChecker::checkAssign(AssignExpr& expr) {
                                  "variable '" + id.name + "' is used before being initialized");
                 }
             }
-            targetTy = sym->type->isReference() ? sym->type->elementType : sym->type;
+            targetTy = sym->type->isRef() ? sym->type->elementType : sym->type;
             setExprType(expr.target.get(), targetTy);
         }
     } else if (expr.target->kind == ExprKind::Field) {
@@ -2236,6 +2253,10 @@ const Type* TypeChecker::checkAssign(AssignExpr& expr) {
             }
             auto ptrTy = checkExpr(*un.operand);
             if (ptrTy && ptrTy->isReference()) {
+                if (ptrTy->isConstRef) {
+                    diag_.report(expr.loc, Severity::Error,
+                                 "cannot assign through pointer/reference to const");
+                }
                 targetTy = ptrTy->elementType;
             } else {
                 targetTy = ptrTy;
@@ -2266,7 +2287,12 @@ const Type* TypeChecker::checkAssign(AssignExpr& expr) {
                      "cannot copy or assign resource-owning class '" + typeName + "'; use 'move(" + srcName + ")' to transfer ownership");
     }
 
-    if (*targetTy != *valueTy && !valueTy->isImplicitlyConvertibleTo(*targetTy)) {
+    bool canAssign = (*targetTy == *valueTy || valueTy->isImplicitlyConvertibleTo(*targetTy));
+    if (!canAssign && targetTy->isPointer() && expr.value->kind == ExprKind::IntLiteral &&
+        static_cast<IntLiteralExpr&>(*expr.value).value == 0) {
+        canAssign = true;
+    }
+    if (!canAssign) {
         diag_.report(expr.loc, Severity::Error,
                      "cannot assign " + valueTy->toString() + " to " + targetTy->toString());
     }
@@ -3601,6 +3627,13 @@ const Type* TypeChecker::checkIndex(IndexExpr& expr) {
     auto idxTy = checkExpr(*expr.index);
 
     if (!arrTy) return tc_.getI32();
+    if (arrTy->isPointer()) {
+        if (!idxTy || !idxTy->isInteger()) {
+            diag_.report(expr.index->loc, Severity::Error,
+                         "pointer subscript index must be an integer, got " + (idxTy ? idxTy->toString() : "unknown"));
+        }
+        return arrTy->elementType ? arrTy->elementType : tc_.getI32();
+    }
     if (arrTy->isReference()) arrTy = arrTy->elementType;
 
     if (arrTy->isSlab()) {
@@ -5205,6 +5238,10 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
                 if (!canInit && varTy->isSlab() && v.initializer->kind == ExprKind::Construct) {
                     canInit = true;
                 }
+                if (!canInit && varTy->isPointer() && v.initializer->kind == ExprKind::IntLiteral &&
+                    static_cast<IntLiteralExpr&>(*v.initializer).value == 0) {
+                    canInit = true;
+                }
                 if (!canInit) {
                     diag_.report(v.initializer->loc, Severity::Error,
                                  "cannot initialize " + varTy->toString() +
@@ -5216,9 +5253,11 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
             // Reference checking
             if (varTy->isReference()) {
                 if (!v.initializer) {
-                    diag_.report(v.loc, Severity::Error,
-                                 "reference variable '" + v.name + "' must be initialized");
-                } else if (!varTy->isConstRef && (!initTy || !initTy->isReference())) {
+                    if (varTy->isRef()) {
+                        diag_.report(v.loc, Severity::Error,
+                                     "reference variable '" + v.name + "' must be initialized");
+                    }
+                } else if (varTy->isRef() && !varTy->isConstRef && (!initTy || !initTy->isReference())) {
                     bool isLValue = (v.initializer->kind == ExprKind::Identifier ||
                                      v.initializer->kind == ExprKind::Field ||
                                      v.initializer->kind == ExprKind::Index);

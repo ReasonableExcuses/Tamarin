@@ -816,5 +816,56 @@ TAMARIN_TEST(Parser, ParseCfgDirectives) {
     return true;
 }
 
+TAMARIN_TEST(Parser, ParsePrefixPointerDeclarations) {
+    SourceManager sm;
+    auto fileId = sm.addSource("test.tmn",
+        "int main() {\n"
+        "    *u8 x;\n"
+        "    *const u8 str = \"hello\";\n"
+        "    **int pp;\n"
+        "    return 0;\n"
+        "}\n"
+    );
+
+    std::ostringstream errs;
+    DiagnosticEngine diag(sm, errs);
+    lexer::Lexer lex(sm, fileId, diag);
+    parser::Parser p(lex, diag);
+
+    auto prog = p.parseProgram();
+    EXPECT_FALSE(diag.hasErrors());
+    EXPECT_EQ(prog.decls.size(), 1);
+
+    auto& fn = static_cast<FunctionDecl&>(*prog.decls[0]);
+    EXPECT_EQ(fn.name, "main");
+    EXPECT_NE(fn.body, nullptr);
+    EXPECT_EQ(fn.body->stmts.size(), 4);
+
+    EXPECT_EQ(fn.body->stmts[0]->kind, StmtKind::VarDecl);
+    auto& vd0 = static_cast<VarDeclStmt&>(*fn.body->stmts[0]);
+    EXPECT_EQ(vd0.name, "x");
+    EXPECT_EQ(vd0.type->kind, TypeNodeKind::Reference);
+    auto& rt0 = static_cast<ReferenceTypeNode&>(*vd0.type);
+    EXPECT_TRUE(rt0.isPointer);
+
+    EXPECT_EQ(fn.body->stmts[1]->kind, StmtKind::VarDecl);
+    auto& vd1 = static_cast<VarDeclStmt&>(*fn.body->stmts[1]);
+    EXPECT_EQ(vd1.name, "str");
+    EXPECT_EQ(vd1.type->kind, TypeNodeKind::Reference);
+    auto& rt1 = static_cast<ReferenceTypeNode&>(*vd1.type);
+    EXPECT_TRUE(rt1.isPointer);
+    EXPECT_TRUE(rt1.isConst);
+
+    EXPECT_EQ(fn.body->stmts[2]->kind, StmtKind::VarDecl);
+    auto& vd2 = static_cast<VarDeclStmt&>(*fn.body->stmts[2]);
+    EXPECT_EQ(vd2.name, "pp");
+    EXPECT_EQ(vd2.type->kind, TypeNodeKind::Reference);
+    auto& rt2 = static_cast<ReferenceTypeNode&>(*vd2.type);
+    EXPECT_TRUE(rt2.isPointer);
+    EXPECT_EQ(rt2.referentType->kind, TypeNodeKind::Reference);
+
+    return true;
+}
+
 
 

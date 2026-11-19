@@ -113,6 +113,34 @@ bool Parser::isTypeNameKind(TokenKind k) const {
 
 bool Parser::isTypeName() {
     auto k = current_.kind;
+    if (k == TokenKind::Star) {
+        size_t offset = 0;
+        while (lex_.peek(offset).kind == TokenKind::Star) {
+            offset++;
+        }
+        auto nextTok = lex_.peek(offset);
+        auto nextK = nextTok.kind;
+        if (isTypeNameKind(nextK) || nextK == TokenKind::Const ||
+            nextK == TokenKind::Struct || nextK == TokenKind::Class ||
+            nextK == TokenKind::Interface) {
+            return true;
+        }
+        if (nextK == TokenKind::Identifier) {
+            std::string name(nextTok.text);
+            if (knownTypes_.count(name)) return true;
+            if (lex_.peek(offset + 1).kind == TokenKind::ColonColon &&
+                lex_.peek(offset + 2).kind == TokenKind::Identifier) {
+                return true;
+            }
+            if (lex_.peek(offset + 1).kind == TokenKind::Lt) {
+                return true;
+            }
+            if (lex_.peek(offset + 1).kind == TokenKind::Identifier) {
+                return true;
+            }
+        }
+        return false;
+    }
     if (isTypeNameKind(k) || k == TokenKind::Const || k == TokenKind::Struct ||
         k == TokenKind::Class || k == TokenKind::Interface) {
         return true;
@@ -233,8 +261,9 @@ TypePtr Parser::parseType() {
     bool isConst = match(TokenKind::Const);
 
     if (match(TokenKind::Star)) {
+        bool pointeeConst = match(TokenKind::Const);
         auto pointee = parseType();
-        return std::make_unique<ReferenceTypeNode>(std::move(pointee), isConst, loc, /*isPtr=*/true);
+        return std::make_unique<ReferenceTypeNode>(std::move(pointee), isConst || pointeeConst, loc, /*isPtr=*/true);
     }
 
     TypePtr baseType;
@@ -2502,6 +2531,11 @@ ExprPtr Parser::parsePrimary() {
     if (check(TokenKind::False)) {
         advance();
         return std::make_unique<BoolLiteralExpr>(false, loc);
+    }
+
+    // Null literal
+    if (match(TokenKind::Null)) {
+        return std::make_unique<IntLiteralExpr>(0, loc);
     }
 
     // String literal

@@ -114,7 +114,7 @@ const Type* TypeContext::getTuple(std::vector<const Type*> elements) {
 
 const Type* TypeContext::getReference(const Type* elem, bool isConst, bool isPointer) {
     for (auto& t : arena_) {
-        if (t->kind == TypeKind::Reference && t->elementType == elem && t->isConstRef == isConst && t->isPointer == isPointer) {
+        if (t->kind == TypeKind::Reference && t->elementType == elem && t->isConstRef == isConst && t->isRawPointer == isPointer) {
             return t.get();
         }
     }
@@ -122,7 +122,7 @@ const Type* TypeContext::getReference(const Type* elem, bool isConst, bool isPoi
     t->kind = TypeKind::Reference;
     t->elementType = elem;
     t->isConstRef = isConst;
-    t->isPointer = isPointer;
+    t->isRawPointer = isPointer;
     arena_.push_back(std::move(t));
     return arena_.back().get();
 }
