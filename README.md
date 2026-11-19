@@ -9,8 +9,8 @@
 <h1 align="center">Tamarin</h1>
 
 <p align="center">
-  <a href="https://github.com/tamarin-lang/tamarin/actions/workflows/ci.yml">
-    <img src="https://github.com/tamarin-lang/tamarin/actions/workflows/ci.yml/badge.svg" alt="Tamarin CI Status">
+  <a href="https://github.com/ReasonableExcuses/Tamarin/actions/workflows/ci.yml">
+    <img src="https://github.com/ReasonableExcuses/Tamarin/actions/workflows/ci.yml/badge.svg" alt="Tamarin CI Status">
   </a>
 </p>
 
