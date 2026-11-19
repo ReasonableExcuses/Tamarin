@@ -124,7 +124,14 @@ When passing data across foreign function boundaries, strict semantic rules are 
 
 ### 4.3 Slices and Strings
 - Slices `[]T` are lowered as 16-byte structs: `(T* data, uint64_t len)`.
-- Strings in Tamarin are immutable UTF-8 slices `(const char* data, uint64_t len)`. For C functions requiring null-terminated strings (`const char*`), use `string.as_cstr()`.
+- Strings in Tamarin are immutable UTF-8 slices `(const char* data, uint64_t len)`. For C functions requiring null-terminated strings (`const char*`), string literals implicitly decay to C-compatible pointer types.
+
+### 4.4 Raw C FFI Pointers and String Literal Decay
+Tamarin supports raw C pointers for seamless FFI:
+- **Prefix Pointer Syntax**: Raw C pointers can be declared with prefix `*` (`*u8 ptr;`, `*const u8 cstr;`, `**int handle;`) as well as suffix `*` (`u8* ptr;`, `const u8* cstr;`).
+- **Uninitialized Pointer Declarations**: Unlike safe `&T` references which must be bound immediately to an lvalue, raw C pointers `*T` can be declared uninitialized and assigned later (`ptr = &val;`). Definite assignment analysis ensures uninitialized pointers are not read before assignment.
+- **String Literal Decay**: String literals implicitly decay to C-compatible pointer types (`*const u8`, `const u8*`, and `*u8` / `u8*` when interfacing with C functions such as `puts`), passing the underlying null-terminated byte buffer directly to C functions without manual conversion.
+- **Pointer Arithmetic and Indexing**: Raw pointers support pointer arithmetic (`p + n`, `p - n`, `p2 - p1`) and direct subscript indexing (`p[i]`).
 
 ---
 
