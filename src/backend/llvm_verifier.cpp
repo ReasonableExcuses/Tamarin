@@ -4,6 +4,7 @@
 
 #include "tamarin/backend/llvm_verifier.h"
 #include "tamarin/config.h"
+#include "tamarin/target/process_util.h"
 
 #include <atomic>
 #include <cstdio>
@@ -57,49 +58,25 @@ const std::string& LLVMVerifier::getTargetTriple() const {
     return targetTriple_;
 }
 
-static std::string runCommand(const std::string& cmd, int& exitCode) {
-    std::string result;
-#ifdef _WIN32
-    std::string wrapped = "\"" + cmd + "\"";
-    FILE* pipe = _popen(wrapped.c_str(), "r");
-#else
-    FILE* pipe = popen(cmd.c_str(), "r");
-#endif
-    if (!pipe) {
-        exitCode = -1;
-        return "failed to open process pipe";
-    }
-
-    char buffer[512];
-    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-        result += buffer;
-    }
-#ifdef _WIN32
-    exitCode = _pclose(pipe);
-#else
-    exitCode = pclose(pipe);
-#endif
-    return result;
-}
-
 VerificationResult LLVMVerifier::verifyFile(const std::filesystem::path& path) {
     VerificationResult res;
     std::string triple = targetTriple_;
     if (triple.empty()) {
         triple = target::TargetTriple::getHost().str();
     }
-#ifdef _WIN32
-    std::string devNull = "NUL";
-    std::string cmd = "\"" + clangPath_ + "\" -x ir -c --target=" + triple +
-                      " -Wno-override-module \"" + path.string() + "\" -o " + devNull + " 2>&1";
-#else
-    std::string devNull = "/dev/null";
-    std::string cmd = "\"" + clangPath_ + "\" -x ir -c --target=" + triple +
-                      " -Wno-override-module \"" + path.string() + "\" -o " + devNull + " 2>&1";
-#endif
+    std::string devNull = target::TargetTriple::getHost().isWindows() ? "NUL" : "/dev/null";
+    std::vector<std::string> args = {
+        clangPath_,
+        "-x", "ir",
+        "-c",
+        "--target=" + triple,
+        "-Wno-override-module",
+        path.string(),
+        "-o", devNull
+    };
 
     int exitCode = 0;
-    std::string output = runCommand(cmd, exitCode);
+    std::string output = target::runProcessWithCapture(args, exitCode);
 
     if (exitCode != 0) {
         res.ok = false;

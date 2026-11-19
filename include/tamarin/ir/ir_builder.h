@@ -154,6 +154,12 @@ private:
 
     // Fallback dead instruction storage
     Instruction deadInst_;
+
+    int exprDepth_ = 0;
+    int stmtDepth_ = 0;
+    static constexpr int MAX_EXPR_DEPTH = 256;
+    static constexpr int MAX_STMT_DEPTH = 256;
+    ValueId lowerBinaryOpNode(ast::BinaryExpr& bin, ValueId lhs, ValueId rhs);
 };
 
 } // namespace tamarin::ir

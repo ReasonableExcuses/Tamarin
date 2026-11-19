@@ -240,6 +240,7 @@ private:
     const Type* checkStringLiteral(ast::StringLiteralExpr& expr);
     const Type* checkIdentifier(ast::IdentifierExpr& expr);
     const Type* checkBinary(ast::BinaryExpr& expr);
+    const Type* checkBinaryOpTypes(ast::BinaryExpr& expr, const Type* lhsTy, const Type* rhsTy);
     const Type* checkUnary(ast::UnaryExpr& expr);
     const Type* checkAssign(ast::AssignExpr& expr);
     const Type* checkCall(ast::CallExpr& expr);
@@ -336,6 +337,10 @@ private:
     std::vector<std::unique_ptr<ast::FunctionDecl>> ownedMonomorphizedFunctions_;
     std::vector<std::unique_ptr<ast::StructDecl>> ownedMonomorphizedStructs_;
     std::vector<std::unique_ptr<ast::EnumDecl>> ownedMonomorphizedEnums_;
+    int exprDepth_ = 0;
+    int stmtDepth_ = 0;
+    static constexpr int MAX_EXPR_DEPTH = 256;
+    static constexpr int MAX_STMT_DEPTH = 256;
 };
 
 } // namespace tamarin::sema

@@ -13,6 +13,7 @@
 #include "tamarin/backend/llvm_verifier.h"
 #include "tamarin/backend/c_header_generator.h"
 #include "tamarin/target/target_triple.h"
+#include "tamarin/target/process_util.h"
 
 #include <iostream>
 #include <fstream>
@@ -357,14 +358,7 @@ int Driver::execute() {
     auto exePath = resolveOutputPath(inputPath, options_.outputFile, outExt);
 
     auto absExe = std::filesystem::absolute(exePath);
-    std::string cmd = "\"" + absExe.string() + "\"";
-#ifdef _WIN32
-    std::string wrapped = "\"" + cmd + "\"";
-    int ret = std::system(wrapped.c_str());
-#else
-    int ret = std::system(cmd.c_str());
-#endif
-    return ret;
+    return target::runProcess({ absExe.string() });
 }
 
 } // namespace tamarin::driver

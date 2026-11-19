@@ -529,10 +529,7 @@ struct Type {
             }
             if (isArray() || isArrayView()) {
                 if (elementType && (*elementType == *targetElem || targetElem->isVoid())) {
-                    if (target.isPointer() && (targetElem->kind == TypeKind::U8 || targetElem->kind == TypeKind::I8)) {
-                        return true;
-                    }
-                    if (isConst && !target.isConstRef) return false;
+                    if ((isConst || (elementType && elementType->isConst)) && !target.isConstRef) return false;
                     return true;
                 }
             }

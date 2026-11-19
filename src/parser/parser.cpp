@@ -1302,13 +1302,35 @@ ParamDecl Parser::parseParam() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 std::unique_ptr<BlockStmt> Parser::parseBlock() {
+    if (++stmtDepth_ > MAX_STMT_DEPTH) {
+        diag_.report(current_.location, Severity::Error,
+                     "statement nesting depth exceeds maximum supported limit of " +
+                     std::to_string(MAX_STMT_DEPTH));
+        --stmtDepth_;
+        hadError_ = true;
+        return nullptr;
+    }
+    struct StmtDepthScope {
+        int& d;
+        ~StmtDepthScope() { --d; }
+    } scope{stmtDepth_};
+
     auto loc = current_.location;
     expect(TokenKind::LBrace, "expected '{'");
 
     std::vector<StmtPtr> stmts;
     while (!check(TokenKind::RBrace) && !check(TokenKind::Eof)) {
         try {
-            stmts.push_back(parseStmt());
+            auto s = parseStmt();
+            if (s) {
+                stmts.push_back(std::move(s));
+            } else {
+                while (!check(TokenKind::Eof) && !check(TokenKind::Semicolon) &&
+                       !check(TokenKind::RBrace)) {
+                    advance();
+                }
+                if (check(TokenKind::Semicolon)) advance();
+            }
         } catch (const std::runtime_error&) {
             while (!check(TokenKind::Eof) && !check(TokenKind::Semicolon) &&
                    !check(TokenKind::RBrace)) {
@@ -2022,11 +2044,25 @@ MatchCase Parser::parseMatchCase() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 ExprPtr Parser::parseExpr() {
+    if (++exprDepth_ > MAX_EXPR_DEPTH) {
+        diag_.report(current_.location, Severity::Error,
+                     "expression nesting depth exceeds maximum supported limit of " +
+                     std::to_string(MAX_EXPR_DEPTH));
+        --exprDepth_;
+        hadError_ = true;
+        return nullptr;
+    }
+    struct ExprDepthScope {
+        int& d;
+        ~ExprDepthScope() { --d; }
+    } scope{exprDepth_};
+
     return parseAssignment();
 }
 
 ExprPtr Parser::parseAssignment() {
     auto expr = parseConditional();
+    if (!expr) return nullptr;
 
     auto mapAssignOp = [](TokenKind k) -> std::optional<AssignOp> {
         switch (k) {
@@ -2059,6 +2095,7 @@ ExprPtr Parser::parseAssignment() {
 
 ExprPtr Parser::parseConditional() {
     auto expr = parseLogicOr();
+    if (!expr) return nullptr;
     if (check(TokenKind::Question)) {
         auto loc = current_.location;
         advance(); // consume '?'
@@ -2072,6 +2109,7 @@ ExprPtr Parser::parseConditional() {
 
 ExprPtr Parser::parseLogicOr() {
     auto expr = parseLogicAnd();
+    if (!expr) return nullptr;
     while (check(TokenKind::PipePipe)) {
         auto loc = current_.location;
         advance();
@@ -2084,6 +2122,7 @@ ExprPtr Parser::parseLogicOr() {
 
 ExprPtr Parser::parseLogicAnd() {
     auto expr = parseComparison();
+    if (!expr) return nullptr;
     while (check(TokenKind::AmpAmp)) {
         auto loc = current_.location;
         advance();
@@ -2096,6 +2135,7 @@ ExprPtr Parser::parseLogicAnd() {
 
 ExprPtr Parser::parseComparison() {
     auto expr = parseBitOr();
+    if (!expr) return nullptr;
 
     auto mapCmpOp = [](TokenKind k) -> std::optional<BinaryOp> {
         switch (k) {
@@ -2122,6 +2162,7 @@ ExprPtr Parser::parseComparison() {
 
 ExprPtr Parser::parseBitOr() {
     auto expr = parseBitXor();
+    if (!expr) return nullptr;
     while (check(TokenKind::Pipe)) {
         auto loc = current_.location;
         advance();
@@ -2134,6 +2175,7 @@ ExprPtr Parser::parseBitOr() {
 
 ExprPtr Parser::parseBitXor() {
     auto expr = parseBitAnd();
+    if (!expr) return nullptr;
     while (check(TokenKind::Caret)) {
         auto loc = current_.location;
         advance();
@@ -2146,6 +2188,7 @@ ExprPtr Parser::parseBitXor() {
 
 ExprPtr Parser::parseBitAnd() {
     auto expr = parseShift();
+    if (!expr) return nullptr;
     while (check(TokenKind::Amp)) {
         auto loc = current_.location;
         advance();
@@ -2158,6 +2201,7 @@ ExprPtr Parser::parseBitAnd() {
 
 ExprPtr Parser::parseShift() {
     auto expr = parseAddSub();
+    if (!expr) return nullptr;
     while (check(TokenKind::LtLt) || check(TokenKind::GtGt)) {
         auto loc = current_.location;
         auto op = check(TokenKind::LtLt) ? BinaryOp::Shl : BinaryOp::Shr;
@@ -2171,6 +2215,7 @@ ExprPtr Parser::parseShift() {
 
 ExprPtr Parser::parseAddSub() {
     auto expr = parseMulDiv();
+    if (!expr) return nullptr;
     while (check(TokenKind::Plus) || check(TokenKind::Minus)) {
         auto loc = current_.location;
         auto op = check(TokenKind::Plus) ? BinaryOp::Add : BinaryOp::Sub;
@@ -2184,6 +2229,7 @@ ExprPtr Parser::parseAddSub() {
 
 ExprPtr Parser::parseMulDiv() {
     auto expr = parseUnary();
+    if (!expr) return nullptr;
     while (check(TokenKind::Star) || check(TokenKind::Slash) || check(TokenKind::Percent)) {
         auto loc = current_.location;
         BinaryOp op;
@@ -2199,49 +2245,49 @@ ExprPtr Parser::parseMulDiv() {
 }
 
 ExprPtr Parser::parseUnary() {
-    auto loc = current_.location;
+    struct UnaryPrefix {
+        UnaryOp op;
+        bool isAwait = false;
+        SourceLocation loc;
+    };
+    std::vector<UnaryPrefix> ops;
 
-    if (check(TokenKind::Await)) {
-        advance();
-        auto operand = parseUnary();
-        return std::make_unique<AwaitExpr>(std::move(operand), loc);
-    }
-
-    // Prefix ++, --
-    if (check(TokenKind::PlusPlus)) {
-        advance();
-        auto operand = parseUnary();
-        return std::make_unique<UnaryExpr>(UnaryOp::PreInc, std::move(operand), loc);
-    }
-    if (check(TokenKind::MinusMinus)) {
-        advance();
-        auto operand = parseUnary();
-        return std::make_unique<UnaryExpr>(UnaryOp::PreDec, std::move(operand), loc);
-    }
-    if (check(TokenKind::Minus)) {
-        advance();
-        auto operand = parseUnary();
-        return std::make_unique<UnaryExpr>(UnaryOp::Neg, std::move(operand), loc);
-    }
-    if (check(TokenKind::Bang)) {
-        advance();
-        auto operand = parseUnary();
-        return std::make_unique<UnaryExpr>(UnaryOp::Not, std::move(operand), loc);
-    }
-    if (check(TokenKind::Tilde)) {
-        advance();
-        auto operand = parseUnary();
-        return std::make_unique<UnaryExpr>(UnaryOp::BitNot, std::move(operand), loc);
-    }
-    if (check(TokenKind::Amp)) {
-        advance();
-        auto operand = parseUnary();
-        return std::make_unique<UnaryExpr>(UnaryOp::AddrOf, std::move(operand), loc);
-    }
-    if (check(TokenKind::Star)) {
-        advance();
-        auto operand = parseUnary();
-        return std::make_unique<UnaryExpr>(UnaryOp::Deref, std::move(operand), loc);
+    while (true) {
+        if (ops.size() + exprDepth_ > MAX_EXPR_DEPTH) {
+            diag_.report(current_.location, Severity::Error,
+                         "expression nesting depth exceeds maximum supported limit of " +
+                         std::to_string(MAX_EXPR_DEPTH));
+            hadError_ = true;
+            return nullptr;
+        }
+        auto loc = current_.location;
+        if (check(TokenKind::Await)) {
+            advance();
+            ops.push_back({UnaryOp::Neg, true, loc});
+        } else if (check(TokenKind::PlusPlus)) {
+            advance();
+            ops.push_back({UnaryOp::PreInc, false, loc});
+        } else if (check(TokenKind::MinusMinus)) {
+            advance();
+            ops.push_back({UnaryOp::PreDec, false, loc});
+        } else if (check(TokenKind::Minus)) {
+            advance();
+            ops.push_back({UnaryOp::Neg, false, loc});
+        } else if (check(TokenKind::Bang)) {
+            advance();
+            ops.push_back({UnaryOp::Not, false, loc});
+        } else if (check(TokenKind::Tilde)) {
+            advance();
+            ops.push_back({UnaryOp::BitNot, false, loc});
+        } else if (check(TokenKind::Amp)) {
+            advance();
+            ops.push_back({UnaryOp::AddrOf, false, loc});
+        } else if (check(TokenKind::Star)) {
+            advance();
+            ops.push_back({UnaryOp::Deref, false, loc});
+        } else {
+            break;
+        }
     }
 
     // C-style cast: (Type)expr
@@ -2250,11 +2296,22 @@ ExprPtr Parser::parseUnary() {
         // For now, skip C-style casts — treat as grouped expression
     }
 
-    return parsePostfix();
+    auto expr = parsePostfix();
+    if (!expr) return nullptr;
+
+    for (auto it = ops.rbegin(); it != ops.rend(); ++it) {
+        if (it->isAwait) {
+            expr = std::make_unique<AwaitExpr>(std::move(expr), it->loc);
+        } else {
+            expr = std::make_unique<UnaryExpr>(it->op, std::move(expr), it->loc);
+        }
+    }
+    return expr;
 }
 
 ExprPtr Parser::parsePostfix() {
     auto expr = parsePrimary();
+    if (!expr) return nullptr;
 
     while (true) {
         auto loc = current_.location;
@@ -2617,6 +2674,9 @@ ExprPtr Parser::parsePrimary() {
             return std::make_unique<TupleExpr>(std::vector<ExprPtr>{}, parenLoc);
         }
         auto firstExpr = parseExpr();
+        if (!firstExpr) {
+            return nullptr;
+        }
         if (match(TokenKind::Comma)) {
             std::vector<ExprPtr> elements;
             elements.push_back(std::move(firstExpr));

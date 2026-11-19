@@ -1627,6 +1627,18 @@ void TypeChecker::checkStructCAbi(const ast::StructDecl& sd) {
 // ── Expression Checking ─────────────────────────────────────────────────────
 
 const Type* TypeChecker::checkExpr(ast::Expr& expr) {
+    if (++exprDepth_ > MAX_EXPR_DEPTH) {
+        diag_.report(expr.loc, Severity::Error,
+                     "expression nesting depth exceeds maximum supported limit of " +
+                     std::to_string(MAX_EXPR_DEPTH));
+        --exprDepth_;
+        return tc_.getI32();
+    }
+    struct ExprDepthScope {
+        int& d;
+        ~ExprDepthScope() { --d; }
+    } scope{exprDepth_};
+
     const Type* ty = nullptr;
     switch (expr.kind) {
         case ExprKind::IntLiteral:   ty = checkIntLiteral(static_cast<IntLiteralExpr&>(expr)); break;
@@ -1757,12 +1769,47 @@ const Type* TypeChecker::checkIdentifier(IdentifierExpr& expr) {
         }
     }
 
-    return sym->type;
+    const Type* retTy = sym->type;
+    if (sym->isConst && !retTy->isConst) {
+        if (retTy->isArray()) {
+            retTy = tc_.getArray(retTy->elementType, retTy->arraySize, true);
+        } else if (retTy->isArrayView()) {
+            retTy = tc_.getArrayView(retTy->elementType, true);
+        }
+    }
+    return retTy;
 }
 
 const Type* TypeChecker::checkBinary(BinaryExpr& expr) {
+    // Collect the left spine of binary expressions to avoid deep recursion
+    std::vector<BinaryExpr*> spine;
+    BinaryExpr* curr = &expr;
+    while (curr->lhs && curr->lhs->kind == ExprKind::Binary) {
+        spine.push_back(curr);
+        curr = static_cast<BinaryExpr*>(curr->lhs.get());
+    }
+
+    if (!spine.empty()) {
+        auto leftTy = checkExpr(*curr->lhs);
+        auto rightTy = checkExpr(*curr->rhs);
+        auto accTy = checkBinaryOpTypes(*curr, leftTy, rightTy);
+        setExprType(curr, accTy);
+
+        for (auto it = spine.rbegin(); it != spine.rend(); ++it) {
+            BinaryExpr* b = *it;
+            auto rTy = checkExpr(*b->rhs);
+            accTy = checkBinaryOpTypes(*b, accTy, rTy);
+            setExprType(b, accTy);
+        }
+        return accTy;
+    }
+
     auto lhsTy = checkExpr(*expr.lhs);
     auto rhsTy = checkExpr(*expr.rhs);
+    return checkBinaryOpTypes(expr, lhsTy, rhsTy);
+}
+
+const Type* TypeChecker::checkBinaryOpTypes(BinaryExpr& expr, const Type* lhsTy, const Type* rhsTy) {
     if (!lhsTy || !rhsTy) return tc_.getI32();
 
     // Check for overloaded operator on record (struct/class) types
@@ -5163,6 +5210,18 @@ void TypeChecker::checkMatchStmt(ast::MatchStmt& stmt, const Type* currentFuncRe
 // ── Statement Checking ──────────────────────────────────────────────────────
 
 void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) {
+    if (++stmtDepth_ > MAX_STMT_DEPTH) {
+        diag_.report(stmt.loc, Severity::Error,
+                     "statement nesting depth exceeds maximum supported limit of " +
+                     std::to_string(MAX_STMT_DEPTH));
+        --stmtDepth_;
+        return;
+    }
+    struct StmtDepthScope {
+        int& d;
+        ~StmtDepthScope() { --d; }
+    } scope{stmtDepth_};
+
     currentFuncReturnType_ = currentFuncReturnType;
     switch (stmt.kind) {
         case StmtKind::Block: {
@@ -5229,15 +5288,15 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
                     if (!eval.isConst) {
                         diag_.report(v.arraySize->loc, Severity::Error,
                                      "variable-length arrays are not supported; array size must be a constant integer");
-                        varTy = tc_.getArray(elemTy, 0);
+                        varTy = tc_.getArray(elemTy, 0, v.isConst);
                     } else if (eval.overflow) {
                         diag_.report(v.arraySize->loc, Severity::Error,
                                      "array size expression overflows 64-bit integer limit");
-                        varTy = tc_.getArray(elemTy, 0);
+                        varTy = tc_.getArray(elemTy, 0, v.isConst);
                     } else if (eval.value < 0) {
                         diag_.report(v.arraySize->loc, Severity::Error,
                                      "array size cannot be negative (" + std::to_string(eval.value) + ")");
-                        varTy = tc_.getArray(elemTy, 0);
+                        varTy = tc_.getArray(elemTy, 0, v.isConst);
                     } else {
                         int64_t size = eval.value;
                         int64_t elemSize = elemTy ? elemTy->size() : 4;
@@ -5251,7 +5310,7 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
                                          std::to_string(size * elemSize) + " bytes)");
                         }
                         v.evaluatedArraySize = size;
-                        varTy = tc_.getArray(elemTy, size);
+                        varTy = tc_.getArray(elemTy, size, v.isConst);
                     }
                 } else if (v.initializer) {
                     // Inferred array T[] = { ... } or T[] = arr
@@ -5259,23 +5318,23 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
                         checkExpr(*v.initializer);
                         int64_t count = static_cast<int64_t>(aInit->elements.size());
                         v.evaluatedArraySize = count;
-                        varTy = tc_.getArray(elemTy, count);
+                        varTy = tc_.getArray(elemTy, count, v.isConst);
                     } else {
                         auto initTy = checkExpr(*v.initializer);
                         if (initTy && initTy->isArray()) {
-                            varTy = tc_.getArrayView(initTy->elementType);
+                            varTy = tc_.getArrayView(initTy->elementType, v.isConst || initTy->isConst);
                         } else if (initTy && (initTy->isArrayView() || v.initializer->kind == ExprKind::StringLiteral)) {
                             varTy = initTy;
                         } else {
                             diag_.report(v.loc, Severity::Error,
                                          "unsized array declaration initializer must be an array initializer");
-                            varTy = tc_.getArray(elemTy, 0);
+                            varTy = tc_.getArray(elemTy, 0, v.isConst);
                         }
                     }
                 } else {
                     diag_.report(v.loc, Severity::Error,
                                  "unsized array declaration must have an initializer");
-                    varTy = tc_.getArray(elemTy, 0);
+                    varTy = tc_.getArray(elemTy, 0, v.isConst);
                 }
 
                 if (v.initializer) {

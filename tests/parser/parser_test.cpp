@@ -867,5 +867,25 @@ TAMARIN_TEST(Parser, ParsePrefixPointerDeclarations) {
     return true;
 }
 
+TAMARIN_TEST(Parser, RejectExcessiveExpressionDepth) {
+    std::string src = "int main() { return ";
+    for (int i = 0; i < 600; ++i) src += "(";
+    src += "42";
+    for (int i = 0; i < 600; ++i) src += ")";
+    src += "; }\n";
+
+    SourceManager sm;
+    auto fileId = sm.addSource("deep_expr.tmn", src);
+    std::ostringstream errs;
+    DiagnosticEngine diag(sm, errs);
+    lexer::Lexer lex(sm, fileId, diag);
+    parser::Parser p(lex, diag);
+
+    auto prog = p.parseProgram();
+    EXPECT_TRUE(diag.hasErrors());
+    EXPECT_TRUE(errs.str().find("nesting depth exceeds maximum supported limit") != std::string::npos);
+    return true;
+}
+
 
 

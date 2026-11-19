@@ -4,6 +4,7 @@
 #include "troop/package_manager.h"
 #include "troop/version.h"
 #include "tamarin/target/target_triple.h"
+#include "tamarin/target/process_util.h"
 
 #include <iostream>
 #include <fstream>
@@ -51,12 +52,7 @@ static std::filesystem::path getSelfExeDir() {
 }
 
 static int runCommand(const std::string& cmdStr) {
-#if defined(_WIN32)
-    std::string wrapped = "\"" + cmdStr + "\"";
-    return std::system(wrapped.c_str());
-#else
-    return std::system(cmdStr.c_str());
-#endif
+    return tamarin::target::executeCommand(cmdStr);
 }
 
 std::filesystem::path PackageManager::getCompilerExecutable() {

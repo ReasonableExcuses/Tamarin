@@ -4,6 +4,7 @@
 
 #include "tamarin/backend/llvm_codegen.h"
 #include "tamarin/config.h"
+#include "tamarin/target/process_util.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -60,22 +61,7 @@ static std::filesystem::path getCurrentExecutableDir() {
 }
 
 static int runSystemCommand(const std::string& cmd) {
-#ifdef _WIN32
-    STARTUPINFOA si = { sizeof(si) };
-    PROCESS_INFORMATION pi = {};
-    std::string mutableCmd = cmd;
-    if (!CreateProcessA(NULL, mutableCmd.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
-        return -1;
-    }
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    DWORD exitCode = 1;
-    GetExitCodeProcess(pi.hProcess, &exitCode);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-    return static_cast<int>(exitCode);
-#else
-    return std::system(cmd.c_str());
-#endif
+    return tamarin::target::executeCommand(cmd);
 }
 
 static std::string findRuntimeLibrary(bool isStatic = false) {
@@ -703,10 +689,11 @@ void LLVMCodeGen::emitRuntimeHelpers(std::ostream& os) {
         os << "  unreachable\n";
         os << "}\n\n";
     } else {
+        int clockId = targetTriple_.isMacOS() ? 6 : 1;
         os << "define private void @__tamarin_benchmark_start() {\n";
         os << "entry:\n";
         os << "  %ts = alloca { i64, i64 }, align 8\n";
-        os << "  %call_cnt = call i32 @clock_gettime(i32 1, ptr %ts)\n";
+        os << "  %call_cnt = call i32 @clock_gettime(i32 " << clockId << ", ptr %ts)\n";
         os << "  %cnt_ok = icmp eq i32 %call_cnt, 0\n";
         os << "  br i1 %cnt_ok, label %read_time, label %time_err\n";
         os << "time_err:\n";
@@ -725,7 +712,7 @@ void LLVMCodeGen::emitRuntimeHelpers(std::ostream& os) {
         os << "define private double @__tamarin_benchmark_elapsed_ms() {\n";
         os << "entry:\n";
         os << "  %ts = alloca { i64, i64 }, align 8\n";
-        os << "  %call_cnt = call i32 @clock_gettime(i32 1, ptr %ts)\n";
+        os << "  %call_cnt = call i32 @clock_gettime(i32 " << clockId << ", ptr %ts)\n";
         os << "  %cnt_ok = icmp eq i32 %call_cnt, 0\n";
         os << "  br i1 %cnt_ok, label %read_elapsed, label %elapsed_err\n";
         os << "elapsed_err:\n";

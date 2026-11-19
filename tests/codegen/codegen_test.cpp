@@ -5461,7 +5461,7 @@ TAMARIN_TEST(FFI, CallCStdlibAbs) {
 TAMARIN_TEST(FFI, CallCStdlibPuts) {
     const std::string src =
         "extern \"C\" {\n"
-        "    int puts(*u8 str);\n"
+        "    int puts(*const u8 str);\n"
         "}\n"
         "int main() {\n"
         "    puts(\"Tamarin C-FFI Success!\");\n"
@@ -5472,6 +5472,27 @@ TAMARIN_TEST(FFI, CallCStdlibPuts) {
     EXPECT_TRUE(compileAndRunProgram(src, 2, exitCode, out));
     EXPECT_EQ(exitCode, 0);
     EXPECT_TRUE(out.find("Tamarin C-FFI Success!") != std::string::npos);
+    return true;
+}
+
+TAMARIN_TEST(Pointers, RejectConstArrayToMutablePointer) {
+    const std::string src =
+        "int main() {\n"
+        "    const u8 arr[4] = {1, 2, 3, 4};\n"
+        "    *u8 p = arr;\n"
+        "    return 0;\n"
+        "}\n";
+    SourceManager sm;
+    auto fileId = sm.addSource("test.tmn", src);
+    std::ostringstream errs;
+    DiagnosticEngine diag(sm, errs);
+    lexer::Lexer lex(sm, fileId, diag);
+    parser::Parser p(lex, diag);
+    auto prog = p.parseProgram();
+    sema::Sema sema(diag);
+    bool ok = sema.analyze(prog);
+    EXPECT_FALSE(ok);
+    EXPECT_TRUE(!errs.str().empty());
     return true;
 }
 
@@ -6604,6 +6625,20 @@ TAMARIN_TEST(Pointers, PointerArithmeticAndIndexing) {
     EXPECT_TRUE(out.find("30") != std::string::npos);
     EXPECT_TRUE(out.find("40") != std::string::npos);
     EXPECT_TRUE(out.find("3") != std::string::npos);
+    return true;
+}
+
+TAMARIN_TEST(CodeGen, IterativeDeepBinaryAdditionChain) {
+    std::string src = "int main() {\n    int sum = 0";
+    for (int i = 0; i < 2000; ++i) {
+        src += " + 1";
+    }
+    src += ";\n    return sum == 2000 ? 0 : 1;\n}\n";
+
+    int exitCode = -1;
+    std::string out;
+    EXPECT_TRUE(compileAndRunProgram(src, 0, exitCode, out));
+    EXPECT_EQ(exitCode, 0);
     return true;
 }
 

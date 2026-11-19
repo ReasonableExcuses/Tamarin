@@ -129,6 +129,10 @@ private:
     bool hadError_ = false;
     std::unordered_set<std::string> knownTypes_;
     target::TargetTriple targetTriple_ = target::TargetTriple::getHost();
+    int exprDepth_ = 0;
+    int stmtDepth_ = 0;
+    static constexpr int MAX_EXPR_DEPTH = 256;
+    static constexpr int MAX_STMT_DEPTH = 256;
 };
 
 } // namespace tamarin::parser

@@ -1529,6 +1529,14 @@ void IRBuilder::lowerStmt(Stmt& stmt) {
     if (!currentBlock_ || isCurrentBlockTerminated()) {
         return;
     }
+    if (++stmtDepth_ > MAX_STMT_DEPTH) {
+        --stmtDepth_;
+        return;
+    }
+    struct StmtDepthScope {
+        int& d;
+        ~StmtDepthScope() { --d; }
+    } scope{stmtDepth_};
 
     switch (stmt.kind) {
         case StmtKind::Block:    lowerBlock(static_cast<BlockStmt&>(stmt)); break;
@@ -3785,7 +3793,159 @@ void IRBuilder::lowerSelect(SelectStmt& stmt) {
 
 // ── Expression Lowering ─────────────────────────────────────────────────────
 
+ValueId IRBuilder::lowerBinaryOpNode(BinaryExpr& bin, ValueId lhs, ValueId rhs) {
+    auto lhsTy = checker_.getExprType(bin.lhs.get());
+    auto rhsTy = checker_.getExprType(bin.rhs.get());
+    if (lhsTy && lhsTy->isRef()) lhsTy = lhsTy->elementType;
+    if (rhsTy && rhsTy->isRef()) rhsTy = rhsTy->elementType;
+    auto ty = checker_.getExprType(&bin);
+    if (ty && ty->isRef()) ty = ty->elementType;
+
+    // Pointer arithmetic
+    if (bin.op == BinaryOp::Add) {
+        if (lhsTy && lhsTy->isPointer() && rhsTy && rhsTy->isInteger()) {
+            Instruction gep;
+            gep.opcode = Opcode::GetArrayElemPtr;
+            gep.result = nextValueId();
+            gep.op1    = lhs;
+            gep.op2    = rhs;
+            gep.type   = lhsTy->elementType ? lhsTy->elementType : checker_.context().getI8();
+            emit(gep);
+            return gep.result;
+        }
+        if (rhsTy && rhsTy->isPointer() && lhsTy && lhsTy->isInteger()) {
+            Instruction gep;
+            gep.opcode = Opcode::GetArrayElemPtr;
+            gep.result = nextValueId();
+            gep.op1    = rhs;
+            gep.op2    = lhs;
+            gep.type   = rhsTy->elementType ? rhsTy->elementType : checker_.context().getI8();
+            emit(gep);
+            return gep.result;
+        }
+    }
+    if (bin.op == BinaryOp::Sub) {
+        if (lhsTy && lhsTy->isPointer() && rhsTy && rhsTy->isInteger()) {
+            Instruction zeroConst;
+            zeroConst.opcode = Opcode::IConst;
+            zeroConst.result = nextValueId();
+            zeroConst.intImm = 0;
+            zeroConst.type   = rhsTy;
+            emit(zeroConst);
+
+            Instruction neg;
+            neg.opcode = Opcode::Sub;
+            neg.result = nextValueId();
+            neg.op1    = zeroConst.result;
+            neg.op2    = rhs;
+            neg.type   = rhsTy;
+            emit(neg);
+
+            Instruction gep;
+            gep.opcode = Opcode::GetArrayElemPtr;
+            gep.result = nextValueId();
+            gep.op1    = lhs;
+            gep.op2    = neg.result;
+            gep.type   = lhsTy->elementType ? lhsTy->elementType : checker_.context().getI8();
+            emit(gep);
+            return gep.result;
+        }
+    }
+
+    if (bin.op == BinaryOp::Lt || bin.op == BinaryOp::LtEq ||
+        bin.op == BinaryOp::Gt || bin.op == BinaryOp::GtEq ||
+        bin.op == BinaryOp::EqEq || bin.op == BinaryOp::NotEq) {
+        if (lhsTy && rhsTy && lhsTy->isPointer() && rhsTy->isPointer()) {
+            // Direct pointer comparison
+        } else if (lhsTy && rhsTy && ((lhsTy->isPointer() && rhsTy->isInteger()) || (rhsTy->isPointer() && lhsTy->isInteger()))) {
+            if (lhsTy->isPointer()) {
+                rhs = emitCastIfNeeded(rhs, rhsTy, lhsTy);
+                rhsTy = lhsTy;
+            } else {
+                lhs = emitCastIfNeeded(lhs, lhsTy, rhsTy);
+                lhsTy = rhsTy;
+            }
+        } else {
+            const sema::Type* commonTy = lhsTy;
+            if (lhsTy && rhsTy && *lhsTy != *rhsTy) {
+                commonTy = checker_.context().getCommonArithmeticType(lhsTy, rhsTy);
+                lhs = emitCastIfNeeded(lhs, lhsTy, commonTy);
+                rhs = emitCastIfNeeded(rhs, rhsTy, commonTy);
+                lhsTy = commonTy;
+                rhsTy = commonTy;
+            }
+        }
+    } else {
+        if (lhsTy && lhsTy->isSIMDVector() && rhsTy && rhsTy->isNumeric()) {
+            Instruction splat;
+            splat.opcode = Opcode::VecSplat;
+            splat.result = nextValueId();
+            splat.op1    = rhs;
+            splat.type   = lhsTy;
+            emit(splat);
+            rhs = splat.result;
+            rhsTy = lhsTy;
+        } else if (rhsTy && rhsTy->isSIMDVector() && lhsTy && lhsTy->isNumeric()) {
+            Instruction splat;
+            splat.opcode = Opcode::VecSplat;
+            splat.result = nextValueId();
+            splat.op1    = lhs;
+            splat.type   = rhsTy;
+            emit(splat);
+            lhs = splat.result;
+            lhsTy = rhsTy;
+        } else if (ty && !ty->isSIMDVector()) {
+            lhs = emitCastIfNeeded(lhs, lhsTy, ty);
+            rhs = emitCastIfNeeded(rhs, rhsTy, ty);
+            lhsTy = ty;
+            rhsTy = ty;
+        }
+    }
+
+    bool isFloat = (lhsTy && lhsTy->isSIMDVector() && lhsTy->elementType && lhsTy->elementType->isFloat()) ||
+                   (lhsTy && lhsTy->isFloat());
+    bool isUnsigned = lhsTy && lhsTy->isUnsignedInteger();
+
+    Opcode op = Opcode::Add;
+    switch (bin.op) {
+        case BinaryOp::Add:    op = isFloat ? Opcode::FAdd : Opcode::Add; break;
+        case BinaryOp::Sub:    op = isFloat ? Opcode::FSub : Opcode::Sub; break;
+        case BinaryOp::Mul:    op = isFloat ? Opcode::FMul : Opcode::Mul; break;
+        case BinaryOp::Div:    op = isFloat ? Opcode::FDiv : (isUnsigned ? Opcode::UDiv : Opcode::SDiv); break;
+        case BinaryOp::Mod:    op = isUnsigned ? Opcode::URem : Opcode::SRem; break;
+        case BinaryOp::Lt:     op = isFloat ? Opcode::FCmpLt : (isUnsigned ? Opcode::ICmpULt : Opcode::ICmpSLt); break;
+        case BinaryOp::Gt:     op = isFloat ? Opcode::FCmpGt : (isUnsigned ? Opcode::ICmpUGt : Opcode::ICmpSGt); break;
+        case BinaryOp::LtEq:   op = isFloat ? Opcode::FCmpLe : (isUnsigned ? Opcode::ICmpULe : Opcode::ICmpSLe); break;
+        case BinaryOp::GtEq:   op = isFloat ? Opcode::FCmpGe : (isUnsigned ? Opcode::ICmpUGe : Opcode::ICmpSGe); break;
+        case BinaryOp::EqEq:   op = isFloat ? Opcode::FCmpEq : Opcode::ICmpEq; break;
+        case BinaryOp::NotEq:  op = isFloat ? Opcode::FCmpNe : Opcode::ICmpNe; break;
+        case BinaryOp::BitAnd: op = Opcode::And; break;
+        case BinaryOp::BitOr:  op = Opcode::Or; break;
+        case BinaryOp::BitXor: op = Opcode::Xor; break;
+        case BinaryOp::Shl:    op = Opcode::Shl; break;
+        case BinaryOp::Shr:    op = isUnsigned ? Opcode::LShr : Opcode::AShr; break;
+        default: break;
+    }
+
+    Instruction inst;
+    inst.opcode = op;
+    inst.result = nextValueId();
+    inst.op1    = lhs;
+    inst.op2    = rhs;
+    inst.type   = ty ? ty : checker_.context().getI32();
+    emit(inst);
+    return inst.result;
+}
+
 ValueId IRBuilder::lowerExpr(Expr& expr) {
+    if (++exprDepth_ > MAX_EXPR_DEPTH) {
+        --exprDepth_;
+        return InvalidValue;
+    }
+    struct ExprDepthScope {
+        int& d;
+        ~ExprDepthScope() { --d; }
+    } scope{exprDepth_};
     switch (expr.kind) {
         case ExprKind::IntLiteral: {
             auto& lit = static_cast<IntLiteralExpr&>(expr);
@@ -4188,150 +4348,39 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                 return loadResult.result;
             }
 
-            // Non-short-circuit binary operations
+            // Unroll left spine of non-short-circuit binary operations iteratively
+            std::vector<BinaryExpr*> spine;
+            BinaryExpr* curr = &bin;
+            while (curr->overloadedMethod.empty() &&
+                   curr->op != BinaryOp::And &&
+                   curr->op != BinaryOp::Or &&
+                   curr->lhs && curr->lhs->kind == ExprKind::Binary) {
+                auto* leftBin = static_cast<BinaryExpr*>(curr->lhs.get());
+                if (!leftBin->overloadedMethod.empty() ||
+                    leftBin->op == BinaryOp::And ||
+                    leftBin->op == BinaryOp::Or) {
+                    break;
+                }
+                spine.push_back(curr);
+                curr = leftBin;
+            }
+
+            if (!spine.empty()) {
+                ValueId acc = lowerExpr(*curr->lhs);
+                ValueId rVal = lowerExpr(*curr->rhs);
+                acc = lowerBinaryOpNode(*curr, acc, rVal);
+
+                for (auto it = spine.rbegin(); it != spine.rend(); ++it) {
+                    BinaryExpr* b = *it;
+                    ValueId r = lowerExpr(*b->rhs);
+                    acc = lowerBinaryOpNode(*b, acc, r);
+                }
+                return acc;
+            }
+
             auto lhs = lowerExpr(*bin.lhs);
             auto rhs = lowerExpr(*bin.rhs);
-            auto lhsTy = checker_.getExprType(bin.lhs.get());
-            auto rhsTy = checker_.getExprType(bin.rhs.get());
-            if (lhsTy && lhsTy->isRef()) lhsTy = lhsTy->elementType;
-            if (rhsTy && rhsTy->isRef()) rhsTy = rhsTy->elementType;
-            auto ty = checker_.getExprType(&expr);
-            if (ty && ty->isRef()) ty = ty->elementType;
-
-            // Pointer arithmetic
-            if (bin.op == BinaryOp::Add) {
-                if (lhsTy && lhsTy->isPointer() && rhsTy && rhsTy->isInteger()) {
-                    Instruction gep;
-                    gep.opcode = Opcode::GetArrayElemPtr;
-                    gep.result = nextValueId();
-                    gep.op1    = lhs;
-                    gep.op2    = rhs;
-                    gep.type   = lhsTy->elementType ? lhsTy->elementType : checker_.context().getI8();
-                    emit(gep);
-                    return gep.result;
-                }
-                if (rhsTy && rhsTy->isPointer() && lhsTy && lhsTy->isInteger()) {
-                    Instruction gep;
-                    gep.opcode = Opcode::GetArrayElemPtr;
-                    gep.result = nextValueId();
-                    gep.op1    = rhs;
-                    gep.op2    = lhs;
-                    gep.type   = rhsTy->elementType ? rhsTy->elementType : checker_.context().getI8();
-                    emit(gep);
-                    return gep.result;
-                }
-            }
-            if (bin.op == BinaryOp::Sub) {
-                if (lhsTy && lhsTy->isPointer() && rhsTy && rhsTy->isInteger()) {
-                    Instruction zeroConst;
-                    zeroConst.opcode = Opcode::IConst;
-                    zeroConst.result = nextValueId();
-                    zeroConst.intImm = 0;
-                    zeroConst.type   = rhsTy;
-                    emit(zeroConst);
-
-                    Instruction neg;
-                    neg.opcode = Opcode::Sub;
-                    neg.result = nextValueId();
-                    neg.op1    = zeroConst.result;
-                    neg.op2    = rhs;
-                    neg.type   = rhsTy;
-                    emit(neg);
-
-                    Instruction gep;
-                    gep.opcode = Opcode::GetArrayElemPtr;
-                    gep.result = nextValueId();
-                    gep.op1    = lhs;
-                    gep.op2    = neg.result;
-                    gep.type   = lhsTy->elementType ? lhsTy->elementType : checker_.context().getI8();
-                    emit(gep);
-                    return gep.result;
-                }
-            }
-
-            if (bin.op == BinaryOp::Lt || bin.op == BinaryOp::LtEq ||
-                bin.op == BinaryOp::Gt || bin.op == BinaryOp::GtEq ||
-                bin.op == BinaryOp::EqEq || bin.op == BinaryOp::NotEq) {
-                if (lhsTy && rhsTy && lhsTy->isPointer() && rhsTy->isPointer()) {
-                    // Direct pointer comparison
-                } else if (lhsTy && rhsTy && ((lhsTy->isPointer() && rhsTy->isInteger()) || (rhsTy->isPointer() && lhsTy->isInteger()))) {
-                    if (lhsTy->isPointer()) {
-                        rhs = emitCastIfNeeded(rhs, rhsTy, lhsTy);
-                        rhsTy = lhsTy;
-                    } else {
-                        lhs = emitCastIfNeeded(lhs, lhsTy, rhsTy);
-                        lhsTy = rhsTy;
-                    }
-                } else {
-                    const sema::Type* commonTy = lhsTy;
-                    if (lhsTy && rhsTy && *lhsTy != *rhsTy) {
-                        commonTy = checker_.context().getCommonArithmeticType(lhsTy, rhsTy);
-                        lhs = emitCastIfNeeded(lhs, lhsTy, commonTy);
-                        rhs = emitCastIfNeeded(rhs, rhsTy, commonTy);
-                        lhsTy = commonTy;
-                        rhsTy = commonTy;
-                    }
-                }
-            } else {
-                if (lhsTy && lhsTy->isSIMDVector() && rhsTy && rhsTy->isNumeric()) {
-                    Instruction splat;
-                    splat.opcode = Opcode::VecSplat;
-                    splat.result = nextValueId();
-                    splat.op1    = rhs;
-                    splat.type   = lhsTy;
-                    emit(splat);
-                    rhs = splat.result;
-                    rhsTy = lhsTy;
-                } else if (rhsTy && rhsTy->isSIMDVector() && lhsTy && lhsTy->isNumeric()) {
-                    Instruction splat;
-                    splat.opcode = Opcode::VecSplat;
-                    splat.result = nextValueId();
-                    splat.op1    = lhs;
-                    splat.type   = rhsTy;
-                    emit(splat);
-                    lhs = splat.result;
-                    lhsTy = rhsTy;
-                } else if (ty && !ty->isSIMDVector()) {
-                    lhs = emitCastIfNeeded(lhs, lhsTy, ty);
-                    rhs = emitCastIfNeeded(rhs, rhsTy, ty);
-                    lhsTy = ty;
-                    rhsTy = ty;
-                }
-            }
-
-            bool isFloat = (lhsTy && lhsTy->isSIMDVector() && lhsTy->elementType && lhsTy->elementType->isFloat()) ||
-                           (lhsTy && lhsTy->isFloat());
-            bool isUnsigned = lhsTy && lhsTy->isUnsignedInteger();
-
-            Opcode op = Opcode::Add;
-            switch (bin.op) {
-                case BinaryOp::Add:    op = isFloat ? Opcode::FAdd : Opcode::Add; break;
-                case BinaryOp::Sub:    op = isFloat ? Opcode::FSub : Opcode::Sub; break;
-                case BinaryOp::Mul:    op = isFloat ? Opcode::FMul : Opcode::Mul; break;
-                case BinaryOp::Div:    op = isFloat ? Opcode::FDiv : (isUnsigned ? Opcode::UDiv : Opcode::SDiv); break;
-                case BinaryOp::Mod:    op = isUnsigned ? Opcode::URem : Opcode::SRem; break;
-                case BinaryOp::Lt:     op = isFloat ? Opcode::FCmpLt : (isUnsigned ? Opcode::ICmpULt : Opcode::ICmpSLt); break;
-                case BinaryOp::Gt:     op = isFloat ? Opcode::FCmpGt : (isUnsigned ? Opcode::ICmpUGt : Opcode::ICmpSGt); break;
-                case BinaryOp::LtEq:   op = isFloat ? Opcode::FCmpLe : (isUnsigned ? Opcode::ICmpULe : Opcode::ICmpSLe); break;
-                case BinaryOp::GtEq:   op = isFloat ? Opcode::FCmpGe : (isUnsigned ? Opcode::ICmpUGe : Opcode::ICmpSGe); break;
-                case BinaryOp::EqEq:   op = isFloat ? Opcode::FCmpEq : Opcode::ICmpEq; break;
-                case BinaryOp::NotEq:  op = isFloat ? Opcode::FCmpNe : Opcode::ICmpNe; break;
-                case BinaryOp::BitAnd: op = Opcode::And; break;
-                case BinaryOp::BitOr:  op = Opcode::Or; break;
-                case BinaryOp::BitXor: op = Opcode::Xor; break;
-                case BinaryOp::Shl:    op = Opcode::Shl; break;
-                case BinaryOp::Shr:    op = isUnsigned ? Opcode::LShr : Opcode::AShr; break;
-                default: break;
-            }
-
-            Instruction inst;
-            inst.opcode = op;
-            inst.result = nextValueId();
-            inst.op1    = lhs;
-            inst.op2    = rhs;
-            inst.type   = ty ? ty : checker_.context().getI32();
-            emit(inst);
-            return inst.result;
+            return lowerBinaryOpNode(bin, lhs, rhs);
         }
         case ExprKind::Unary: {
             auto& un = static_cast<UnaryExpr&>(expr);
