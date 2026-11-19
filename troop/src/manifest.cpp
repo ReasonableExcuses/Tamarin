@@ -44,6 +44,44 @@ static std::string stripQuotes(std::string_view s) {
     return out;
 }
 
+static size_t findNextCommaOutsideQuotes(std::string_view s, size_t start) {
+    bool inQuotes = false;
+    char quoteChar = 0;
+    for (size_t i = start; i < s.size(); ++i) {
+        char c = s[i];
+        if ((c == '"' || c == '\'') && (i == 0 || s[i - 1] != '\\')) {
+            if (!inQuotes) {
+                inQuotes = true;
+                quoteChar = c;
+            } else if (c == quoteChar) {
+                inQuotes = false;
+            }
+        } else if (c == ',' && !inQuotes) {
+            return i;
+        }
+    }
+    return std::string_view::npos;
+}
+
+static size_t findNextEqualsOutsideQuotes(std::string_view s, size_t start) {
+    bool inQuotes = false;
+    char quoteChar = 0;
+    for (size_t i = start; i < s.size(); ++i) {
+        char c = s[i];
+        if ((c == '"' || c == '\'') && (i == 0 || s[i - 1] != '\\')) {
+            if (!inQuotes) {
+                inQuotes = true;
+                quoteChar = c;
+            } else if (c == quoteChar) {
+                inQuotes = false;
+            }
+        } else if (c == '=' && !inQuotes) {
+            return i;
+        }
+    }
+    return std::string_view::npos;
+}
+
 static std::vector<std::string> parseStringArray(std::string_view s) {
     std::vector<std::string> out;
     s = trim(s);
@@ -53,7 +91,7 @@ static std::vector<std::string> parseStringArray(std::string_view s) {
     }
     size_t start = 0;
     while (start < s.size()) {
-        auto comma = s.find(',', start);
+        auto comma = findNextCommaOutsideQuotes(s, start);
         std::string_view piece = (comma == std::string_view::npos) ? s.substr(start) : s.substr(start, comma - start);
         piece = trim(piece);
         if (!piece.empty()) {
@@ -74,11 +112,11 @@ static std::map<std::string, std::string> parseInlineTable(std::string_view s) {
     }
     size_t start = 0;
     while (start < s.size()) {
-        auto comma = s.find(',', start);
+        auto comma = findNextCommaOutsideQuotes(s, start);
         std::string_view piece = (comma == std::string_view::npos) ? s.substr(start) : s.substr(start, comma - start);
         piece = trim(piece);
         if (!piece.empty()) {
-            auto eq = piece.find('=');
+            auto eq = findNextEqualsOutsideQuotes(piece, 0);
             if (eq != std::string_view::npos) {
                 std::string k = std::string(trim(piece.substr(0, eq)));
                 std::string v = stripQuotes(piece.substr(eq + 1));
@@ -131,8 +169,24 @@ std::optional<Manifest> Manifest::parseString(std::string_view content, const st
         lineNum++;
         std::string_view sv = trim(line);
 
-        // Strip comments
-        auto commentPos = sv.find('#');
+        // Strip comments outside quotes
+        bool inQuotes = false;
+        char quoteChar = 0;
+        size_t commentPos = std::string_view::npos;
+        for (size_t i = 0; i < sv.size(); ++i) {
+            char c = sv[i];
+            if ((c == '"' || c == '\'') && (i == 0 || sv[i - 1] != '\\')) {
+                if (!inQuotes) {
+                    inQuotes = true;
+                    quoteChar = c;
+                } else if (c == quoteChar) {
+                    inQuotes = false;
+                }
+            } else if (c == '#' && !inQuotes) {
+                commentPos = i;
+                break;
+            }
+        }
         if (commentPos != std::string_view::npos) {
             sv = trim(sv.substr(0, commentPos));
         }
@@ -194,16 +248,22 @@ std::optional<Manifest> Manifest::parseString(std::string_view content, const st
                 }
                 if (tbl.count("version")) {
                     auto req = VersionReq::parse(tbl["version"]);
-                    if (req) spec.versionReq = *req;
+                    if (req) {
+                        spec.versionReq = *req;
+                    } else {
+                        errorMsg = "line " + std::to_string(lineNum) + ": invalid version requirement '" + tbl["version"] + "'";
+                        return std::nullopt;
+                    }
                 }
             } else {
                 spec.sourceKind = DependencySourceKind::Registry;
-                auto req = VersionReq::parse(stripQuotes(rawVal));
+                std::string reqStr = stripQuotes(rawVal);
+                auto req = VersionReq::parse(reqStr);
                 if (req) {
                     spec.versionReq = *req;
                 } else {
-                    auto fallbackReq = VersionReq::parse("*");
-                    if (fallbackReq) spec.versionReq = *fallbackReq;
+                    errorMsg = "line " + std::to_string(lineNum) + ": invalid version requirement '" + reqStr + "'";
+                    return std::nullopt;
                 }
             }
             if (section == "dependencies") {
@@ -310,12 +370,14 @@ std::string Manifest::toToml() const {
     ss << "[profile.dev]\n";
     ss << "opt_level = " << profileDev.optLevel << "\n";
     ss << "fast_math = " << (profileDev.fastMath ? "true" : "false") << "\n";
-    ss << "crt = \"" << profileDev.crt << "\"\n\n";
+    ss << "crt = \"" << profileDev.crt << "\"\n";
+    ss << "lto = " << (profileDev.lto ? "true" : "false") << "\n\n";
 
     ss << "[profile.release]\n";
     ss << "opt_level = " << profileRelease.optLevel << "\n";
     ss << "fast_math = " << (profileRelease.fastMath ? "true" : "false") << "\n";
     ss << "crt = \"" << profileRelease.crt << "\"\n";
+    ss << "lto = " << (profileRelease.lto ? "true" : "false") << "\n";
 
     return ss.str();
 }
@@ -327,6 +389,11 @@ bool Manifest::saveToFile(const std::filesystem::path& path, std::string& errorM
         return false;
     }
     file << toToml();
+    file.flush();
+    if (!file) {
+        errorMsg = "failed while writing manifest file (disk full or write error): " + path.string();
+        return false;
+    }
     return true;
 }
 

@@ -213,6 +213,7 @@ struct IRGlobal {
     bool isConst = false;
     bool isArray = false;
     int64_t arraySize = 0;
+    std::vector<int64_t> arrayInitializers;
 };
 
 // ── IR Module ───────────────────────────────────────────────────────────────

@@ -49,14 +49,14 @@ std::optional<SemVer> SemVer::parse(std::string_view str) {
         // Just major
         uint32_t val = 0;
         auto [ptr, ec] = std::from_chars(str.data(), str.data() + str.size(), val);
-        if (ec != std::errc()) return std::nullopt;
+        if (ec != std::errc() || ptr != str.data() + str.size()) return std::nullopt;
         res.major = val;
         return res;
     }
 
     uint32_t majorVal = 0;
     auto [ptr1, ec1] = std::from_chars(str.data(), str.data() + firstDot, majorVal);
-    if (ec1 != std::errc()) return std::nullopt;
+    if (ec1 != std::errc() || ptr1 != str.data() + firstDot) return std::nullopt;
     res.major = majorVal;
 
     auto rest = str.substr(firstDot + 1);
@@ -65,20 +65,20 @@ std::optional<SemVer> SemVer::parse(std::string_view str) {
         // major.minor
         uint32_t minorVal = 0;
         auto [ptr2, ec2] = std::from_chars(rest.data(), rest.data() + rest.size(), minorVal);
-        if (ec2 != std::errc()) return std::nullopt;
+        if (ec2 != std::errc() || ptr2 != rest.data() + rest.size()) return std::nullopt;
         res.minor = minorVal;
         return res;
     }
 
     uint32_t minorVal = 0;
     auto [ptr2, ec2] = std::from_chars(rest.data(), rest.data() + secondDot, minorVal);
-    if (ec2 != std::errc()) return std::nullopt;
+    if (ec2 != std::errc() || ptr2 != rest.data() + secondDot) return std::nullopt;
     res.minor = minorVal;
 
     auto patchStr = rest.substr(secondDot + 1);
     uint32_t patchVal = 0;
     auto [ptr3, ec3] = std::from_chars(patchStr.data(), patchStr.data() + patchStr.size(), patchVal);
-    if (ec3 != std::errc()) return std::nullopt;
+    if (ec3 != std::errc() || ptr3 != patchStr.data() + patchStr.size()) return std::nullopt;
     res.patch = patchVal;
 
     return res;

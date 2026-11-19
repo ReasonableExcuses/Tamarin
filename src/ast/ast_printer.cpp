@@ -341,6 +341,26 @@ void ASTPrinter::printStmt(const Stmt& stmt, int indent) {
             if (sp.body) printStmt(*sp.body, indent + 1);
             break;
         }
+        case StmtKind::Select: {
+            auto& s = static_cast<const SelectStmt&>(stmt);
+            os_ << "Select\n";
+            for (const auto& c : s.cases) {
+                pad(indent + 1);
+                os_ << "Case:\n";
+                if (c.condition) printExpr(*c.condition, indent + 2);
+                for (const auto& st : c.body) {
+                    printStmt(*st, indent + 2);
+                }
+            }
+            if (s.hasDefault) {
+                pad(indent + 1);
+                os_ << "Default:\n";
+                for (const auto& st : s.defaultBody) {
+                    printStmt(*st, indent + 2);
+                }
+            }
+            break;
+        }
     }
 }
 

@@ -521,9 +521,18 @@ struct Type {
         // Reference / pointer target
         if (target.isReference()) {
             const Type* targetElem = target.elementType;
-            if (!targetElem || targetElem->isVoid()) return true;
+            if (!targetElem || targetElem->isVoid()) {
+                if (isReference() && isConstRef && !target.isConstRef) {
+                    return false;
+                }
+                return true;
+            }
             if (isArray() || isArrayView()) {
                 if (elementType && (*elementType == *targetElem || targetElem->isVoid())) {
+                    if (target.isPointer() && (targetElem->kind == TypeKind::U8 || targetElem->kind == TypeKind::I8)) {
+                        return true;
+                    }
+                    if (isConst && !target.isConstRef) return false;
                     return true;
                 }
             }

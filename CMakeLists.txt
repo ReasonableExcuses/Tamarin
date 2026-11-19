@@ -175,6 +175,10 @@ target_include_directories(tamarin_tests PRIVATE
 
 target_link_libraries(tamarin_tests PRIVATE tamarin_lib troop_lib)
 
+if(MSVC)
+    set_target_properties(tamarin troop tamarin_tests PROPERTIES LINK_FLAGS "/STACK:8388608")
+endif()
+
 add_test(NAME TamarinUnitTests COMMAND tamarin_tests)
 
 # ── Install ───────────────────────────────────────────────────────────

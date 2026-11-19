@@ -61,8 +61,18 @@ static std::filesystem::path getCurrentExecutableDir() {
 
 static int runSystemCommand(const std::string& cmd) {
 #ifdef _WIN32
-    std::string wrapped = "\"" + cmd + "\"";
-    return std::system(wrapped.c_str());
+    STARTUPINFOA si = { sizeof(si) };
+    PROCESS_INFORMATION pi = {};
+    std::string mutableCmd = cmd;
+    if (!CreateProcessA(NULL, mutableCmd.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+        return -1;
+    }
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD exitCode = 1;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return static_cast<int>(exitCode);
 #else
     return std::system(cmd.c_str());
 #endif
@@ -468,11 +478,25 @@ void LLVMCodeGen::emitHeader(std::ostream& os) {
             std::string elemStr = (g.type && g.type->elementType) ? llvmType(g.type->elementType) : "i32";
             int64_t arrCount = g.arraySize > 0 ? g.arraySize : (g.type ? g.type->arraySize : 0);
             if (arrCount <= 0) arrCount = 1;
-            os << "@" << g.name << " = internal global [" << arrCount << " x " << elemStr
-               << "] zeroinitializer, align 16\n";
+            if (!g.arrayInitializers.empty()) {
+                os << "@" << g.name << " = internal global [" << arrCount << " x " << elemStr << "] [";
+                for (int64_t i = 0; i < arrCount; ++i) {
+                    if (i > 0) os << ", ";
+                    int64_t val = (i < (int64_t)g.arrayInitializers.size()) ? g.arrayInitializers[i] : 0;
+                    os << elemStr << " " << val;
+                }
+                os << "], align 16\n";
+            } else {
+                os << "@" << g.name << " = internal global [" << arrCount << " x " << elemStr
+                   << "] zeroinitializer, align 16\n";
+            }
         } else {
             std::string tyStr = g.type ? llvmType(g.type) : "i32";
-            os << "@" << g.name << " = internal global " << tyStr << " 0, align 8\n";
+            std::string valStr = std::to_string(g.initialValue);
+            if (g.type && g.type->isFloat()) {
+                valStr = "0.0";
+            }
+            os << "@" << g.name << " = internal global " << tyStr << " " << valStr << ", align 8\n";
         }
     }
 
@@ -624,6 +648,7 @@ void LLVMCodeGen::emitRuntimeHelpers(std::ostream& os) {
 
     // String constant for bounds error (43 characters + 1 newline = 44 bytes)
     os << "@__tamarin_str_bounds_err = private unnamed_addr constant [44 x i8] c\"TAMARIN runtime error: index out of bounds\\0A\\00\"\n";
+    os << "@__tamarin_str_alloc_err = private unnamed_addr constant [42 x i8] c\"TAMARIN runtime error: allocation failed\\0A\\00\"\n";
     os << "@__tamarin_str_region_oom = private unnamed_addr constant [45 x i8] c\"TAMARIN runtime error: region out of memory\\0A\\00\"\n";
     os << "@__tamarin_str_region_stats_hdr = private unnamed_addr constant [42 x i8] c\"[TAMARIN MEMORY STATS] Region destroyed:\\0A\\00\"\n";
     os << "@__tamarin_str_region_stats_fmt = private unnamed_addr constant [507 x i8] c\"  Initial hint:      %10llu bytes\\0A  Virtual reserved:  %10llu bytes\\0A  Committed bytes / commit charge: %10llu bytes\\0A  Process working set (resident RAM): %10llu bytes\\0A  Payload handed out: %10llu bytes\\0A  Alignment padding:        %10llu bytes\\0A  Unused committed bytes:   %10llu bytes\\0A  Chunks:            %10llu\\0A  Reservation count:        %10llu\\0A  Commit operation count:   %10llu\\0A  Sidecar capacity:  %10llu bytes\\0A  Sidecar used:      %10llu bytes\\0A  Destructor records:%10llu\\0A  Allocations:       %10llu\\0A\\00\"\n";
@@ -682,6 +707,12 @@ void LLVMCodeGen::emitRuntimeHelpers(std::ostream& os) {
         os << "entry:\n";
         os << "  %ts = alloca { i64, i64 }, align 8\n";
         os << "  %call_cnt = call i32 @clock_gettime(i32 1, ptr %ts)\n";
+        os << "  %cnt_ok = icmp eq i32 %call_cnt, 0\n";
+        os << "  br i1 %cnt_ok, label %read_time, label %time_err\n";
+        os << "time_err:\n";
+        os << "  call void @exit(i32 1)\n";
+        os << "  unreachable\n";
+        os << "read_time:\n";
         os << "  %sec = load i64, ptr %ts, align 8\n";
         os << "  %p_nsec = getelementptr inbounds { i64, i64 }, ptr %ts, i32 0, i32 1\n";
         os << "  %nsec = load i64, ptr %p_nsec, align 8\n";
@@ -695,6 +726,12 @@ void LLVMCodeGen::emitRuntimeHelpers(std::ostream& os) {
         os << "entry:\n";
         os << "  %ts = alloca { i64, i64 }, align 8\n";
         os << "  %call_cnt = call i32 @clock_gettime(i32 1, ptr %ts)\n";
+        os << "  %cnt_ok = icmp eq i32 %call_cnt, 0\n";
+        os << "  br i1 %cnt_ok, label %read_elapsed, label %elapsed_err\n";
+        os << "elapsed_err:\n";
+        os << "  call void @exit(i32 1)\n";
+        os << "  unreachable\n";
+        os << "read_elapsed:\n";
         os << "  %sec = load i64, ptr %ts, align 8\n";
         os << "  %p_nsec = getelementptr inbounds { i64, i64 }, ptr %ts, i32 0, i32 1\n";
         os << "  %nsec = load i64, ptr %p_nsec, align 8\n";
@@ -869,6 +906,13 @@ void LLVMCodeGen::emitRuntimeHelpers(std::ostream& os) {
     os << "define private void @__tamarin_bounds_error() cold noreturn nounwind {\n";
     os << "entry:\n";
     os << "  %call = call i32 @__tamarin_raw_write(i32 2, ptr @__tamarin_str_bounds_err, i32 43)\n";
+    os << "  call void @exit(i32 1)\n";
+    os << "  unreachable\n";
+    os << "}\n\n";
+
+    os << "define private void @__tamarin_alloc_error() cold noreturn nounwind {\n";
+    os << "entry:\n";
+    os << "  %call = call i32 @__tamarin_raw_write(i32 2, ptr @__tamarin_str_alloc_err, i32 41)\n";
     os << "  call void @exit(i32 1)\n";
     os << "  unreachable\n";
     os << "}\n\n";
@@ -1469,10 +1513,14 @@ void LLVMCodeGen::emitRuntimeHelpers(std::ostream& os) {
     os << "  %is_4 = icmp eq i64 %align, 4\n";
     os << "  %is_8 = icmp eq i64 %align, 8\n";
     os << "  %is_16 = icmp eq i64 %align, 16\n";
+    os << "  %is_32 = icmp eq i64 %align, 32\n";
+    os << "  %is_64 = icmp eq i64 %align, 64\n";
     os << "  %or_12 = or i1 %is_1, %is_2\n";
     os << "  %or_34 = or i1 %is_4, %is_8\n";
+    os << "  %or_1632 = or i1 %is_16, %is_32\n";
     os << "  %or_1234 = or i1 %or_12, %or_34\n";
-    os << "  %valid_align = or i1 %or_1234, %is_16\n";
+    os << "  %or_base = or i1 %or_1234, %or_1632\n";
+    os << "  %valid_align = or i1 %or_base, %is_64\n";
     os << "  br i1 %valid_align, label %check_size, label %oom\n";
     os << "check_size:\n";
     os << "  %size_pos = icmp sgt i64 %size, 0\n";
@@ -3092,10 +3140,27 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
             if (countTyStr == "i64") {
                 os << "  %cnt64_alloc_" << opId << " = add i64 " << countOp << ", 0\n";
             } else {
-                os << "  %cnt64_alloc_" << opId << " = zext " << countTyStr << " " << countOp << " to i64\n";
+                os << "  %cnt64_alloc_" << opId << " = sext " << countTyStr << " " << countOp << " to i64\n";
             }
+            uint64_t maxCount = (uint64_t)(0x7FFFFFFFFFFFFFFFLL / (int64_t)elemSize);
+            os << "  %neg_chk_" << opId << " = icmp slt i64 %cnt64_alloc_" << opId << ", 0\n";
+            os << "  %ovf_chk_" << opId << " = icmp ugt i64 %cnt64_alloc_" << opId << ", " << maxCount << "\n";
+            os << "  %bad_alloc_" << opId << " = or i1 %neg_chk_" << opId << ", %ovf_chk_" << opId << "\n";
+            os << "  br i1 %bad_alloc_" << opId << ", label %alloc_bad_" << opId << ", label %alloc_ok_" << opId << "\n";
+            os << "alloc_bad_" << opId << ":\n";
+            os << "  call void @__tamarin_alloc_error()\n";
+            os << "  unreachable\n";
+            os << "alloc_ok_" << opId << ":\n";
             os << "  %bytes_alloc_" << opId << " = mul i64 %cnt64_alloc_" << opId << ", " << elemSize << "\n";
             os << "  %ptr_alloc_" << opId << " = call ptr @malloc(i64 %bytes_alloc_" << opId << ")\n";
+            os << "  %null_chk_" << opId << " = icmp eq ptr %ptr_alloc_" << opId << ", null\n";
+            os << "  %cnt_pos_" << opId << " = icmp sgt i64 %cnt64_alloc_" << opId << ", 0\n";
+            os << "  %null_failed_" << opId << " = and i1 %null_chk_" << opId << ", %cnt_pos_" << opId << "\n";
+            os << "  br i1 %null_failed_" << opId << ", label %alloc_null_" << opId << ", label %alloc_done_" << opId << "\n";
+            os << "alloc_null_" << opId << ":\n";
+            os << "  call void @__tamarin_alloc_error()\n";
+            os << "  unreachable\n";
+            os << "alloc_done_" << opId << ":\n";
             os << "  %v0_alloc_" << opId << " = insertvalue { ptr, i64 } undef, ptr %ptr_alloc_" << opId << ", 0\n";
             os << "  %v" << inst.result << " = insertvalue { ptr, i64 } %v0_alloc_" << opId << ", i64 %cnt64_alloc_" << opId << ", 1\n";
             break;
@@ -3112,10 +3177,27 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
             if (countTyStr == "i64") {
                 os << "  %cnt64_realloc_" << opId << " = add i64 " << countOp << ", 0\n";
             } else {
-                os << "  %cnt64_realloc_" << opId << " = zext " << countTyStr << " " << countOp << " to i64\n";
+                os << "  %cnt64_realloc_" << opId << " = sext " << countTyStr << " " << countOp << " to i64\n";
             }
+            uint64_t maxCount = (uint64_t)(0x7FFFFFFFFFFFFFFFLL / (int64_t)elemSize);
+            os << "  %realloc_neg_chk_" << opId << " = icmp slt i64 %cnt64_realloc_" << opId << ", 0\n";
+            os << "  %realloc_ovf_chk_" << opId << " = icmp ugt i64 %cnt64_realloc_" << opId << ", " << maxCount << "\n";
+            os << "  %realloc_bad_" << opId << " = or i1 %realloc_neg_chk_" << opId << ", %realloc_ovf_chk_" << opId << "\n";
+            os << "  br i1 %realloc_bad_" << opId << ", label %realloc_bad_lbl_" << opId << ", label %realloc_ok_lbl_" << opId << "\n";
+            os << "realloc_bad_lbl_" << opId << ":\n";
+            os << "  call void @__tamarin_alloc_error()\n";
+            os << "  unreachable\n";
+            os << "realloc_ok_lbl_" << opId << ":\n";
             os << "  %bytes_realloc_" << opId << " = mul i64 %cnt64_realloc_" << opId << ", " << elemSize << "\n";
             os << "  %new_ptr_realloc_" << opId << " = call ptr @realloc(ptr %old_ptr_realloc_" << opId << ", i64 %bytes_realloc_" << opId << ")\n";
+            os << "  %realloc_null_chk_" << opId << " = icmp eq ptr %new_ptr_realloc_" << opId << ", null\n";
+            os << "  %realloc_cnt_pos_" << opId << " = icmp sgt i64 %cnt64_realloc_" << opId << ", 0\n";
+            os << "  %realloc_null_failed_" << opId << " = and i1 %realloc_null_chk_" << opId << ", %realloc_cnt_pos_" << opId << "\n";
+            os << "  br i1 %realloc_null_failed_" << opId << ", label %realloc_null_lbl_" << opId << ", label %realloc_done_lbl_" << opId << "\n";
+            os << "realloc_null_lbl_" << opId << ":\n";
+            os << "  call void @__tamarin_alloc_error()\n";
+            os << "  unreachable\n";
+            os << "realloc_done_lbl_" << opId << ":\n";
             os << "  %v0_realloc_" << opId << " = insertvalue { ptr, i64 } undef, ptr %new_ptr_realloc_" << opId << ", 0\n";
             os << "  %v" << inst.result << " = insertvalue { ptr, i64 } %v0_realloc_" << opId << ", i64 %cnt64_realloc_" << opId << ", 1\n";
             break;
@@ -3146,16 +3228,43 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
             std::string srcOffTyStr = srcOffTy ? llvmType(srcOffTy) : "i64";
             std::string cntTyStr = cntTy ? llvmType(cntTy) : "i64";
 
-            os << "  %dst_raw_" << opId << " = extractvalue { ptr, i64 } %v" << inst.callArgs[0] << ", 0\n";
-            os << "  %dst_ptr_" << opId << " = getelementptr inbounds " << elemStr << ", ptr %dst_raw_" << opId << ", " << dstOffTyStr << " " << dstOffStr << "\n";
-            os << "  %src_raw_" << opId << " = extractvalue { ptr, i64 } %v" << inst.callArgs[2] << ", 0\n";
-            os << "  %src_ptr_" << opId << " = getelementptr inbounds " << elemStr << ", ptr %src_raw_" << opId << ", " << srcOffTyStr << " " << srcOffStr << "\n";
-
+            os << "  %dst_len_cp_" << opId << " = extractvalue { ptr, i64 } %v" << inst.callArgs[0] << ", 1\n";
+            os << "  %src_len_cp_" << opId << " = extractvalue { ptr, i64 } %v" << inst.callArgs[2] << ", 1\n";
+            if (dstOffTyStr == "i64") {
+                os << "  %dst_off_s_" << opId << " = add i64 " << dstOffStr << ", 0\n";
+            } else {
+                os << "  %dst_off_s_" << opId << " = sext " << dstOffTyStr << " " << dstOffStr << " to i64\n";
+            }
+            if (srcOffTyStr == "i64") {
+                os << "  %src_off_s_" << opId << " = add i64 " << srcOffStr << ", 0\n";
+            } else {
+                os << "  %src_off_s_" << opId << " = sext " << srcOffTyStr << " " << srcOffStr << " to i64\n";
+            }
             if (cntTyStr == "i64") {
                 os << "  %cnt64_cp_" << opId << " = add i64 " << cntStr << ", 0\n";
             } else {
-                os << "  %cnt64_cp_" << opId << " = zext " << cntTyStr << " " << cntStr << " to i64\n";
+                os << "  %cnt64_cp_" << opId << " = sext " << cntTyStr << " " << cntStr << " to i64\n";
             }
+            os << "  %dst_end_cp_" << opId << " = add i64 %dst_off_s_" << opId << ", %cnt64_cp_" << opId << "\n";
+            os << "  %src_end_cp_" << opId << " = add i64 %src_off_s_" << opId << ", %cnt64_cp_" << opId << "\n";
+            os << "  %cp_bad1_" << opId << " = icmp slt i64 %cnt64_cp_" << opId << ", 0\n";
+            os << "  %cp_bad2_" << opId << " = icmp slt i64 %dst_off_s_" << opId << ", 0\n";
+            os << "  %cp_bad3_" << opId << " = icmp slt i64 %src_off_s_" << opId << ", 0\n";
+            os << "  %cp_bad4_" << opId << " = icmp ugt i64 %dst_end_cp_" << opId << ", %dst_len_cp_" << opId << "\n";
+            os << "  %cp_bad5_" << opId << " = icmp ugt i64 %src_end_cp_" << opId << ", %src_len_cp_" << opId << "\n";
+            os << "  %cp_b12_" << opId << " = or i1 %cp_bad1_" << opId << ", %cp_bad2_" << opId << "\n";
+            os << "  %cp_b34_" << opId << " = or i1 %cp_bad3_" << opId << ", %cp_bad4_" << opId << "\n";
+            os << "  %cp_b14_" << opId << " = or i1 %cp_b12_" << opId << ", %cp_b34_" << opId << "\n";
+            os << "  %cp_bad_" << opId << " = or i1 %cp_b14_" << opId << ", %cp_bad5_" << opId << "\n";
+            os << "  br i1 %cp_bad_" << opId << ", label %cp_fail_" << opId << ", label %cp_ok_" << opId << "\n";
+            os << "cp_fail_" << opId << ":\n";
+            os << "  call void @__tamarin_bounds_error()\n";
+            os << "  unreachable\n";
+            os << "cp_ok_" << opId << ":\n";
+            os << "  %dst_raw_" << opId << " = extractvalue { ptr, i64 } %v" << inst.callArgs[0] << ", 0\n";
+            os << "  %dst_ptr_" << opId << " = getelementptr inbounds " << elemStr << ", ptr %dst_raw_" << opId << ", i64 %dst_off_s_" << opId << "\n";
+            os << "  %src_raw_" << opId << " = extractvalue { ptr, i64 } %v" << inst.callArgs[2] << ", 0\n";
+            os << "  %src_ptr_" << opId << " = getelementptr inbounds " << elemStr << ", ptr %src_raw_" << opId << ", i64 %src_off_s_" << opId << "\n";
             os << "  %bytes_cp_" << opId << " = mul i64 %cnt64_cp_" << opId << ", " << elemSize << "\n";
             os << "  call void @llvm.memcpy.p0.p0.i64(ptr %dst_ptr_" << opId << ", ptr %src_ptr_" << opId << ", i64 %bytes_cp_" << opId << ", i1 false)\n";
             break;
@@ -3179,16 +3288,43 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
             std::string srcOffTyStr = srcOffTy ? llvmType(srcOffTy) : "i64";
             std::string cntTyStr = cntTy ? llvmType(cntTy) : "i64";
 
-            os << "  %dst_raw_mv_" << opId << " = extractvalue { ptr, i64 } %v" << inst.callArgs[0] << ", 0\n";
-            os << "  %dst_ptr_mv_" << opId << " = getelementptr inbounds " << elemStr << ", ptr %dst_raw_mv_" << opId << ", " << dstOffTyStr << " " << dstOffStr << "\n";
-            os << "  %src_raw_mv_" << opId << " = extractvalue { ptr, i64 } %v" << inst.callArgs[2] << ", 0\n";
-            os << "  %src_ptr_mv_" << opId << " = getelementptr inbounds " << elemStr << ", ptr %src_raw_mv_" << opId << ", " << srcOffTyStr << " " << srcOffStr << "\n";
-
+            os << "  %dst_len_mv_" << opId << " = extractvalue { ptr, i64 } %v" << inst.callArgs[0] << ", 1\n";
+            os << "  %src_len_mv_" << opId << " = extractvalue { ptr, i64 } %v" << inst.callArgs[2] << ", 1\n";
+            if (dstOffTyStr == "i64") {
+                os << "  %dst_off_mv_s_" << opId << " = add i64 " << dstOffStr << ", 0\n";
+            } else {
+                os << "  %dst_off_mv_s_" << opId << " = sext " << dstOffTyStr << " " << dstOffStr << " to i64\n";
+            }
+            if (srcOffTyStr == "i64") {
+                os << "  %src_off_mv_s_" << opId << " = add i64 " << srcOffStr << ", 0\n";
+            } else {
+                os << "  %src_off_mv_s_" << opId << " = sext " << srcOffTyStr << " " << srcOffStr << " to i64\n";
+            }
             if (cntTyStr == "i64") {
                 os << "  %cnt64_mv_" << opId << " = add i64 " << cntStr << ", 0\n";
             } else {
-                os << "  %cnt64_mv_" << opId << " = zext " << cntTyStr << " " << cntStr << " to i64\n";
+                os << "  %cnt64_mv_" << opId << " = sext " << cntTyStr << " " << cntStr << " to i64\n";
             }
+            os << "  %dst_end_mv_" << opId << " = add i64 %dst_off_mv_s_" << opId << ", %cnt64_mv_" << opId << "\n";
+            os << "  %src_end_mv_" << opId << " = add i64 %src_off_mv_s_" << opId << ", %cnt64_mv_" << opId << "\n";
+            os << "  %mv_bad1_" << opId << " = icmp slt i64 %cnt64_mv_" << opId << ", 0\n";
+            os << "  %mv_bad2_" << opId << " = icmp slt i64 %dst_off_mv_s_" << opId << ", 0\n";
+            os << "  %mv_bad3_" << opId << " = icmp slt i64 %src_off_mv_s_" << opId << ", 0\n";
+            os << "  %mv_bad4_" << opId << " = icmp ugt i64 %dst_end_mv_" << opId << ", %dst_len_mv_" << opId << "\n";
+            os << "  %mv_bad5_" << opId << " = icmp ugt i64 %src_end_mv_" << opId << ", %src_len_mv_" << opId << "\n";
+            os << "  %mv_b12_" << opId << " = or i1 %mv_bad1_" << opId << ", %mv_bad2_" << opId << "\n";
+            os << "  %mv_b34_" << opId << " = or i1 %mv_bad3_" << opId << ", %mv_bad4_" << opId << "\n";
+            os << "  %mv_b14_" << opId << " = or i1 %mv_b12_" << opId << ", %mv_b34_" << opId << "\n";
+            os << "  %mv_bad_" << opId << " = or i1 %mv_b14_" << opId << ", %mv_bad5_" << opId << "\n";
+            os << "  br i1 %mv_bad_" << opId << ", label %mv_fail_" << opId << ", label %mv_ok_" << opId << "\n";
+            os << "mv_fail_" << opId << ":\n";
+            os << "  call void @__tamarin_bounds_error()\n";
+            os << "  unreachable\n";
+            os << "mv_ok_" << opId << ":\n";
+            os << "  %dst_raw_mv_" << opId << " = extractvalue { ptr, i64 } %v" << inst.callArgs[0] << ", 0\n";
+            os << "  %dst_ptr_mv_" << opId << " = getelementptr inbounds " << elemStr << ", ptr %dst_raw_mv_" << opId << ", i64 %dst_off_mv_s_" << opId << "\n";
+            os << "  %src_raw_mv_" << opId << " = extractvalue { ptr, i64 } %v" << inst.callArgs[2] << ", 0\n";
+            os << "  %src_ptr_mv_" << opId << " = getelementptr inbounds " << elemStr << ", ptr %src_raw_mv_" << opId << ", i64 %src_off_mv_s_" << opId << "\n";
             os << "  %bytes_mv_" << opId << " = mul i64 %cnt64_mv_" << opId << ", " << elemSize << "\n";
             os << "  call void @llvm.memmove.p0.p0.i64(ptr %dst_ptr_mv_" << opId << ", ptr %src_ptr_mv_" << opId << ", i64 %bytes_mv_" << opId << ", i1 false)\n";
             break;
@@ -3212,19 +3348,36 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
             std::string valTyStr = valTy ? llvmType(valTy) : "i8";
             std::string cntTyStr = cntTy ? llvmType(cntTy) : "i64";
 
+            os << "  %dst_len_st_" << opId << " = extractvalue { ptr, i64 } %v" << inst.callArgs[0] << ", 1\n";
+            if (dstOffTyStr == "i64") {
+                os << "  %dst_off_st_s_" << opId << " = add i64 " << dstOffStr << ", 0\n";
+            } else {
+                os << "  %dst_off_st_s_" << opId << " = sext " << dstOffTyStr << " " << dstOffStr << " to i64\n";
+            }
+            if (cntTyStr == "i64") {
+                os << "  %cnt64_st_" << opId << " = add i64 " << cntStr << ", 0\n";
+            } else {
+                os << "  %cnt64_st_" << opId << " = sext " << cntTyStr << " " << cntStr << " to i64\n";
+            }
+            os << "  %dst_end_st_" << opId << " = add i64 %dst_off_st_s_" << opId << ", %cnt64_st_" << opId << "\n";
+            os << "  %st_bad1_" << opId << " = icmp slt i64 %cnt64_st_" << opId << ", 0\n";
+            os << "  %st_bad2_" << opId << " = icmp slt i64 %dst_off_st_s_" << opId << ", 0\n";
+            os << "  %st_bad3_" << opId << " = icmp ugt i64 %dst_end_st_" << opId << ", %dst_len_st_" << opId << "\n";
+            os << "  %st_b12_" << opId << " = or i1 %st_bad1_" << opId << ", %st_bad2_" << opId << "\n";
+            os << "  %st_bad_" << opId << " = or i1 %st_b12_" << opId << ", %st_bad3_" << opId << "\n";
+            os << "  br i1 %st_bad_" << opId << ", label %st_fail_" << opId << ", label %st_ok_" << opId << "\n";
+            os << "st_fail_" << opId << ":\n";
+            os << "  call void @__tamarin_bounds_error()\n";
+            os << "  unreachable\n";
+            os << "st_ok_" << opId << ":\n";
             os << "  %dst_raw_st_" << opId << " = extractvalue { ptr, i64 } %v" << inst.callArgs[0] << ", 0\n";
-            os << "  %dst_ptr_st_" << opId << " = getelementptr inbounds " << elemStr << ", ptr %dst_raw_st_" << opId << ", " << dstOffTyStr << " " << dstOffStr << "\n";
+            os << "  %dst_ptr_st_" << opId << " = getelementptr inbounds " << elemStr << ", ptr %dst_raw_st_" << opId << ", i64 %dst_off_st_s_" << opId << "\n";
 
             if (valTyStr != "i8") {
                 os << "  %byte8_st_" << opId << " = trunc " << valTyStr << " " << valStr << " to i8\n";
                 valStr = "%byte8_st_" + std::to_string(opId);
             }
 
-            if (cntTyStr == "i64") {
-                os << "  %cnt64_st_" << opId << " = add i64 " << cntStr << ", 0\n";
-            } else {
-                os << "  %cnt64_st_" << opId << " = zext " << cntTyStr << " " << cntStr << " to i64\n";
-            }
             os << "  %bytes_st_" << opId << " = mul i64 %cnt64_st_" << opId << ", " << elemSize << "\n";
             os << "  call void @llvm.memset.p0.i64(ptr %dst_ptr_st_" << opId << ", i8 " << valStr << ", i64 %bytes_st_" << opId << ", i1 false)\n";
             break;
@@ -3282,7 +3435,7 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
 
             if (isFloat) {
                 std::string intrinsic = (width == 8) ? "@llvm.vector.reduce.fadd.v8f32" : "@llvm.vector.reduce.fadd.v4f32";
-                os << "  %v" << inst.result << " = call fast float " << intrinsic
+                os << "  %v" << inst.result << " = call " << (fastMath_ ? "fast " : "") << "float " << intrinsic
                    << "(float -0.000000e+00, " << vecTyStr << " %v" << inst.op1 << ")\n";
             } else {
                 std::string intrinsic = (width == 16) ? "@llvm.vector.reduce.add.v16i32" :
@@ -3305,7 +3458,7 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
                 os << "  %dot_mul_" << dId << " = fmul " << (fastMath_ ? "fast " : "")
                    << vecTyStr << " %v" << inst.op1 << ", %v" << inst.op2 << "\n";
                 std::string intrinsic = (width == 8) ? "@llvm.vector.reduce.fadd.v8f32" : "@llvm.vector.reduce.fadd.v4f32";
-                os << "  %v" << inst.result << " = call fast float " << intrinsic
+                os << "  %v" << inst.result << " = call " << (fastMath_ ? "fast " : "") << "float " << intrinsic
                    << "(float -0.000000e+00, " << vecTyStr << " %dot_mul_" << dId << ")\n";
             } else {
                 os << "  %dot_mul_" << dId << " = mul " << vecTyStr << " %v" << inst.op1 << ", %v" << inst.op2 << "\n";
@@ -3369,16 +3522,20 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
 
         case ir::Opcode::AtomicLoad: {
             auto loadedTy = inst.type ? llvmType(inst.type) : "i32";
+            int align = inst.type ? (int)inst.type->alignment() : 4;
+            if (align < 1) align = 4;
             os << "  %v" << inst.result << " = load atomic " << loadedTy
-               << ", ptr %v" << inst.op1 << " seq_cst, align 8\n";
+               << ", ptr %v" << inst.op1 << " seq_cst, align " << align << "\n";
             break;
         }
 
         case ir::Opcode::AtomicStore: {
-            auto valTy = getValueType(inst.op2);
+            auto valTy = inst.type ? inst.type : getValueType(inst.op2);
             std::string tyStr = valTy ? llvmType(valTy) : "i32";
+            int align = valTy ? (int)valTy->alignment() : 4;
+            if (align < 1) align = 4;
             os << "  store atomic " << tyStr << " " << formatOperand(inst.op2, valTy)
-               << ", ptr %v" << inst.op1 << " seq_cst, align 8\n";
+               << ", ptr %v" << inst.op1 << " seq_cst, align " << align << "\n";
             break;
         }
 
@@ -3472,13 +3629,23 @@ bool LLVMCodeGen::emitLLVMIRToFile(const std::filesystem::path& path) {
     return emitLLVMIR(out);
 }
 
+static bool isSafeArchString(const std::string& s) {
+    if (s.empty()) return false;
+    for (char c : s) {
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_' && c != '.') {
+            return false;
+        }
+    }
+    return true;
+}
+
 static std::string resolveArchFlag(const std::string& targetCPU) {
-    if (!targetCPU.empty()) {
+    if (!targetCPU.empty() && isSafeArchString(targetCPU)) {
         return " -march=" + targetCPU;
     }
     const char* envCpu = std::getenv("TAMARIN_TARGET_CPU");
     if (!envCpu || !*envCpu) envCpu = std::getenv("TAMARIN_ARCH");
-    if (envCpu && *envCpu) {
+    if (envCpu && *envCpu && isSafeArchString(envCpu)) {
         return " -march=" + std::string(envCpu);
     }
     return "";

@@ -89,3 +89,5 @@ benchmarks/**/*.exe
 benchmarks/**/*.obj
 benchmarks/**/*.pdb
 benchmarks/**/*.ll
+Tamarin_Audit_Report_Updated.md
+Tamarin_Reproducers/

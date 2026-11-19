@@ -136,7 +136,12 @@ void* PosixPageProvider::reserve(size_t size) {
     size_t gran = (allocGranularity_ > 0) ? allocGranularity_ : 65536;
     if (gran < osPage) gran = osPage;
 
-    size_t alignedSize = (size + gran - 1) & ~(gran - 1);
+    size_t alignedSize = 0;
+    if ((gran & (gran - 1)) == 0) {
+        alignedSize = (size + gran - 1) & ~(gran - 1);
+    } else {
+        alignedSize = ((size + gran - 1) / gran) * gran;
+    }
     s_stats.reserve_count.fetch_add(1, std::memory_order_relaxed);
 
     void* finalPtr = nullptr;
@@ -222,6 +227,16 @@ size_t PosixPageProvider::getResidentWorkingSet() const {
         return static_cast<size_t>(info.resident_size);
     }
 #else
+    FILE* f = fopen("/proc/self/statm", "r");
+    if (f) {
+        long pages = 0;
+        long resident = 0;
+        if (fscanf(f, "%ld %ld", &pages, &resident) == 2) {
+            fclose(f);
+            return static_cast<size_t>(resident) * pageSize_;
+        }
+        fclose(f);
+    }
     struct rusage usage;
     if (getrusage(RUSAGE_SELF, &usage) == 0) {
         return static_cast<size_t>(usage.ru_maxrss) * 1024;
@@ -263,6 +278,7 @@ bool FallbackPageProvider::release(void* base) {
 
 // ── Platform Provider Registry ──────────────────────────────────────────────
 
+static std::mutex s_providerMutex;
 static std::unique_ptr<MemoryPageProvider> s_defaultProvider;
 static MemoryPageProvider* s_activeProvider = nullptr;
 
@@ -290,16 +306,19 @@ static void ensureDefaultProvider() {
 }
 
 MemoryPageProvider& getPlatformPageProvider() {
+    std::lock_guard<std::mutex> lock(s_providerMutex);
     if (s_activeProvider) return *s_activeProvider;
     ensureDefaultProvider();
     return *s_defaultProvider;
 }
 
 void setPlatformPageProvider(MemoryPageProvider* provider) {
+    std::lock_guard<std::mutex> lock(s_providerMutex);
     s_activeProvider = provider;
 }
 
 void resetPlatformPageProvider() {
+    std::lock_guard<std::mutex> lock(s_providerMutex);
     s_activeProvider = nullptr;
 }
 
@@ -793,7 +812,11 @@ static void slab_grow_chunk(tamarin::runtime::TamarinSlab* slab) {
 
     auto* chunk = new tamarin::runtime::TamarinSlabChunk();
     size_t gens_bytes = static_cast<size_t>(chunk_cap) * sizeof(uint32_t);
-    size_t gens_bytes_aligned = (gens_bytes + 15) & ~15ULL;
+    size_t align_req = 16;
+    if (slab->slot_stride % 64 == 0) align_req = 64;
+    else if (slab->slot_stride % 32 == 0) align_req = 32;
+    size_t align_mask = align_req - 1;
+    size_t gens_bytes_aligned = (gens_bytes + align_mask) & ~align_mask;
     size_t slots_bytes = static_cast<size_t>(chunk_cap) * slab->slot_stride;
     size_t total_memory = gens_bytes_aligned + slots_bytes;
 
@@ -806,12 +829,20 @@ static void slab_grow_chunk(tamarin::runtime::TamarinSlab* slab) {
     void* base = tamarin::runtime::t_chunk_cache.acquire(total_res, &c_res, &c_com);
     if (!base) {
         base = tamarin::runtime::getPlatformPageProvider().reserve(total_res);
+        if (!base) {
+            delete chunk;
+            return;
+        }
         tamarin::runtime::getPlatformPageProvider().commit(base, 0, total_com);
         c_res = total_res;
         c_com = total_com;
     } else if (c_com < total_com) {
         tamarin::runtime::getPlatformPageProvider().commit(base, c_com, total_com - c_com);
         c_com = total_com;
+    }
+    if (!base) {
+        delete chunk;
+        return;
     }
 
     chunk->generations = reinterpret_cast<uint32_t*>(base);
@@ -855,8 +886,11 @@ void __tamarin_slab_init(tamarin::runtime::TamarinSlab* slab, size_t elem_size, 
     size_t rem = stride % align;
     if (rem != 0) stride += (align - rem);
 
+    if (stride > 0 && initial_cap > (SIZE_MAX / stride)) return;
+
     size_t gens_bytes = initial_cap * sizeof(uint32_t);
-    size_t gens_bytes_aligned = (gens_bytes + 15) & ~15ULL;
+    size_t align_mask = std::max(align, static_cast<size_t>(16)) - 1;
+    size_t gens_bytes_aligned = (gens_bytes + align_mask) & ~align_mask;
     size_t slots_bytes = initial_cap * stride;
     size_t total_memory = gens_bytes_aligned + slots_bytes;
 
@@ -869,6 +903,7 @@ void __tamarin_slab_init(tamarin::runtime::TamarinSlab* slab, size_t elem_size, 
     void* base = tamarin::runtime::t_chunk_cache.acquire(total_res, &c_res, &c_com);
     if (!base) {
         base = tamarin::runtime::getPlatformPageProvider().reserve(total_res);
+        if (!base) return;
         tamarin::runtime::getPlatformPageProvider().commit(base, 0, total_com);
         c_res = total_res;
         c_com = total_com;
@@ -876,6 +911,7 @@ void __tamarin_slab_init(tamarin::runtime::TamarinSlab* slab, size_t elem_size, 
         tamarin::runtime::getPlatformPageProvider().commit(base, c_com, total_com - c_com);
         c_com = total_com;
     }
+    if (!base) return;
 
     slab->generations = reinterpret_cast<uint32_t*>(base);
     slab->slots = reinterpret_cast<uint8_t*>(base) + gens_bytes_aligned;

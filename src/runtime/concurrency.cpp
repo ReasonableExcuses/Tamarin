@@ -163,7 +163,7 @@ public:
             tamarin_parallel_worker_fn worker;
             void* ctx;
             std::atomic<int64_t> nextIndex;
-            std::atomic<int32_t> pendingChunks;
+            std::atomic<int64_t> activeWorkers;
             std::mutex mtx;
             std::condition_variable cv;
         };
@@ -177,50 +177,40 @@ public:
         job->nextIndex.store(start, std::memory_order_relaxed);
 
         int64_t numChunks = (total + grainSize - 1) / grainSize;
-        job->pendingChunks.store(static_cast<int32_t>(numChunks), std::memory_order_release);
+        size_t tasksToSpawn = std::min(static_cast<size_t>(numChunks), numWorkers_);
+        job->activeWorkers.store(static_cast<int64_t>(tasksToSpawn), std::memory_order_release);
 
-        // Submit chunk tasks to queue
-        {
-            std::unique_lock<std::mutex> lock(queueMutex_);
-            for (int64_t i = 0; i < numChunks; ++i) {
-                parallelQueue_.push_back([job]() {
-                    int64_t cStart = job->nextIndex.fetch_add(job->grain, std::memory_order_relaxed);
-                    if (cStart < job->end) {
-                        int64_t cEnd = std::min(cStart + job->grain, job->end);
-                        job->worker(cStart, cEnd, job->ctx);
-                    }
-                    if (job->pendingChunks.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-                        std::unique_lock<std::mutex> lk(job->mtx);
-                        job->cv.notify_all();
-                    }
-                });
+        auto runWorkerChunks = [job]() {
+            while (true) {
+                int64_t cStart = job->nextIndex.fetch_add(job->grain, std::memory_order_relaxed);
+                if (cStart >= job->end) break;
+                int64_t cEnd = std::min(cStart + job->grain, job->end);
+                job->worker(cStart, cEnd, job->ctx);
             }
-        }
-        cvTask_.notify_all();
+            if (job->activeWorkers.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                std::unique_lock<std::mutex> lk(job->mtx);
+                job->cv.notify_all();
+            }
+        };
 
-        // Calling thread helps work until job is complete
-        while (job->pendingChunks.load(std::memory_order_acquire) > 0) {
-            std::function<void()> task;
+        if (tasksToSpawn > 1) {
             {
                 std::unique_lock<std::mutex> lock(queueMutex_);
-                if (!parallelQueue_.empty()) {
-                    task = std::move(parallelQueue_.front());
-                    parallelQueue_.pop_front();
+                for (size_t i = 1; i < tasksToSpawn; ++i) {
+                    parallelQueue_.push_back(runWorkerChunks);
                 }
             }
-            if (task) {
-                task();
-            } else {
-                // Wait for remaining workers to finish
-                std::unique_lock<std::mutex> lk(job->mtx);
-                if (job->pendingChunks.load(std::memory_order_acquire) > 0) {
-                    job->cv.wait(lk, [&]() {
-                        return job->pendingChunks.load(std::memory_order_acquire) == 0;
-                    });
-                }
-                break;
-            }
+            cvTask_.notify_all();
         }
+
+        // Calling thread participates directly
+        runWorkerChunks();
+
+        // Wait for background workers to finish
+        std::unique_lock<std::mutex> lk(job->mtx);
+        job->cv.wait(lk, [&]() {
+            return job->activeWorkers.load(std::memory_order_acquire) == 0;
+        });
     }
 
     void spawn(TaskScope* scope, tamarin_task_fn fn, void* ctx) {

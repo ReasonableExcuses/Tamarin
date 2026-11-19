@@ -68,10 +68,25 @@ std::optional<Lockfile> Lockfile::parseString(std::string_view content, std::str
     std::istringstream stream{std::string(content)};
     std::string line;
     LockedPackage* currentPkg = nullptr;
+    bool inArray = false;
+    std::string arrayBuf;
 
     while (std::getline(stream, line)) {
         std::string_view sv = trim(line);
         if (sv.starts_with('#') || sv.empty()) continue;
+
+        if (inArray) {
+            arrayBuf += " ";
+            arrayBuf += sv;
+            if (sv.find(']') != std::string_view::npos) {
+                inArray = false;
+                if (currentPkg) {
+                    currentPkg->dependencies = parseArray(arrayBuf);
+                }
+                arrayBuf.clear();
+            }
+            continue;
+        }
 
         if (sv == "[[package]]") {
             lock.packages.emplace_back();
@@ -101,7 +116,12 @@ std::optional<Lockfile> Lockfile::parseString(std::string_view content, std::str
             } else if (key == "checksum") {
                 currentPkg->checksum = stripQuotes(rawVal);
             } else if (key == "dependencies") {
-                currentPkg->dependencies = parseArray(rawVal);
+                if (rawVal.starts_with('[') && !rawVal.ends_with(']')) {
+                    inArray = true;
+                    arrayBuf = std::string(rawVal);
+                } else {
+                    currentPkg->dependencies = parseArray(rawVal);
+                }
             }
         }
     }
@@ -162,6 +182,11 @@ bool Lockfile::saveToFile(const std::filesystem::path& path, std::string& errorM
         return false;
     }
     file << toToml();
+    file.flush();
+    if (!file.good()) {
+        errorMsg = "failed to flush lockfile: " + path.string();
+        return false;
+    }
     return true;
 }
 
@@ -185,15 +210,20 @@ std::string Lockfile::computeChecksum(const std::filesystem::path& path) {
             hashBuffer(reinterpret_cast<const uint8_t*>(buf), static_cast<size_t>(file.gcount()));
         }
     } else if (std::filesystem::is_directory(path)) {
+        std::vector<std::filesystem::path> files;
         for (const auto& entry : std::filesystem::recursive_directory_iterator(path)) {
             if (entry.is_regular_file()) {
-                std::string rel = entry.path().filename().string();
-                hashBuffer(reinterpret_cast<const uint8_t*>(rel.data()), rel.size());
-                std::ifstream file(entry.path(), std::ios::binary);
-                char buf[4096];
-                while (file.read(buf, sizeof(buf)) || file.gcount() > 0) {
-                    hashBuffer(reinterpret_cast<const uint8_t*>(buf), static_cast<size_t>(file.gcount()));
-                }
+                files.push_back(entry.path());
+            }
+        }
+        std::sort(files.begin(), files.end());
+        for (const auto& filePath : files) {
+            std::string rel = std::filesystem::relative(filePath, path).generic_string();
+            hashBuffer(reinterpret_cast<const uint8_t*>(rel.data()), rel.size());
+            std::ifstream file(filePath, std::ios::binary);
+            char buf[4096];
+            while (file.read(buf, sizeof(buf)) || file.gcount() > 0) {
+                hashBuffer(reinterpret_cast<const uint8_t*>(buf), static_cast<size_t>(file.gcount()));
             }
         }
     }

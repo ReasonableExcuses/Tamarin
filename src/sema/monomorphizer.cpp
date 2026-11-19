@@ -155,7 +155,7 @@ ast::TypePtr Monomorphizer::typeToASTTypeNode(const Type* type, SourceLocation l
         case TypeKind::Enum:
             return std::make_unique<NamedTypeNode>(type->enumName, loc);
         case TypeKind::Reference:
-            return std::make_unique<ReferenceTypeNode>(typeToASTTypeNode(type->elementType, loc), type->isConstRef, loc);
+            return std::make_unique<ReferenceTypeNode>(typeToASTTypeNode(type->elementType, loc), type->isConstRef, loc, type->isPointer());
         case TypeKind::Handle:
             return std::make_unique<HandleTypeNode>(typeToASTTypeNode(type->elementType, loc), loc);
         case TypeKind::Slab:
@@ -209,7 +209,7 @@ ast::TypePtr Monomorphizer::substituteType(const ast::TypeNode* node, const Type
         case TypeNodeKind::Reference: {
             auto& rt = static_cast<const ReferenceTypeNode&>(*node);
             auto elem = substituteType(rt.referentType.get(), subst);
-            return std::make_unique<ReferenceTypeNode>(std::move(elem), rt.isConst, rt.loc);
+            return std::make_unique<ReferenceTypeNode>(std::move(elem), rt.isConst, rt.loc, rt.isPointer);
         }
         case TypeNodeKind::Handle: {
             auto& ht = static_cast<const HandleTypeNode&>(*node);

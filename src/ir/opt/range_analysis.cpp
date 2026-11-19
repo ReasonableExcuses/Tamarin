@@ -245,7 +245,44 @@ void RangeAnalysis::identifyCanonicalLoops(IRFunction& fn) {
             initVal = initIt->second;
         }
 
-        // Verify increment block advances inductionAlloca positively
+        // Verify that inductionAlloca is modified only once in the loop by a step-1 increment
+        bool validIncrement = false;
+        int storeCount = 0;
+        for (size_t nextIdx = bIdx + 1; nextIdx < fn.blocks.size(); ++nextIdx) {
+            const auto& nextBlk = fn.blocks[nextIdx];
+            if (nextBlk->label == exitLabel || nextBlk->label == blk->label) {
+                break;
+            }
+            for (const auto& inst : nextBlk->instructions) {
+                if (inst.opcode == Opcode::Store && inst.op1 == inductionAlloca) {
+                    storeCount++;
+                    ValueId rhsVal = inst.op2;
+                    for (const auto& prevInst : nextBlk->instructions) {
+                        if (prevInst.result == rhsVal && prevInst.opcode == Opcode::Add) {
+                            ValueId addOp1 = prevInst.op1;
+                            ValueId addOp2 = prevInst.op2;
+                            auto c1 = constantValues_.find(addOp1);
+                            auto c2 = constantValues_.find(addOp2);
+                            bool hasOne = (c1 != constantValues_.end() && c1->second == 1) ||
+                                          (c2 != constantValues_.end() && c2->second == 1);
+                            ValueId loadCandidate = (c1 != constantValues_.end() && c1->second == 1) ? addOp2 : addOp1;
+                            for (const auto& loadInst : nextBlk->instructions) {
+                                if (loadInst.result == loadCandidate && loadInst.opcode == Opcode::Load && loadInst.op1 == inductionAlloca) {
+                                    if (hasOne) {
+                                        validIncrement = true;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (storeCount != 1 || !validIncrement) {
+            continue; // Non-monotonic or modified in body; cannot eliminate bounds checks
+        }
+
         int64_t step = 1;
         LoopInductionVar liv;
         liv.allocaVar = inductionAlloca;

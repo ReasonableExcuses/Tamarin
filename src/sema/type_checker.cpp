@@ -784,6 +784,8 @@ TypeChecker::ConstEvalResult TypeChecker::evalIntConstExpr(const ast::Expr& expr
                 case BinaryOp::Mod: {
                     if (rhs == 0) {
                         res.divByZero = true;
+                    } else if (lhs == INT64_MIN && rhs == -1) {
+                        res.value = 0;
                     } else {
                         res.value = lhs % rhs;
                     }
@@ -3321,25 +3323,69 @@ const Type* TypeChecker::checkCall(CallExpr& expr) {
         }
         return tc_.getVoid();
     }
+    auto isAtomicTarget = [](const ast::Expr& e, const Type* ty) {
+        if (!ty) return false;
+        if (ty->isReference() || ty->isPointer()) return true;
+        return (e.kind == ExprKind::Identifier || e.kind == ExprKind::Field ||
+                e.kind == ExprKind::Index || (e.kind == ExprKind::Unary && static_cast<const UnaryExpr&>(e).op == UnaryOp::Deref));
+    };
+
+    auto isTargetConst = [&](const ast::Expr& e, const Type* ty) {
+        if (ty && ty->isConstRef) return true;
+        if (e.kind == ExprKind::Identifier) {
+            auto sym = findSymbol(static_cast<const IdentifierExpr&>(e).name, e.loc);
+            if (sym && (sym->isConst || (sym->type && sym->type->isConstRef))) return true;
+        }
+        return false;
+    };
+
+    auto getTargetValueType = [](const Type* ty) -> const Type* {
+        if (!ty) return nullptr;
+        if (ty->isReference() || ty->isPointer()) return ty->elementType;
+        return ty;
+    };
+
     if (expr.callee == "__builtin_atomic_load") {
         if (expr.args.size() != 1) {
             diag_.report(expr.loc, Severity::Error, "__builtin_atomic_load takes 1 argument (target)");
             return tc_.getI32();
         }
         auto targetTy = checkExpr(*expr.args[0]);
-        if (targetTy && targetTy->isReference()) targetTy = targetTy->elementType;
-        if (!expr.typeArgs.empty()) {
-            return resolveType(*expr.typeArgs[0]);
+        if (!isAtomicTarget(*expr.args[0], targetTy)) {
+            diag_.report(expr.args[0]->loc, Severity::Error, "__builtin_atomic_load target must be an lvalue, pointer, or reference");
+            return tc_.getI32();
         }
-        return targetTy ? targetTy : tc_.getI32();
+        auto valTy = getTargetValueType(targetTy);
+        if (!expr.typeArgs.empty()) {
+            auto explicitTy = resolveType(*expr.typeArgs[0]);
+            if (valTy && explicitTy && *explicitTy != *valTy) {
+                diag_.report(expr.loc, Severity::Error,
+                             "explicit type argument '" + explicitTy->toString() + "' does not match target type '" +
+                             valTy->toString() + "'");
+            }
+            return explicitTy ? explicitTy : (valTy ? valTy : tc_.getI32());
+        }
+        return valTy ? valTy : tc_.getI32();
     }
     if (expr.callee == "__builtin_atomic_store") {
         if (expr.args.size() != 2) {
             diag_.report(expr.loc, Severity::Error, "__builtin_atomic_store takes 2 arguments (target, val)");
             return tc_.getVoid();
         }
-        checkExpr(*expr.args[0]);
-        checkExpr(*expr.args[1]);
+        auto targetTy = checkExpr(*expr.args[0]);
+        auto valTy = checkExpr(*expr.args[1]);
+        if (!isAtomicTarget(*expr.args[0], targetTy)) {
+            diag_.report(expr.args[0]->loc, Severity::Error, "__builtin_atomic_store target must be an lvalue, pointer, or reference");
+        } else if (isTargetConst(*expr.args[0], targetTy)) {
+            diag_.report(expr.args[0]->loc, Severity::Error, "cannot atomically store to a const target");
+        } else {
+            auto targetValTy = getTargetValueType(targetTy);
+            if (valTy && targetValTy && *valTy != *targetValTy) {
+                diag_.report(expr.args[1]->loc, Severity::Error,
+                             "cannot store value of type '" + valTy->toString() + "' to atomic target of type '" +
+                             targetValTy->toString() + "'");
+            }
+        }
         return tc_.getVoid();
     }
     if (expr.callee == "__builtin_atomic_add" || expr.callee == "__builtin_atomic_sub") {
@@ -3348,21 +3394,50 @@ const Type* TypeChecker::checkCall(CallExpr& expr) {
             return tc_.getI32();
         }
         auto targetTy = checkExpr(*expr.args[0]);
-        checkExpr(*expr.args[1]);
-        if (targetTy && targetTy->isReference()) targetTy = targetTy->elementType;
+        auto deltaTy = checkExpr(*expr.args[1]);
+        if (!isAtomicTarget(*expr.args[0], targetTy)) {
+            diag_.report(expr.args[0]->loc, Severity::Error, expr.callee + " target must be an lvalue, pointer, or reference");
+        } else if (isTargetConst(*expr.args[0], targetTy)) {
+            diag_.report(expr.args[0]->loc, Severity::Error, "cannot atomically modify a const target");
+        } else {
+            auto targetValTy = getTargetValueType(targetTy);
+            if (deltaTy && targetValTy && *deltaTy != *targetValTy) {
+                diag_.report(expr.args[1]->loc, Severity::Error,
+                             "cannot modify atomic target of type '" + targetValTy->toString() +
+                             "' with delta of type '" + deltaTy->toString() + "'");
+            }
+        }
+        auto targetValTy = getTargetValueType(targetTy);
         if (!expr.typeArgs.empty()) {
             return resolveType(*expr.typeArgs[0]);
         }
-        return targetTy ? targetTy : tc_.getI32();
+        return targetValTy ? targetValTy : tc_.getI32();
     }
     if (expr.callee == "__builtin_atomic_cmpxchg") {
         if (expr.args.size() != 3) {
             diag_.report(expr.loc, Severity::Error, "__builtin_atomic_cmpxchg takes 3 arguments (target, expected, desired)");
             return tc_.getBool();
         }
-        checkExpr(*expr.args[0]);
-        checkExpr(*expr.args[1]);
-        checkExpr(*expr.args[2]);
+        auto targetTy = checkExpr(*expr.args[0]);
+        auto expTy = checkExpr(*expr.args[1]);
+        auto desTy = checkExpr(*expr.args[2]);
+        if (!isAtomicTarget(*expr.args[0], targetTy)) {
+            diag_.report(expr.args[0]->loc, Severity::Error, "__builtin_atomic_cmpxchg target must be an lvalue, pointer, or reference");
+        } else if (isTargetConst(*expr.args[0], targetTy)) {
+            diag_.report(expr.args[0]->loc, Severity::Error, "cannot atomically modify a const target");
+        } else {
+            auto targetValTy = getTargetValueType(targetTy);
+            if (expTy && targetValTy && *expTy != *targetValTy) {
+                diag_.report(expr.args[1]->loc, Severity::Error,
+                             "expected value of type '" + expTy->toString() + "' does not match atomic target of type '" +
+                             targetValTy->toString() + "'");
+            }
+            if (desTy && targetValTy && *desTy != *targetValTy) {
+                diag_.report(expr.args[2]->loc, Severity::Error,
+                             "desired value of type '" + desTy->toString() + "' does not match atomic target of type '" +
+                             targetValTy->toString() + "'");
+            }
+        }
         return tc_.getBool();
     }
 
@@ -5179,16 +5254,23 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
                         varTy = tc_.getArray(elemTy, size);
                     }
                 } else if (v.initializer) {
-                    // Inferred array T[] = { ... }
-                    auto initTy = checkExpr(*v.initializer);
-                    if (initTy && initTy->isArray()) {
-                        varTy = initTy;
-                    } else if (initTy && (initTy->isArrayView() || v.initializer->kind == ExprKind::StringLiteral)) {
-                        varTy = initTy;
+                    // Inferred array T[] = { ... } or T[] = arr
+                    if (auto* aInit = dynamic_cast<ArrayInitExpr*>(v.initializer.get())) {
+                        checkExpr(*v.initializer);
+                        int64_t count = static_cast<int64_t>(aInit->elements.size());
+                        v.evaluatedArraySize = count;
+                        varTy = tc_.getArray(elemTy, count);
                     } else {
-                        diag_.report(v.loc, Severity::Error,
-                                     "unsized array declaration initializer must be an array initializer");
-                        varTy = tc_.getArray(elemTy, 0);
+                        auto initTy = checkExpr(*v.initializer);
+                        if (initTy && initTy->isArray()) {
+                            varTy = tc_.getArrayView(initTy->elementType);
+                        } else if (initTy && (initTy->isArrayView() || v.initializer->kind == ExprKind::StringLiteral)) {
+                            varTy = initTy;
+                        } else {
+                            diag_.report(v.loc, Severity::Error,
+                                         "unsized array declaration initializer must be an array initializer");
+                            varTy = tc_.getArray(elemTy, 0);
+                        }
                     }
                 } else {
                     diag_.report(v.loc, Severity::Error,

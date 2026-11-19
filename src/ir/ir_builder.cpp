@@ -253,6 +253,20 @@ std::unique_ptr<IRModule> IRBuilder::buildModule(Program& prog, const std::strin
             g.isArray = gv.isArray || (varTy && varTy->isArray());
             g.arraySize = arrSz > 0 ? arrSz : 0;
             g.isConst = gv.isConst;
+            if (gv.initializer) {
+                if (gv.initializer->kind == ExprKind::ArrayInit) {
+                    auto& aInit = static_cast<ArrayInitExpr&>(*gv.initializer);
+                    for (auto& elem : aInit.elements) {
+                        auto res = checker_.evalIntConstExpr(*elem);
+                        g.arrayInitializers.push_back(res.isConst ? res.value : 0);
+                    }
+                } else {
+                    auto res = checker_.evalIntConstExpr(*gv.initializer);
+                    if (res.isConst && !res.overflow && !res.divByZero) {
+                        g.initialValue = res.value;
+                    }
+                }
+            }
             mod->globals.push_back(g);
             globals_[gv.name] = g;
         } else if (decl->kind == DeclKind::Const) {
@@ -262,6 +276,12 @@ std::unique_ptr<IRModule> IRBuilder::buildModule(Program& prog, const std::strin
             g.name = cd.name;
             g.type = sym ? sym->type : nullptr;
             g.isConst = true;
+            if (cd.value) {
+                auto res = checker_.evalIntConstExpr(*cd.value);
+                if (res.isConst && !res.overflow && !res.divByZero) {
+                    g.initialValue = res.value;
+                }
+            }
             mod->globals.push_back(g);
             globals_[cd.name] = g;
         }
@@ -344,6 +364,20 @@ std::unique_ptr<IRModule> IRBuilder::buildProgram(
                 g.isArray = gv.isArray || (varTy && varTy->isArray());
                 g.arraySize = arrSz > 0 ? arrSz : 0;
                 g.isConst = gv.isConst;
+                if (gv.initializer) {
+                    if (gv.initializer->kind == ExprKind::ArrayInit) {
+                        auto& aInit = static_cast<ArrayInitExpr&>(*gv.initializer);
+                        for (auto& elem : aInit.elements) {
+                            auto res = checker_.evalIntConstExpr(*elem);
+                            g.arrayInitializers.push_back(res.isConst ? res.value : 0);
+                        }
+                    } else {
+                        auto res = checker_.evalIntConstExpr(*gv.initializer);
+                        if (res.isConst && !res.overflow && !res.divByZero) {
+                            g.initialValue = res.value;
+                        }
+                    }
+                }
                 mod->globals.push_back(g);
                 globals_[gv.name] = g;
             } else if (decl->kind == DeclKind::Const) {
@@ -353,6 +387,12 @@ std::unique_ptr<IRModule> IRBuilder::buildProgram(
                 g.name = cd.name;
                 g.type = sym ? sym->type : nullptr;
                 g.isConst = true;
+                if (cd.value) {
+                    auto res = checker_.evalIntConstExpr(*cd.value);
+                    if (res.isConst && !res.overflow && !res.divByZero) {
+                        g.initialValue = res.value;
+                    }
+                }
                 mod->globals.push_back(g);
                 globals_[cd.name] = g;
             }
@@ -1870,11 +1910,12 @@ void IRBuilder::lowerVarDecl(VarDeclStmt& decl) {
         if (decl.initializer && decl.initializer->kind != ExprKind::ArrayInit) {
             auto valId = lowerExpr(*decl.initializer);
             auto initTy = checker_.getExprType(decl.initializer.get());
-            if (initTy && initTy->isArrayView()) {
+            if (initTy && (initTy->isArrayView() || initTy->isArray())) {
+                auto viewTy = initTy->isArrayView() ? initTy : checker_.context().getArrayView(initTy->elementType);
                 Instruction allocaInst;
                 allocaInst.opcode = Opcode::Alloca;
                 allocaInst.result = nextValueId();
-                allocaInst.type   = initTy;
+                allocaInst.type   = viewTy;
                 emit(allocaInst);
 
                 Instruction storeInst;
@@ -1892,7 +1933,7 @@ void IRBuilder::lowerVarDecl(VarDeclStmt& decl) {
 
                 Binding b;
                 b.ptr = allocaInst.result;
-                b.type = initTy;
+                b.type = viewTy;
                 b.arrayLenValueId = getLenInst.result;
                 b.isConst = decl.isConst;
                 setBinding(decl.name, std::move(b));
@@ -4574,9 +4615,8 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                     }
                 }
 
-                val = emitCastIfNeeded(val, valTy, ty);
-
                 if (a.op == AssignOp::Assign) {
+                    val = emitCastIfNeeded(val, valTy, ty);
                     if (ty && ty->hasNonTrivialDestructor() && ptr != InvalidValue) {
                         markVariableReassigned(id.name, ptr, ty);
                     }
@@ -4587,6 +4627,9 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                     emit(store);
                     return val;
                 } else {
+                    if (!ty || !ty->isPointer()) {
+                        val = emitCastIfNeeded(val, valTy, ty);
+                    }
                     Instruction load;
                     load.opcode = Opcode::Load;
                     load.result = nextValueId();
@@ -4596,6 +4639,41 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
 
                     bool isFloat = ty && ty->isFloat();
                     bool isUnsigned = ty && ty->isUnsignedInteger();
+
+                    if (ty && ty->isPointer() && (a.op == AssignOp::AddAssign || a.op == AssignOp::SubAssign)) {
+                        ValueId stepVal = val;
+                        if (a.op == AssignOp::SubAssign) {
+                            Instruction zeroConst;
+                            zeroConst.opcode = Opcode::IConst;
+                            zeroConst.result = nextValueId();
+                            zeroConst.intImm = 0;
+                            zeroConst.type   = valTy ? valTy : checker_.context().getI64();
+                            emit(zeroConst);
+
+                            Instruction neg;
+                            neg.opcode = Opcode::Sub;
+                            neg.result = nextValueId();
+                            neg.op1    = zeroConst.result;
+                            neg.op2    = val;
+                            neg.type   = valTy ? valTy : checker_.context().getI64();
+                            emit(neg);
+                            stepVal = neg.result;
+                        }
+                        Instruction gep;
+                        gep.opcode = Opcode::GetArrayElemPtr;
+                        gep.result = nextValueId();
+                        gep.op1    = load.result;
+                        gep.op2    = stepVal;
+                        gep.type   = ty->elementType ? ty->elementType : checker_.context().getI8();
+                        emit(gep);
+
+                        Instruction store;
+                        store.opcode = Opcode::Store;
+                        store.op1    = ptr;
+                        store.op2    = gep.result;
+                        emit(store);
+                        return gep.result;
+                    }
 
                     Opcode binOp = Opcode::Add;
                     switch (a.op) {
@@ -4721,9 +4799,8 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                 gfp.strImm = baseTy ? baseTy->structName : "";
                 emit(gfp);
 
-                val = emitCastIfNeeded(val, valTy, fieldTy);
-
                 if (a.op == AssignOp::Assign) {
+                    val = emitCastIfNeeded(val, valTy, fieldTy);
                     Instruction store;
                     store.opcode = Opcode::Store;
                     store.op1    = gfp.result;
@@ -4731,6 +4808,9 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                     emit(store);
                     return val;
                 } else {
+                    if (!fieldTy || !fieldTy->isPointer()) {
+                        val = emitCastIfNeeded(val, valTy, fieldTy);
+                    }
                     Instruction load;
                     load.opcode = Opcode::Load;
                     load.result = nextValueId();
@@ -4740,6 +4820,41 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
 
                     bool isFloat = fieldTy && fieldTy->isFloat();
                     bool isUnsigned = fieldTy && fieldTy->isUnsignedInteger();
+
+                    if (fieldTy && fieldTy->isPointer() && (a.op == AssignOp::AddAssign || a.op == AssignOp::SubAssign)) {
+                        ValueId stepVal = val;
+                        if (a.op == AssignOp::SubAssign) {
+                            Instruction zeroConst;
+                            zeroConst.opcode = Opcode::IConst;
+                            zeroConst.result = nextValueId();
+                            zeroConst.intImm = 0;
+                            zeroConst.type   = valTy ? valTy : checker_.context().getI64();
+                            emit(zeroConst);
+
+                            Instruction neg;
+                            neg.opcode = Opcode::Sub;
+                            neg.result = nextValueId();
+                            neg.op1    = zeroConst.result;
+                            neg.op2    = val;
+                            neg.type   = valTy ? valTy : checker_.context().getI64();
+                            emit(neg);
+                            stepVal = neg.result;
+                        }
+                        Instruction gep;
+                        gep.opcode = Opcode::GetArrayElemPtr;
+                        gep.result = nextValueId();
+                        gep.op1    = load.result;
+                        gep.op2    = stepVal;
+                        gep.type   = fieldTy->elementType ? fieldTy->elementType : checker_.context().getI8();
+                        emit(gep);
+
+                        Instruction store;
+                        store.opcode = Opcode::Store;
+                        store.op1    = gfp.result;
+                        store.op2    = gep.result;
+                        emit(store);
+                        return gep.result;
+                    }
 
                     Opcode binOp = Opcode::Add;
                     switch (a.op) {
