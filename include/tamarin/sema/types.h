@@ -143,7 +143,7 @@ struct Type {
     // Reference metadata
     bool isConstRef = false;
     bool isConst = false;
-    bool isPointer = false;
+    bool isRawPointer = false;
 
     // SIMD Vector metadata
     uint32_t vectorWidth = 0;
@@ -180,6 +180,14 @@ struct Type {
 
     [[nodiscard]] bool isReference() const noexcept {
         return kind == TypeKind::Reference;
+    }
+
+    [[nodiscard]] bool isPointer() const noexcept {
+        return kind == TypeKind::Reference && isRawPointer;
+    }
+
+    [[nodiscard]] bool isRef() const noexcept {
+        return kind == TypeKind::Reference && !isRawPointer;
     }
 
     [[nodiscard]] bool isHandle() const noexcept {
@@ -455,7 +463,7 @@ struct Type {
             return false;
         }
         if (isReference()) {
-            return isConstRef == other.isConstRef && isPointer == other.isPointer && *elementType == *other.elementType;
+            return isConstRef == other.isConstRef && isRawPointer == other.isRawPointer && *elementType == *other.elementType;
         }
         if (isRecord()) {
             return structName == other.structName;
@@ -510,7 +518,7 @@ struct Type {
     /// Tamarin rules: very restrictive, same-family widening or exact match.
     [[nodiscard]] bool isImplicitlyConvertibleTo(const Type& target) const noexcept {
         if (*this == target) return true;
-        // Reference target
+        // Reference / pointer target
         if (target.isReference()) {
             const Type* targetElem = target.elementType;
             if (!targetElem || targetElem->isVoid()) return true;
@@ -521,6 +529,9 @@ struct Type {
             }
             const Type* srcElem = isReference() ? elementType : this;
             if (*srcElem == *targetElem) {
+                if (isReference() && target.isPointer() && isConstRef && !target.isConstRef) {
+                    return false;
+                }
                 return true;
             }
             if (srcElem->isRecord() && targetElem->isRecord() && srcElem->inheritsFrom(targetElem)) {
@@ -601,7 +612,7 @@ struct Type {
             case TypeKind::Struct:   return (isClassType ? "class " : (isInterfaceType ? "interface " : "struct ")) + structName;
             case TypeKind::Class:    return "class " + structName;
             case TypeKind::Interface:return "interface " + structName;
-            case TypeKind::Reference:return (isConstRef ? "const " : "") + (elementType ? elementType->toString() : "void") + (isPointer ? "*" : "&");
+            case TypeKind::Reference:return (isConstRef ? "const " : "") + (elementType ? elementType->toString() : "void") + (isRawPointer ? "*" : "&");
             case TypeKind::Handle:   return "Handle<" + (elementType ? elementType->toString() : "?") + ">";
             case TypeKind::Task:     return "Task<" + (elementType ? elementType->toString() : "void") + ">";
             case TypeKind::Slab:     return "Slab<" + (elementType ? elementType->toString() : "?") + ">";

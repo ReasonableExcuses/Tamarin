@@ -172,6 +172,9 @@ std::string LLVMCodeGen::formatOperand(ir::ValueId id, const sema::Type* ty) con
     }
     auto it = intConstants_.find(id);
     if (it != intConstants_.end()) {
+        if (ty && (ty->isReference() || isPointerValue_.count(id)) && it->second == 0) {
+            return "null";
+        }
         return std::to_string(it->second);
     }
     auto fIt = floatConstants_.find(id);

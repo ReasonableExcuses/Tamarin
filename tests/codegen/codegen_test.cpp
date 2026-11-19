@@ -6541,6 +6541,72 @@ TAMARIN_TEST(CodeGen, ModuleLevelGlobalFixedArrayAndScalar) {
     return true;
 }
 
+TAMARIN_TEST(Pointers, PrefixStarTypeDeclarationAndAddress) {
+    std::string src =
+        "int main() {\n"
+        "    *int p;\n"
+        "    int val = 99;\n"
+        "    p = &val;\n"
+        "    *p = 123;\n"
+        "    print(val);\n"
+        "    return 0;\n"
+        "}\n";
+    int exitCode = -1;
+    std::string out;
+    EXPECT_TRUE(compileAndRunProgram(src, 2, exitCode, out));
+    EXPECT_EQ(exitCode, 0);
+    EXPECT_TRUE(out.find("123") != std::string::npos);
+    return true;
+}
+
+TAMARIN_TEST(Pointers, StringLiteralDecayToConstU8Pointer) {
+    std::string src =
+        "int main() {\n"
+        "    *const u8 msg = \"Hello from C-compatible pointer!\";\n"
+        "    u8 first = msg[0];\n"
+        "    u8 second = *(msg + 1);\n"
+        "    print((int)first);\n"
+        "    print((int)second);\n"
+        "    return 0;\n"
+        "}\n";
+    int exitCode = -1;
+    std::string out;
+    EXPECT_TRUE(compileAndRunProgram(src, 2, exitCode, out));
+    EXPECT_EQ(exitCode, 0);
+    // 'H' = 72, 'e' = 101
+    EXPECT_TRUE(out.find("72") != std::string::npos);
+    EXPECT_TRUE(out.find("101") != std::string::npos);
+    return true;
+}
+
+TAMARIN_TEST(Pointers, PointerArithmeticAndIndexing) {
+    std::string src =
+        "int main() {\n"
+        "    int arr[4];\n"
+        "    arr[0] = 10;\n"
+        "    arr[1] = 20;\n"
+        "    arr[2] = 30;\n"
+        "    arr[3] = 40;\n"
+        "    *int p = &arr[0];\n"
+        "    int a = p[2];\n"
+        "    *int p2 = p + 3;\n"
+        "    int b = *p2;\n"
+        "    int diff = (int)(p2 - p);\n"
+        "    print(a);\n"
+        "    print(b);\n"
+        "    print(diff);\n"
+        "    return 0;\n"
+        "}\n";
+    int exitCode = -1;
+    std::string out;
+    EXPECT_TRUE(compileAndRunProgram(src, 2, exitCode, out));
+    EXPECT_EQ(exitCode, 0);
+    EXPECT_TRUE(out.find("30") != std::string::npos);
+    EXPECT_TRUE(out.find("40") != std::string::npos);
+    EXPECT_TRUE(out.find("3") != std::string::npos);
+    return true;
+}
+
 
 
 
