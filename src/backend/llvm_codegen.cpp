@@ -2894,6 +2894,20 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
             break;
         }
 
+        case ir::Opcode::Phi: {
+            std::string resTy = inst.type ? llvmType(inst.type) : "i32";
+            if (isPointerValue_.count(inst.op1) || (inst.type && inst.type->isReference())) {
+                resTy = "ptr";
+            }
+            os << "  %v" << inst.result << " = phi " << resTy << " [ " << formatOperand(inst.op1, inst.type)
+               << ", %" << inst.label1 << " ]";
+            if (inst.op2 != ir::InvalidValue) {
+                os << ", [ " << formatOperand(inst.op2, inst.type) << ", %" << inst.label2 << " ]";
+            }
+            os << "\n";
+            break;
+        }
+
         case ir::Opcode::GetVTablePtr: {
             os << "  %v" << inst.result << " = getelementptr inbounds ptr, ptr @_vtable_" << inst.strImm << ", i32 0\n";
             break;
@@ -3410,6 +3424,15 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
             }
             os << "  %v" << inst.result << " = insertelement " << vecTyStr
                << " %v" << inst.op1 << ", " << elemTyStr << " " << valStr << ", i32 " << laneStr << "\n";
+            break;
+        }
+
+        case ir::Opcode::VecShuffle: {
+            auto vecTy = getValueType(inst.op1);
+            std::string vecTyStr = vecTy ? llvmType(vecTy) : "<4 x i32>";
+            std::string op2Str = (inst.op2 != ir::InvalidValue) ? ("%v" + std::to_string(inst.op2)) : "undef";
+            os << "  %v" << inst.result << " = shufflevector " << vecTyStr << " %v" << inst.op1
+               << ", " << vecTyStr << " " << op2Str << ", <4 x i32> <i32 0, i32 1, i32 2, i32 3>\n";
             break;
         }
 

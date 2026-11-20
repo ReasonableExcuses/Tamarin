@@ -4974,30 +4974,59 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                         load.type   = elemTy;
                         emit(load);
 
-                        bool isFloat = elemTy && elemTy->isFloat();
-                        bool isUnsigned = elemTy && elemTy->isUnsignedInteger();
-                        Opcode binOp = isFloat ? Opcode::FAdd : Opcode::Add;
-                        switch (a.op) {
-                            case AssignOp::AddAssign: binOp = isFloat ? Opcode::FAdd : Opcode::Add; break;
-                            case AssignOp::SubAssign: binOp = isFloat ? Opcode::FSub : Opcode::Sub; break;
-                            case AssignOp::MulAssign: binOp = isFloat ? Opcode::FMul : Opcode::Mul; break;
-                            case AssignOp::DivAssign: binOp = isFloat ? Opcode::FDiv : (isUnsigned ? Opcode::UDiv : Opcode::SDiv); break;
-                            case AssignOp::ModAssign: binOp = isUnsigned ? Opcode::URem : Opcode::SRem; break;
-                            case AssignOp::AndAssign: binOp = Opcode::And; break;
-                            case AssignOp::OrAssign:  binOp = Opcode::Or; break;
-                            case AssignOp::XorAssign: binOp = Opcode::Xor; break;
-                            case AssignOp::ShlAssign: binOp = Opcode::Shl; break;
-                            case AssignOp::ShrAssign: binOp = isUnsigned ? Opcode::LShr : Opcode::AShr; break;
-                            default: break;
+                        if (elemTy && elemTy->isPointer() && (a.op == AssignOp::AddAssign || a.op == AssignOp::SubAssign)) {
+                            ValueId stepVal = val;
+                            if (a.op == AssignOp::SubAssign) {
+                                Instruction zeroConst;
+                                zeroConst.opcode = Opcode::IConst;
+                                zeroConst.result = nextValueId();
+                                zeroConst.intImm = 0;
+                                zeroConst.type   = valTy ? valTy : checker_.context().getI64();
+                                emit(zeroConst);
+
+                                Instruction neg;
+                                neg.opcode = Opcode::Sub;
+                                neg.result = nextValueId();
+                                neg.op1    = zeroConst.result;
+                                neg.op2    = val;
+                                neg.type   = valTy ? valTy : checker_.context().getI64();
+                                emit(neg);
+                                stepVal = neg.result;
+                            }
+                            Instruction gep;
+                            gep.opcode = Opcode::GetArrayElemPtr;
+                            gep.result = nextValueId();
+                            gep.op1    = load.result;
+                            gep.op2    = stepVal;
+                            gep.type   = elemTy->elementType ? elemTy->elementType : checker_.context().getI8();
+                            emit(gep);
+                            val = gep.result;
+                        } else {
+                            bool isFloat = elemTy && elemTy->isFloat();
+                            bool isUnsigned = elemTy && elemTy->isUnsignedInteger();
+                            Opcode binOp = isFloat ? Opcode::FAdd : Opcode::Add;
+                            switch (a.op) {
+                                case AssignOp::AddAssign: binOp = isFloat ? Opcode::FAdd : Opcode::Add; break;
+                                case AssignOp::SubAssign: binOp = isFloat ? Opcode::FSub : Opcode::Sub; break;
+                                case AssignOp::MulAssign: binOp = isFloat ? Opcode::FMul : Opcode::Mul; break;
+                                case AssignOp::DivAssign: binOp = isFloat ? Opcode::FDiv : (isUnsigned ? Opcode::UDiv : Opcode::SDiv); break;
+                                case AssignOp::ModAssign: binOp = isUnsigned ? Opcode::URem : Opcode::SRem; break;
+                                case AssignOp::AndAssign: binOp = Opcode::And; break;
+                                case AssignOp::OrAssign:  binOp = Opcode::Or; break;
+                                case AssignOp::XorAssign: binOp = Opcode::Xor; break;
+                                case AssignOp::ShlAssign: binOp = Opcode::Shl; break;
+                                case AssignOp::ShrAssign: binOp = isUnsigned ? Opcode::LShr : Opcode::AShr; break;
+                                default: break;
+                            }
+                            Instruction bin;
+                            bin.opcode = binOp;
+                            bin.result = nextValueId();
+                            bin.type   = elemTy;
+                            bin.op1    = load.result;
+                            bin.op2    = val;
+                            emit(bin);
+                            val = bin.result;
                         }
-                        Instruction bin;
-                        bin.opcode = binOp;
-                        bin.result = nextValueId();
-                        bin.type   = elemTy;
-                        bin.op1    = load.result;
-                        bin.op2    = val;
-                        emit(bin);
-                        val = bin.result;
                     }
 
                     Instruction store;
@@ -5032,31 +5061,60 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                     load.type   = elemTy;
                     emit(load);
 
-                    bool isFloat = elemTy && elemTy->isFloat();
-                    bool isUnsigned = elemTy && elemTy->isUnsignedInteger();
-                    Opcode binOp = isFloat ? Opcode::FAdd : Opcode::Add;
-                    switch (a.op) {
-                        case AssignOp::AddAssign: binOp = isFloat ? Opcode::FAdd : Opcode::Add; break;
-                        case AssignOp::SubAssign: binOp = isFloat ? Opcode::FSub : Opcode::Sub; break;
-                        case AssignOp::MulAssign: binOp = isFloat ? Opcode::FMul : Opcode::Mul; break;
-                        case AssignOp::DivAssign: binOp = isFloat ? Opcode::FDiv : (isUnsigned ? Opcode::UDiv : Opcode::SDiv); break;
-                        case AssignOp::ModAssign: binOp = isUnsigned ? Opcode::URem : Opcode::SRem; break;
-                        case AssignOp::AndAssign: binOp = Opcode::And; break;
-                        case AssignOp::OrAssign:  binOp = Opcode::Or; break;
-                        case AssignOp::XorAssign: binOp = Opcode::Xor; break;
-                        case AssignOp::ShlAssign: binOp = Opcode::Shl; break;
-                        case AssignOp::ShrAssign: binOp = isUnsigned ? Opcode::LShr : Opcode::AShr; break;
-                        default: break;
-                    }
+                    if (elemTy && elemTy->isPointer() && (a.op == AssignOp::AddAssign || a.op == AssignOp::SubAssign)) {
+                        ValueId stepVal = val;
+                        if (a.op == AssignOp::SubAssign) {
+                            Instruction zeroConst;
+                            zeroConst.opcode = Opcode::IConst;
+                            zeroConst.result = nextValueId();
+                            zeroConst.intImm = 0;
+                            zeroConst.type   = valTy ? valTy : checker_.context().getI64();
+                            emit(zeroConst);
 
-                    Instruction bin;
-                    bin.opcode = binOp;
-                    bin.result = nextValueId();
-                    bin.op1    = load.result;
-                    bin.op2    = val;
-                    bin.type   = elemTy;
-                    emit(bin);
-                    val = bin.result;
+                            Instruction neg;
+                            neg.opcode = Opcode::Sub;
+                            neg.result = nextValueId();
+                            neg.op1    = zeroConst.result;
+                            neg.op2    = val;
+                            neg.type   = valTy ? valTy : checker_.context().getI64();
+                            emit(neg);
+                            stepVal = neg.result;
+                        }
+                        Instruction gep;
+                        gep.opcode = Opcode::GetArrayElemPtr;
+                        gep.result = nextValueId();
+                        gep.op1    = load.result;
+                        gep.op2    = stepVal;
+                        gep.type   = elemTy->elementType ? elemTy->elementType : checker_.context().getI8();
+                        emit(gep);
+                        val = gep.result;
+                    } else {
+                        bool isFloat = elemTy && elemTy->isFloat();
+                        bool isUnsigned = elemTy && elemTy->isUnsignedInteger();
+                        Opcode binOp = isFloat ? Opcode::FAdd : Opcode::Add;
+                        switch (a.op) {
+                            case AssignOp::AddAssign: binOp = isFloat ? Opcode::FAdd : Opcode::Add; break;
+                            case AssignOp::SubAssign: binOp = isFloat ? Opcode::FSub : Opcode::Sub; break;
+                            case AssignOp::MulAssign: binOp = isFloat ? Opcode::FMul : Opcode::Mul; break;
+                            case AssignOp::DivAssign: binOp = isFloat ? Opcode::FDiv : (isUnsigned ? Opcode::UDiv : Opcode::SDiv); break;
+                            case AssignOp::ModAssign: binOp = isUnsigned ? Opcode::URem : Opcode::SRem; break;
+                            case AssignOp::AndAssign: binOp = Opcode::And; break;
+                            case AssignOp::OrAssign:  binOp = Opcode::Or; break;
+                            case AssignOp::XorAssign: binOp = Opcode::Xor; break;
+                            case AssignOp::ShlAssign: binOp = Opcode::Shl; break;
+                            case AssignOp::ShrAssign: binOp = isUnsigned ? Opcode::LShr : Opcode::AShr; break;
+                            default: break;
+                        }
+
+                        Instruction bin;
+                        bin.opcode = binOp;
+                        bin.result = nextValueId();
+                        bin.op1    = load.result;
+                        bin.op2    = val;
+                        bin.type   = elemTy;
+                        emit(bin);
+                        val = bin.result;
+                    }
                 }
 
                 Instruction store;
@@ -5072,6 +5130,70 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                     auto ptrVal = lowerExpr(*un.operand);
                     auto elemTy = checker_.getExprType(&expr);
                     val = emitCastIfNeeded(val, valTy, elemTy);
+
+                    if (a.op != AssignOp::Assign) {
+                        Instruction load;
+                        load.opcode = Opcode::Load;
+                        load.result = nextValueId();
+                        load.op1    = ptrVal;
+                        load.type   = elemTy;
+                        emit(load);
+
+                        if (elemTy && elemTy->isPointer() && (a.op == AssignOp::AddAssign || a.op == AssignOp::SubAssign)) {
+                            ValueId stepVal = val;
+                            if (a.op == AssignOp::SubAssign) {
+                                Instruction zeroConst;
+                                zeroConst.opcode = Opcode::IConst;
+                                zeroConst.result = nextValueId();
+                                zeroConst.intImm = 0;
+                                zeroConst.type   = valTy ? valTy : checker_.context().getI64();
+                                emit(zeroConst);
+
+                                Instruction neg;
+                                neg.opcode = Opcode::Sub;
+                                neg.result = nextValueId();
+                                neg.op1    = zeroConst.result;
+                                neg.op2    = val;
+                                neg.type   = valTy ? valTy : checker_.context().getI64();
+                                emit(neg);
+                                stepVal = neg.result;
+                            }
+                            Instruction gep;
+                            gep.opcode = Opcode::GetArrayElemPtr;
+                            gep.result = nextValueId();
+                            gep.op1    = load.result;
+                            gep.op2    = stepVal;
+                            gep.type   = elemTy->elementType ? elemTy->elementType : checker_.context().getI8();
+                            emit(gep);
+                            val = gep.result;
+                        } else {
+                            bool isFloat = elemTy && elemTy->isFloat();
+                            bool isUnsigned = elemTy && elemTy->isUnsignedInteger();
+                            Opcode binOp = isFloat ? Opcode::FAdd : Opcode::Add;
+                            switch (a.op) {
+                                case AssignOp::AddAssign: binOp = isFloat ? Opcode::FAdd : Opcode::Add; break;
+                                case AssignOp::SubAssign: binOp = isFloat ? Opcode::FSub : Opcode::Sub; break;
+                                case AssignOp::MulAssign: binOp = isFloat ? Opcode::FMul : Opcode::Mul; break;
+                                case AssignOp::DivAssign: binOp = isFloat ? Opcode::FDiv : (isUnsigned ? Opcode::UDiv : Opcode::SDiv); break;
+                                case AssignOp::ModAssign: binOp = isUnsigned ? Opcode::URem : Opcode::SRem; break;
+                                case AssignOp::AndAssign: binOp = Opcode::And; break;
+                                case AssignOp::OrAssign:  binOp = Opcode::Or; break;
+                                case AssignOp::XorAssign: binOp = Opcode::Xor; break;
+                                case AssignOp::ShlAssign: binOp = Opcode::Shl; break;
+                                case AssignOp::ShrAssign: binOp = isUnsigned ? Opcode::LShr : Opcode::AShr; break;
+                                default: break;
+                            }
+                            Instruction bin;
+                            bin.opcode = binOp;
+                            bin.result = nextValueId();
+                            bin.op1    = load.result;
+                            bin.op2    = val;
+                            bin.type   = elemTy;
+                            emit(bin);
+                            val = bin.result;
+                        }
+                    }
+
                     Instruction store;
                     store.opcode = Opcode::Store;
                     store.op1    = ptrVal;
@@ -5079,6 +5201,90 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                     emit(store);
                     return val;
                 }
+            } else if (a.target->kind == ExprKind::TupleIndex) {
+                auto& tie = static_cast<TupleIndexExpr&>(*a.target);
+                auto basePtr = getStructPointer(*tie.tuple);
+                auto elemTy = checker_.getExprType(&expr);
+                val = emitCastIfNeeded(val, valTy, elemTy);
+
+                Instruction gfp;
+                gfp.opcode = Opcode::GetFieldPtr;
+                gfp.result = nextValueId();
+                gfp.op1    = basePtr;
+                gfp.intImm = static_cast<int64_t>(tie.index);
+                gfp.type   = elemTy;
+                emit(gfp);
+
+                if (a.op != AssignOp::Assign) {
+                    Instruction load;
+                    load.opcode = Opcode::Load;
+                    load.result = nextValueId();
+                    load.op1    = gfp.result;
+                    load.type   = elemTy;
+                    emit(load);
+
+                    if (elemTy && elemTy->isPointer() && (a.op == AssignOp::AddAssign || a.op == AssignOp::SubAssign)) {
+                        ValueId stepVal = val;
+                        if (a.op == AssignOp::SubAssign) {
+                            Instruction zeroConst;
+                            zeroConst.opcode = Opcode::IConst;
+                            zeroConst.result = nextValueId();
+                            zeroConst.intImm = 0;
+                            zeroConst.type   = valTy ? valTy : checker_.context().getI64();
+                            emit(zeroConst);
+
+                            Instruction neg;
+                            neg.opcode = Opcode::Sub;
+                            neg.result = nextValueId();
+                            neg.op1    = zeroConst.result;
+                            neg.op2    = val;
+                            neg.type   = valTy ? valTy : checker_.context().getI64();
+                            emit(neg);
+                            stepVal = neg.result;
+                        }
+                        Instruction gep;
+                        gep.opcode = Opcode::GetArrayElemPtr;
+                        gep.result = nextValueId();
+                        gep.op1    = load.result;
+                        gep.op2    = stepVal;
+                        gep.type   = elemTy->elementType ? elemTy->elementType : checker_.context().getI8();
+                        emit(gep);
+                        val = gep.result;
+                    } else {
+                        bool isFloat = elemTy && elemTy->isFloat();
+                        bool isUnsigned = elemTy && elemTy->isUnsignedInteger();
+                        Opcode binOp = isFloat ? Opcode::FAdd : Opcode::Add;
+                        switch (a.op) {
+                            case AssignOp::AddAssign: binOp = isFloat ? Opcode::FAdd : Opcode::Add; break;
+                            case AssignOp::SubAssign: binOp = isFloat ? Opcode::FSub : Opcode::Sub; break;
+                            case AssignOp::MulAssign: binOp = isFloat ? Opcode::FMul : Opcode::Mul; break;
+                            case AssignOp::DivAssign: binOp = isFloat ? Opcode::FDiv : (isUnsigned ? Opcode::UDiv : Opcode::SDiv); break;
+                            case AssignOp::ModAssign: binOp = isUnsigned ? Opcode::URem : Opcode::SRem; break;
+                            case AssignOp::AndAssign: binOp = Opcode::And; break;
+                            case AssignOp::OrAssign:  binOp = Opcode::Or; break;
+                            case AssignOp::XorAssign: binOp = Opcode::Xor; break;
+                            case AssignOp::ShlAssign: binOp = Opcode::Shl; break;
+                            case AssignOp::ShrAssign: binOp = isUnsigned ? Opcode::LShr : Opcode::AShr; break;
+                            default: break;
+                        }
+
+                        Instruction bin;
+                        bin.opcode = binOp;
+                        bin.result = nextValueId();
+                        bin.op1    = load.result;
+                        bin.op2    = val;
+                        bin.type   = elemTy;
+                        emit(bin);
+                        val = bin.result;
+                    }
+                }
+
+                Instruction store;
+                store.opcode = Opcode::Store;
+                store.op1    = gfp.result;
+                store.op2    = val;
+                emit(store);
+                return val;
             }
             return val;
         }

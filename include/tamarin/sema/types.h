@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace tamarin::ast {
 enum class LayoutDirective;
@@ -521,11 +522,44 @@ struct Type {
         // Reference / pointer target
         if (target.isReference()) {
             const Type* targetElem = target.elementType;
-            if (!targetElem || targetElem->isVoid()) {
-                if (isReference() && isConstRef && !target.isConstRef) {
+            // Target is a raw pointer (*T or *void)
+            if (target.isPointer()) {
+                if (!targetElem || targetElem->isVoid()) {
+                    if (isPointer()) {
+                        if (isConstRef && !target.isConstRef) return false;
+                        return true;
+                    }
+                    if (isArray() || isArrayView()) {
+                        if ((isConst || (elementType && elementType->isConst)) && !target.isConstRef) return false;
+                        return true;
+                    }
                     return false;
                 }
-                return true;
+                if (isArray() || isArrayView()) {
+                    if (elementType && (*elementType == *targetElem || targetElem->isVoid())) {
+                        if ((isConst || (elementType && elementType->isConst)) && !target.isConstRef) return false;
+                        return true;
+                    }
+                }
+                if (isPointer()) {
+                    if (*elementType == *targetElem) {
+                        if (isConstRef && !target.isConstRef) return false;
+                        return true;
+                    }
+                    if (elementType->isRecord() && targetElem->isRecord() && elementType->inheritsFrom(targetElem)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            // Target is a Tamarin language reference (&T)
+            if (!targetElem || targetElem->isVoid()) {
+                if (isReference()) {
+                    if (isConstRef && !target.isConstRef) return false;
+                    return true;
+                }
+                return false;
             }
             if (isArray() || isArrayView()) {
                 if (elementType && (*elementType == *targetElem || targetElem->isVoid())) {
@@ -535,12 +569,21 @@ struct Type {
             }
             const Type* srcElem = isReference() ? elementType : this;
             if (*srcElem == *targetElem) {
-                if (isReference() && target.isPointer() && isConstRef && !target.isConstRef) {
+                if (isReference() && isConstRef && !target.isConstRef) {
+                    return false;
+                }
+                if (!isReference() && isConst && !target.isConstRef) {
                     return false;
                 }
                 return true;
             }
             if (srcElem->isRecord() && targetElem->isRecord() && srcElem->inheritsFrom(targetElem)) {
+                if (isReference() && isConstRef && !target.isConstRef) {
+                    return false;
+                }
+                if (!isReference() && isConst && !target.isConstRef) {
+                    return false;
+                }
                 return true;
             }
             return false;
@@ -731,6 +774,12 @@ private:
     Type int16Ty_{TypeKind::SIMDVector};
 
     std::vector<std::unique_ptr<Type>> arena_;
+    mutable std::unordered_map<std::string, const Type*> recordMap_;
+    mutable std::unordered_map<std::string, const Type*> enumMap_;
+    mutable std::unordered_map<uint64_t, const Type*> refCache_;
+    mutable std::unordered_map<uint64_t, const Type*> viewCache_;
+    mutable std::unordered_map<const Type*, const Type*> handleCache_;
+    mutable std::unordered_map<const Type*, const Type*> taskCache_;
 };
 
 } // namespace tamarin::sema

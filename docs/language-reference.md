@@ -49,8 +49,8 @@ Tamarin features a statically typed, monomorphic core type system with determini
 | `void` | Unit / Empty Type | 0 | Function return without value |
 
 ### 2.2 Aggregate and Composite Types
-- **Fixed-Size Arrays**: `[N]T` represents a contiguous inline array of `N` elements of type `T`.
-- **Slices**: `[]T` represents a non-owning fat pointer consisting of `(T* ptr, u64 len)`.
+- **Fixed-Size Arrays**: `T[N]` represents a contiguous inline array of `N` elements of type `T` (also standard C syntax `T name[N]`).
+- **Slices**: `T[]` represents a non-owning fat pointer consisting of `(T* ptr, u64 len)`.
 - **Pointers and References**:
   - `&T`: Immutable borrowed reference.
   - `&mut T`: Unique mutable borrowed reference.
@@ -164,10 +164,10 @@ int handle_result(Result<int, int> res) {
 Tamarin provides stack-allocated, borrow-checked closures without requiring a garbage collector or heap allocator.
 
 ### 6.1 Syntax
-Closures use pipe syntax for parameters:
+Closures use arrow syntax with optional parameter types:
 ```tamarin
 int multiplier = 5;
-auto fn = |int x| -> int {
+auto fn = (int x) -> int => {
     return x * multiplier;
 };
 int res = fn(10); // Returns 50
@@ -197,15 +197,15 @@ async int compute_async(int id) {
 }
 ```
 
-### 7.2 `.await` Suspension
+### 7.2 `await` Suspension
 Within an `async` context, awaiting a task suspends the coroutine until completion without blocking the operating system thread:
 ```tamarin
 async int orchestrate() {
     Task<int> t1 = compute_async(1);
     Task<int> t2 = compute_async(2);
     
-    int r1 = t1.await;
-    int r2 = t2.await;
+    int r1 = await t1;
+    int r2 = await t2;
     return r1 + r2;
 }
 ```

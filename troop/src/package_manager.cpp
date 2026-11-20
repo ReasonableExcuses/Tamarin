@@ -340,7 +340,7 @@ int PackageManager::testPackage(const std::filesystem::path& manifestPath, bool 
     int failed = 0;
 
     for (const auto& entry : std::filesystem::directory_iterator(testsDir)) {
-        if (entry.is_regular_file() && entry.path().extension() == ".tam") {
+        if (entry.is_regular_file() && (entry.path().extension() == ".tmn" || entry.path().extension() == ".tam")) {
             auto testName = entry.path().stem().string();
             auto hostTriple = tamarin::target::TargetTriple::getHost();
             auto outTestExe = binTestsDir / (testName + hostTriple.executableExtension());

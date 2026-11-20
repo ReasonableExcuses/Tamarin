@@ -67,8 +67,12 @@ const Type* TypeContext::getArray(const Type* elem, int64_t size, bool isConst) 
 
 
 const Type* TypeContext::getArrayView(const Type* elem, bool isConst) {
+    uint64_t key = (reinterpret_cast<uintptr_t>(elem) << 1) | (isConst ? 1 : 0);
+    auto it = viewCache_.find(key);
+    if (it != viewCache_.end()) return it->second;
     for (auto& t : arena_) {
         if (t->kind == TypeKind::ArrayView && t->elementType == elem && t->isConst == isConst) {
+            viewCache_[key] = t.get();
             return t.get();
         }
     }
@@ -77,6 +81,7 @@ const Type* TypeContext::getArrayView(const Type* elem, bool isConst) {
     t->elementType = elem;
     t->isConst = isConst;
     arena_.push_back(std::move(t));
+    viewCache_[key] = arena_.back().get();
     return arena_.back().get();
 }
 
@@ -113,8 +118,12 @@ const Type* TypeContext::getTuple(std::vector<const Type*> elements) {
 
 
 const Type* TypeContext::getReference(const Type* elem, bool isConst, bool isPointer) {
+    uint64_t key = (reinterpret_cast<uintptr_t>(elem) << 2) | (isConst ? 1 : 0) | (isPointer ? 2 : 0);
+    auto it = refCache_.find(key);
+    if (it != refCache_.end()) return it->second;
     for (auto& t : arena_) {
         if (t->kind == TypeKind::Reference && t->elementType == elem && t->isConstRef == isConst && t->isRawPointer == isPointer) {
+            refCache_[key] = t.get();
             return t.get();
         }
     }
@@ -124,14 +133,18 @@ const Type* TypeContext::getReference(const Type* elem, bool isConst, bool isPoi
     t->isConstRef = isConst;
     t->isRawPointer = isPointer;
     arena_.push_back(std::move(t));
+    refCache_[key] = arena_.back().get();
     return arena_.back().get();
 }
 
 
 
 const Type* TypeContext::getHandle(const Type* elem) {
+    auto it = handleCache_.find(elem);
+    if (it != handleCache_.end()) return it->second;
     for (auto& t : arena_) {
         if (t->kind == TypeKind::Handle && t->elementType == elem) {
+            handleCache_[elem] = t.get();
             return t.get();
         }
     }
@@ -139,12 +152,16 @@ const Type* TypeContext::getHandle(const Type* elem) {
     t->kind = TypeKind::Handle;
     t->elementType = elem;
     arena_.push_back(std::move(t));
+    handleCache_[elem] = arena_.back().get();
     return arena_.back().get();
 }
 
 const Type* TypeContext::getTask(const Type* elem) {
+    auto it = taskCache_.find(elem);
+    if (it != taskCache_.end()) return it->second;
     for (auto& t : arena_) {
         if (t->kind == TypeKind::Task && t->elementType == elem) {
+            taskCache_[elem] = t.get();
             return t.get();
         }
     }
@@ -152,6 +169,7 @@ const Type* TypeContext::getTask(const Type* elem) {
     t->kind = TypeKind::Task;
     t->elementType = elem;
     arena_.push_back(std::move(t));
+    taskCache_[elem] = arena_.back().get();
     return arena_.back().get();
 }
 
@@ -250,15 +268,20 @@ const Type* TypeContext::getClass(std::string name, std::vector<StructFieldType>
     t->isInterfaceType = isInterface;
     computeRecordLayout(t.get());
 
+    auto* retPtr = t.get();
+    recordMap_[retPtr->structName] = retPtr;
     arena_.push_back(std::move(t));
-    return arena_.back().get();
+    return retPtr;
 }
 
 
 
 const Type* TypeContext::findRecord(const std::string& name) const {
+    auto it = recordMap_.find(name);
+    if (it != recordMap_.end()) return it->second;
     for (const auto& t : arena_) {
         if (t->isRecord() && t->structName == name) {
+            recordMap_[name] = t.get();
             return t.get();
         }
     }
@@ -288,11 +311,20 @@ std::vector<const Type*> TypeContext::getStructTypes() const {
 }
 
 const Type* TypeContext::getEnum(std::string name, std::vector<EnumVariantType> variants, bool isNiche) {
+    auto it = enumMap_.find(name);
+    if (it != enumMap_.end()) {
+        auto* t = const_cast<Type*>(it->second);
+        if (!variants.empty() && t->enumVariants.empty()) {
+            t->enumVariants = std::move(variants);
+        }
+        return t;
+    }
     for (const auto& t : arena_) {
         if (t->kind == TypeKind::Enum && t->enumName == name) {
             if (!variants.empty() && t->enumVariants.empty()) {
                 t->enumVariants = std::move(variants);
             }
+            enumMap_[name] = t.get();
             return t.get();
         }
     }
@@ -333,13 +365,17 @@ const Type* TypeContext::getEnum(std::string name, std::vector<EnumVariantType> 
     ty->maxPayloadAlignment = maxAlign;
 
     auto* ptr = ty.get();
+    enumMap_[ptr->enumName] = ptr;
     arena_.push_back(std::move(ty));
     return ptr;
 }
 
 const Type* TypeContext::findEnum(const std::string& name) const {
+    auto it = enumMap_.find(name);
+    if (it != enumMap_.end()) return it->second;
     for (const auto& t : arena_) {
         if (t->kind == TypeKind::Enum && t->enumName == name) {
+            enumMap_[name] = t.get();
             return t.get();
         }
     }

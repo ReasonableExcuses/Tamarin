@@ -271,11 +271,12 @@ int Driver::build() {
     }
 
     std::filesystem::path finalLLPath = llPath;
+    std::filesystem::path optLLPath;
 
     // 6. Optimization pipeline
     if (options_.optLevel > 0 || options_.emitOptimizedLLVM) {
         int effOpt = options_.optLevel > 0 ? options_.optLevel : 2;
-        auto optLLPath = inputPath;
+        optLLPath = inputPath;
         optLLPath.replace_filename(inputPath.stem().string() + "_opt.ll");
         if (!codegen.optimizeLLVMIR(llPath, optLLPath, effOpt)) {
             return 1;
@@ -307,42 +308,55 @@ int Driver::build() {
         }
     }
 
+    auto cleanupTemps = [&]() {
+        std::error_code ec;
+        if (!options_.emitLLVM) {
+            std::filesystem::remove(llPath, ec);
+        }
+        if (!optLLPath.empty() && !options_.emitOptimizedLLVM) {
+            std::filesystem::remove(optLLPath, ec);
+        }
+    };
+
     // 7. Output emission based on OutputKind
+    int exitCode = 0;
     if (options_.outputKind == DriverOptions::OutputKind::Obj) {
         auto outExt = triple.objectExtension();
         auto objPath = resolveOutputPath(inputPath, options_.outputFile, outExt);
         if (!codegen.compileToObject(finalLLPath, objPath, options_.optLevel)) {
-            return 1;
+            exitCode = 1;
+        } else {
+            std::cout << "TAMARIN: Successfully compiled object file " << objPath.string() << "\n";
         }
-        std::cout << "TAMARIN: Successfully compiled object file " << objPath.string() << "\n";
-        return 0;
     } else if (options_.outputKind == DriverOptions::OutputKind::StaticLib) {
         auto outExt = triple.staticLibraryExtension();
         auto libPath = resolveOutputPath(inputPath, options_.outputFile, outExt);
         if (!codegen.compileToStaticLibrary(finalLLPath, libPath, options_.optLevel)) {
-            return 1;
+            exitCode = 1;
+        } else {
+            std::cout << "TAMARIN: Successfully built static library " << libPath.string() << "\n";
         }
-        std::cout << "TAMARIN: Successfully built static library " << libPath.string() << "\n";
-        return 0;
     } else if (options_.outputKind == DriverOptions::OutputKind::SharedLib) {
         auto outExt = triple.sharedLibraryExtension();
         auto dylibPath = resolveOutputPath(inputPath, options_.outputFile, outExt);
         if (!codegen.compileToSharedLibrary(finalLLPath, dylibPath, options_.optLevel)) {
-            return 1;
+            exitCode = 1;
+        } else {
+            std::cout << "TAMARIN: Successfully built shared library " << dylibPath.string() << "\n";
         }
-        std::cout << "TAMARIN: Successfully built shared library " << dylibPath.string() << "\n";
-        return 0;
     } else {
         auto outExt = triple.executableExtension();
         auto exePath = resolveOutputPath(inputPath, options_.outputFile, outExt);
 
         if (!codegen.compileToExecutable(finalLLPath, exePath, options_.optLevel)) {
-            return 1;
+            exitCode = 1;
+        } else {
+            std::cout << "TAMARIN: Successfully built " << exePath.string() << "\n";
         }
-
-        std::cout << "TAMARIN: Successfully built " << exePath.string() << "\n";
-        return 0;
     }
+
+    cleanupTemps();
+    return exitCode;
 }
 
 int Driver::execute() {

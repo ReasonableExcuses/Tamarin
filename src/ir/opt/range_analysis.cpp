@@ -228,7 +228,9 @@ void RangeAnalysis::identifyCanonicalLoops(IRFunction& fn) {
 
         auto glIt = getLenArrayMap.find(rhs);
         if (glIt != getLenArrayMap.end()) {
-            boundedArr = glIt->second;
+            if (cmpInst->opcode == Opcode::ICmpSLt || cmpInst->opcode == Opcode::ICmpULt) {
+                boundedArr = glIt->second;
+            }
         } else {
             auto cIt = constantValues_.find(rhs);
             if (cIt != constantValues_.end()) {
@@ -240,9 +242,14 @@ void RangeAnalysis::identifyCanonicalLoops(IRFunction& fn) {
         }
 
         int64_t initVal = 0;
+        bool hasInitStore = false;
         auto initIt = initialAllocaStores.find(inductionAlloca);
         if (initIt != initialAllocaStores.end()) {
             initVal = initIt->second;
+            hasInitStore = true;
+        }
+        if (!hasInitStore) {
+            continue;
         }
 
         // Verify that inductionAlloca is modified only once in the loop by a step-1 increment
@@ -368,7 +375,7 @@ bool RangeAnalysis::isProvenWithinBounds(const BasicBlock* block,
                     }
                 }
 
-                if (arrayMatches) {
+                if (arrayMatches && liv.initVal >= 0) {
                     // Check if idxVal comes from a load of liv.allocaVar in this block
                     for (const auto& inst : block->instructions) {
                         if (inst.opcode == Opcode::Load && inst.op1 == liv.allocaVar &&
@@ -379,7 +386,7 @@ bool RangeAnalysis::isProvenWithinBounds(const BasicBlock* block,
                 }
 
                 // If loop was bounded by a constant N and arrTy has arraySize >= N
-                if (liv.constBound > 0 && arrTy && arrTy->arraySize >= liv.constBound) {
+                if (liv.constBound > 0 && arrTy && arrTy->arraySize >= liv.constBound && liv.initVal >= 0) {
                     for (const auto& inst : block->instructions) {
                         if (inst.opcode == Opcode::Load && inst.op1 == liv.allocaVar &&
                             (inst.result == idxVal || unwrapCast(inst.result) == idxVal)) {

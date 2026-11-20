@@ -13,7 +13,7 @@ bool AliasAnalysis::runOnFunction(IRFunction& fn, const sema::TypeContext* /*typ
     // 1. Analyze function parameters
     for (const auto& param : fn.params) {
         if (!param.type) continue;
-        if (param.type->isReference() || param.type->isArrayView()) {
+        if (param.type->isRef() || param.type->isArrayView()) {
             PointerProvenance prov;
             prov.origin = StorageOrigin::ParamRef;
             prov.baseOriginId = param.valueId;

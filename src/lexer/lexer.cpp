@@ -194,7 +194,7 @@ Token Lexer::scanNumber() {
             advance();
         }
         // Check for hex float (e.g., 0x1.0p5)
-        if (current() == '.') {
+        if (current() == '.' && std::isxdigit(static_cast<unsigned char>(peekChar()))) {
             isFloat = true;
             advance();
             while (!isAtEnd() && (std::isxdigit(static_cast<unsigned char>(current())) ||
@@ -216,10 +216,11 @@ Token Lexer::scanNumber() {
             }
             double val = std::strtod(clean.c_str(), nullptr);
             // Check for float suffix
-            if (current() == 'f' || current() == 'd') advance();
-            else if (pos_ + 2 < source_.size()) {
-                auto suffix = source_.substr(pos_, 3);
-                if (suffix == "f32" || suffix == "f64") { pos_ += 3; }
+            if (pos_ + 2 < source_.size() && (source_.substr(pos_, 3) == "f32" || source_.substr(pos_, 3) == "f64")) {
+                pos_ += 3;
+            } else if ((current() == 'f' || current() == 'd' || current() == 'F' || current() == 'D') &&
+                       !std::isalnum(static_cast<unsigned char>(peekChar()))) {
+                advance();
             }
             return makeToken(TokenKind::FloatLiteral, start, val);
         }
@@ -227,6 +228,10 @@ Token Lexer::scanNumber() {
         std::string clean;
         for (auto c : source_.substr(start + 2, pos_ - start - 2)) {
             if (c != '_') clean += c;
+        }
+        if (clean.empty()) {
+            diag_.report(locationAt(start), Severity::Error, "invalid hex literal: expected hex digits after '0x'");
+            return makeToken(TokenKind::Invalid, start);
         }
         int64_t val = 0;
         auto [ptr, ec] = std::from_chars(clean.data(), clean.data() + clean.size(), val, 16);
@@ -251,8 +256,17 @@ Token Lexer::scanNumber() {
         for (auto c : source_.substr(start + 2, pos_ - start - 2)) {
             if (c != '_') clean += c;
         }
+        if (clean.empty()) {
+            diag_.report(locationAt(start), Severity::Error, "invalid binary literal: expected binary digits after '0b'");
+            return makeToken(TokenKind::Invalid, start);
+        }
         int64_t val = 0;
-        std::from_chars(clean.data(), clean.data() + clean.size(), val, 2);
+        auto [ptr, ec] = std::from_chars(clean.data(), clean.data() + clean.size(), val, 2);
+        if (ec != std::errc()) {
+            uint64_t uval = 0;
+            std::from_chars(clean.data(), clean.data() + clean.size(), uval, 2);
+            val = static_cast<int64_t>(uval);
+        }
         skipIntegerSuffix();
         return makeToken(TokenKind::IntLiteral, start, val);
     }
@@ -286,10 +300,11 @@ Token Lexer::scanNumber() {
 
     // Float suffix
     if (isFloat) {
-        if (current() == 'f' || current() == 'd') advance();
-        else if (pos_ + 2 < source_.size()) {
-            auto suffix = source_.substr(pos_, 3);
-            if (suffix == "f32" || suffix == "f64") { pos_ += 3; }
+        if (pos_ + 2 < source_.size() && (source_.substr(pos_, 3) == "f32" || source_.substr(pos_, 3) == "f64")) {
+            pos_ += 3;
+        } else if ((current() == 'f' || current() == 'd' || current() == 'F' || current() == 'D') &&
+                   !std::isalnum(static_cast<unsigned char>(peekChar()))) {
+            advance();
         }
         std::string clean;
         for (auto c : source_.substr(start, pos_ - start)) {
@@ -299,13 +314,23 @@ Token Lexer::scanNumber() {
         return makeToken(TokenKind::FloatLiteral, start, val);
     }
 
-    // Check if it's just digits followed by f suffix -> float
-    if (current() == 'f' && !std::isalnum(static_cast<unsigned char>(peekChar()))) {
-        advance();
+    // Check for float suffix directly on integer digits (e.g. 10f, 10d, 10f32, 10f64)
+    if (pos_ + 2 < source_.size() && (source_.substr(pos_, 3) == "f32" || source_.substr(pos_, 3) == "f64")) {
         std::string clean;
-        for (auto c : source_.substr(start, pos_ - start - 1)) {
+        for (auto c : source_.substr(start, pos_ - start)) {
             if (c != '_') clean += c;
         }
+        pos_ += 3;
+        double val = std::strtod(clean.c_str(), nullptr);
+        return makeToken(TokenKind::FloatLiteral, start, val);
+    }
+    if ((current() == 'f' || current() == 'd' || current() == 'F' || current() == 'D') &&
+        !std::isalnum(static_cast<unsigned char>(peekChar()))) {
+        std::string clean;
+        for (auto c : source_.substr(start, pos_ - start)) {
+            if (c != '_') clean += c;
+        }
+        advance();
         double val = std::strtod(clean.c_str(), nullptr);
         return makeToken(TokenKind::FloatLiteral, start, val);
     }
@@ -427,8 +452,24 @@ Token Lexer::scanCharLiteral() {
                 break;
         }
     } else if (!isAtEnd() && current() != '\'') {
+        unsigned char lead = static_cast<unsigned char>(current());
+        int extraBytes = 0;
+        if ((lead & 0xE0) == 0xC0) extraBytes = 1;
+        else if ((lead & 0xF0) == 0xE0) extraBytes = 2;
+        else if ((lead & 0xF8) == 0xF0) extraBytes = 3;
         value += current();
         advance();
+        while (extraBytes-- > 0 && !isAtEnd() && (static_cast<unsigned char>(current()) & 0xC0) == 0x80) {
+            value += current();
+            advance();
+        }
+    }
+
+    if (value.empty()) {
+        diag_.report(locationAt(start), Severity::Error,
+                     "empty character literal");
+        if (current() == '\'') advance();
+        return makeToken(TokenKind::Invalid, start);
     }
 
     if (current() != '\'') {
@@ -584,6 +625,9 @@ Token Lexer::scanNextToken() {
 void Lexer::skipIntegerSuffix() {
     // Check for integer suffixes: u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize
     if (isAtEnd()) return;
+    auto safeChar = [&](size_t offset) -> char {
+        return (pos_ + offset < source_.size()) ? source_[pos_ + offset] : '\0';
+    };
     uint32_t saved = pos_;
     if (current() == 'u' || current() == 'i') {
         char prefix = current();
@@ -594,15 +638,15 @@ void Lexer::skipIntegerSuffix() {
         if (current() == '1') {
             advance();
             if (current() == '6' && !std::isalnum(static_cast<unsigned char>(peekChar()))) { advance(); return; }
-            if (current() == '2' && peekChar() == '8' && !std::isalnum(static_cast<unsigned char>(source_[pos_+2]))) {
+            if (current() == '2' && peekChar() == '8' && !std::isalnum(static_cast<unsigned char>(safeChar(2)))) {
                 advance(); advance(); return;
             }
             pos_ = saved; return;
         }
-        if (current() == '3' && peekChar() == '2' && !std::isalnum(static_cast<unsigned char>(source_[pos_+2]))) {
+        if (current() == '3' && peekChar() == '2' && !std::isalnum(static_cast<unsigned char>(safeChar(2)))) {
             advance(); advance(); return;
         }
-        if (current() == '6' && peekChar() == '4' && !std::isalnum(static_cast<unsigned char>(source_[pos_+2]))) {
+        if (current() == '6' && peekChar() == '4' && !std::isalnum(static_cast<unsigned char>(safeChar(2)))) {
             advance(); advance(); return;
         }
         // usize / isize

@@ -691,6 +691,23 @@ TypeChecker::ConstEvalResult TypeChecker::evalIntConstExpr(const ast::Expr& expr
             res.value = lit.value;
             return res;
         }
+        case ExprKind::BoolLiteral: {
+            auto& lit = static_cast<const BoolLiteralExpr&>(expr);
+            res.isConst = true;
+            res.value = lit.value ? 1 : 0;
+            return res;
+        }
+        case ExprKind::Ternary: {
+            auto& t = static_cast<const TernaryExpr&>(expr);
+            auto cond = evalIntConstExpr(*t.condition);
+            if (!cond.isConst) return res;
+            if (cond.overflow || cond.divByZero) return cond;
+            if (cond.value != 0) {
+                return evalIntConstExpr(*t.thenExpr);
+            } else {
+                return evalIntConstExpr(*t.elseExpr);
+            }
+        }
         case ExprKind::Unary: {
             auto& u = static_cast<const UnaryExpr&>(expr);
             auto opRes = evalIntConstExpr(*u.operand);
@@ -703,8 +720,10 @@ TypeChecker::ConstEvalResult TypeChecker::evalIntConstExpr(const ast::Expr& expr
                 } else {
                     res.value = -opRes.value;
                 }
-            } else if (u.op == UnaryOp::Not || u.op == UnaryOp::BitNot) {
+            } else if (u.op == UnaryOp::BitNot) {
                 res.value = ~opRes.value;
+            } else if (u.op == UnaryOp::Not) {
+                res.value = (opRes.value == 0) ? 1 : 0;
             } else {
                 res.isConst = false;
             }
@@ -713,13 +732,37 @@ TypeChecker::ConstEvalResult TypeChecker::evalIntConstExpr(const ast::Expr& expr
         case ExprKind::Binary: {
             auto& b = static_cast<const BinaryExpr&>(expr);
             auto left = evalIntConstExpr(*b.lhs);
-            auto right = evalIntConstExpr(*b.rhs);
-            if (!left.isConst || !right.isConst) return res;
-            if (left.overflow || right.overflow) {
+            if (!left.isConst) return res;
+            if (left.overflow || left.divByZero) return left;
+            if (b.op == BinaryOp::And) {
+                if (left.value == 0) {
+                    res.isConst = true;
+                    res.value = 0;
+                    return res;
+                }
+                auto right = evalIntConstExpr(*b.rhs);
+                if (!right.isConst) return res;
+                if (right.overflow || right.divByZero) return right;
                 res.isConst = true;
-                res.overflow = true;
+                res.value = (right.value != 0) ? 1 : 0;
                 return res;
             }
+            if (b.op == BinaryOp::Or) {
+                if (left.value != 0) {
+                    res.isConst = true;
+                    res.value = 1;
+                    return res;
+                }
+                auto right = evalIntConstExpr(*b.rhs);
+                if (!right.isConst) return res;
+                if (right.overflow || right.divByZero) return right;
+                res.isConst = true;
+                res.value = (right.value != 0) ? 1 : 0;
+                return res;
+            }
+            auto right = evalIntConstExpr(*b.rhs);
+            if (!right.isConst) return res;
+            if (right.overflow || right.divByZero) return right;
             if (left.divByZero || right.divByZero) {
                 res.isConst = true;
                 res.divByZero = true;
@@ -819,6 +862,30 @@ TypeChecker::ConstEvalResult TypeChecker::evalIntConstExpr(const ast::Expr& expr
                 }
                 case BinaryOp::BitXor: {
                     res.value = lhs ^ rhs;
+                    break;
+                }
+                case BinaryOp::EqEq: {
+                    res.value = (lhs == rhs) ? 1 : 0;
+                    break;
+                }
+                case BinaryOp::NotEq: {
+                    res.value = (lhs != rhs) ? 1 : 0;
+                    break;
+                }
+                case BinaryOp::Lt: {
+                    res.value = (lhs < rhs) ? 1 : 0;
+                    break;
+                }
+                case BinaryOp::LtEq: {
+                    res.value = (lhs <= rhs) ? 1 : 0;
+                    break;
+                }
+                case BinaryOp::Gt: {
+                    res.value = (lhs > rhs) ? 1 : 0;
+                    break;
+                }
+                case BinaryOp::GtEq: {
+                    res.value = (lhs >= rhs) ? 1 : 0;
                     break;
                 }
                 default:
@@ -1574,7 +1641,12 @@ void TypeChecker::checkCAbiType(const Type* ty, SourceLocation loc) {
                      "task type '" + ty->toString() + "' cannot cross C ABI boundaries directly");
         return;
     }
-    if (ty->isReference() || ty->isArray() || ty->isArrayView()) {
+    if (ty->isArrayView()) {
+        diag_.report(loc, Severity::Error,
+                     "slice type '" + ty->toString() + "' has a 16-byte fat-pointer layout and cannot cross C ABI boundaries directly; use raw pointer (*T) instead");
+        return;
+    }
+    if (ty->isReference() || ty->isArray()) {
         checkCAbiType(ty->elementType, loc);
     }
 }
@@ -1596,6 +1668,9 @@ void TypeChecker::checkFunctionCAbi(const ast::FunctionDecl& fn) {
     for (const auto& p : fn.params) {
         if (p.type) {
             auto pTy = resolveType(*p.type);
+            if (p.isArray) {
+                pTy = tc_.getArrayView(pTy, p.isConst);
+            }
             checkCAbiType(pTy, p.loc);
         }
     }
@@ -1618,6 +1693,9 @@ void TypeChecker::checkStructCAbi(const ast::StructDecl& sd) {
         for (const auto& p : m.params) {
             if (p.type) {
                 auto pTy = resolveType(*p.type);
+                if (p.isArray) {
+                    pTy = tc_.getArrayView(pTy, p.isConst);
+                }
                 checkCAbiType(pTy, p.loc);
             }
         }
@@ -1910,13 +1988,17 @@ const Type* TypeChecker::checkBinaryOpTypes(BinaryExpr& expr, const Type* lhsTy,
 
         default:
             // Pointer arithmetic
-            if (expr.op == BinaryOp::Add) {
-                if (lhsTy->isPointer() && rhsTy->isInteger()) return lhsTy;
-                if (lhsTy->isInteger() && rhsTy->isPointer()) return rhsTy;
-            }
-            if (expr.op == BinaryOp::Sub) {
-                if (lhsTy->isPointer() && rhsTy->isInteger()) return lhsTy;
-                if (lhsTy->isPointer() && rhsTy->isPointer()) return tc_.getI64();
+            if (lhsTy->isPointer() || rhsTy->isPointer()) {
+                if (expr.op == BinaryOp::Add) {
+                    if (lhsTy->isPointer() && rhsTy->isInteger()) return lhsTy;
+                    if (lhsTy->isInteger() && rhsTy->isPointer()) return rhsTy;
+                }
+                if (expr.op == BinaryOp::Sub) {
+                    if (lhsTy->isPointer() && rhsTy->isInteger()) return lhsTy;
+                    if (lhsTy->isPointer() && rhsTy->isPointer()) return tc_.getI64();
+                }
+                diag_.report(expr.loc, Severity::Error, "invalid binary operation on pointer types");
+                return lhsTy->isPointer() ? lhsTy : rhsTy;
             }
 
             // Shift operations: result type is always the type of the left operand
@@ -1925,6 +2007,20 @@ const Type* TypeChecker::checkBinaryOpTypes(BinaryExpr& expr, const Type* lhsTy,
                     diag_.report(expr.loc, Severity::Error, "shift operators require integer operands");
                 }
                 return lhsTy;
+            }
+
+            // Bitwise operations (BitAnd, BitOr, BitXor) and Mod: require integer operands
+            if (expr.op == BinaryOp::BitAnd || expr.op == BinaryOp::BitOr ||
+                expr.op == BinaryOp::BitXor || expr.op == BinaryOp::Mod) {
+                if (!lhsTy->isInteger() || !rhsTy->isInteger()) {
+                    std::string opStr = (expr.op == BinaryOp::Mod) ? "%" :
+                                        (expr.op == BinaryOp::BitAnd ? "&" :
+                                         (expr.op == BinaryOp::BitOr ? "|" : "^"));
+                    diag_.report(expr.loc, Severity::Error,
+                                 "operator '" + opStr + "' requires integer operands, but got " +
+                                 lhsTy->toString() + " and " + rhsTy->toString());
+                    return lhsTy;
+                }
             }
 
             // Arithmetic and bitwise: operands are promoted to common arithmetic type
@@ -1942,6 +2038,12 @@ const Type* TypeChecker::checkBinaryOpTypes(BinaryExpr& expr, const Type* lhsTy,
                 diag_.report(expr.loc, Severity::Error,
                              "type mismatch in binary operation: " +
                              lhsTy->toString() + " vs " + rhsTy->toString());
+                return lhsTy;
+            }
+
+            if (!lhsTy->isNumeric() && !lhsTy->isSIMDVector()) {
+                diag_.report(expr.loc, Severity::Error,
+                             "binary operator not supported for type '" + lhsTy->toString() + "'");
                 return lhsTy;
             }
             return lhsTy;
@@ -2336,14 +2438,62 @@ const Type* TypeChecker::checkAssign(AssignExpr& expr) {
                      "cannot copy or assign resource-owning class '" + typeName + "'; use 'move(" + srcName + ")' to transfer ownership");
     }
 
-    bool canAssign = (*targetTy == *valueTy || valueTy->isImplicitlyConvertibleTo(*targetTy));
-    if (!canAssign && targetTy->isPointer() && expr.value->kind == ExprKind::IntLiteral &&
-        static_cast<IntLiteralExpr&>(*expr.value).value == 0) {
-        canAssign = true;
+    bool canAssign = false;
+    if (expr.op == AssignOp::Assign) {
+        canAssign = (*targetTy == *valueTy || valueTy->isImplicitlyConvertibleTo(*targetTy));
+        if (!canAssign && targetTy->isPointer() && expr.value->kind == ExprKind::IntLiteral &&
+            static_cast<IntLiteralExpr&>(*expr.value).value == 0) {
+            canAssign = true;
+        }
+    } else if (expr.op == AssignOp::AddAssign || expr.op == AssignOp::SubAssign) {
+        if (targetTy->isPointer()) {
+            if (valueTy->isInteger()) {
+                canAssign = true;
+            }
+        } else if (targetTy->isNumeric() && valueTy->isNumeric()) {
+            canAssign = true;
+        } else if (targetTy->isRecord()) {
+            std::string opMethod = (expr.op == AssignOp::AddAssign) ? "operator+=" : "operator-=";
+            auto m = targetTy->findMethod(opMethod);
+            if (!m) m = targetTy->findMethod(expr.op == AssignOp::AddAssign ? "operator+" : "operator-");
+            if (m && m->paramTypes.size() == 1) {
+                canAssign = true;
+            }
+        }
+    } else if (expr.op == AssignOp::MulAssign || expr.op == AssignOp::DivAssign) {
+        if (targetTy->isNumeric() && valueTy->isNumeric()) {
+            canAssign = true;
+        } else if (targetTy->isRecord()) {
+            std::string opMethod = (expr.op == AssignOp::MulAssign) ? "operator*=" : "operator/=";
+            auto m = targetTy->findMethod(opMethod);
+            if (!m) m = targetTy->findMethod(expr.op == AssignOp::MulAssign ? "operator*" : "operator/");
+            if (m && m->paramTypes.size() == 1) {
+                canAssign = true;
+            }
+        }
+    } else if (expr.op == AssignOp::ModAssign) {
+        if (targetTy->isInteger() && valueTy->isInteger()) {
+            canAssign = true;
+        } else if (targetTy->isRecord()) {
+            auto m = targetTy->findMethod("operator%=");
+            if (!m) m = targetTy->findMethod("operator%");
+            if (m && m->paramTypes.size() == 1) {
+                canAssign = true;
+            }
+        }
+    } else if (expr.op == AssignOp::ShlAssign || expr.op == AssignOp::ShrAssign) {
+        if (targetTy->isInteger() && valueTy->isInteger()) {
+            canAssign = true;
+        }
+    } else if (expr.op == AssignOp::AndAssign || expr.op == AssignOp::OrAssign || expr.op == AssignOp::XorAssign) {
+        if ((targetTy->isInteger() && valueTy->isInteger()) || (targetTy->isBool() && valueTy->isBool())) {
+            canAssign = true;
+        }
     }
+
     if (!canAssign) {
         diag_.report(expr.loc, Severity::Error,
-                     "cannot assign " + valueTy->toString() + " to " + targetTy->toString());
+                     "cannot apply assignment operator to " + targetTy->toString() + " and " + valueTy->toString());
     }
 
     std::string rootTarget;
@@ -4963,37 +5113,17 @@ const Type* TypeChecker::checkLambda(ast::LambdaExpr& expr) {
                          ", got " + bodyTy->toString());
         }
     } else if (expr.blockBody) {
-        if (!retTy) {
-            auto findReturnTy = [&](auto& self, const ast::Stmt* s) -> const Type* {
-                if (!s) return nullptr;
-                if (s->kind == ast::StmtKind::Return) {
-                    auto& retS = static_cast<const ast::ReturnStmt&>(*s);
-                    if (retS.value) return checkExpr(*retS.value);
-                } else if (s->kind == ast::StmtKind::Block) {
-                    auto& blk = static_cast<const ast::BlockStmt&>(*s);
-                    for (auto& child : blk.stmts) {
-                        if (auto t = self(self, child.get())) return t;
-                    }
-                } else if (s->kind == ast::StmtKind::If) {
-                    auto& ifS = static_cast<const ast::IfStmt&>(*s);
-                    if (auto t = self(self, ifS.thenBlock.get())) return t;
-                    if (ifS.elseBlock) {
-                        if (auto t = self(self, ifS.elseBlock.get())) return t;
-                    }
-                }
-                return nullptr;
-            };
-            for (auto& s : expr.blockBody->stmts) {
-                if (auto t = findReturnTy(findReturnTy, s.get())) {
-                    retTy = t;
-                    break;
-                }
+        const Type* savedFuncRet = currentFuncReturnType_;
+        currentFuncReturnType_ = retTy;
+        for (auto& s : expr.blockBody->stmts) {
+            checkStmt(*s, currentFuncReturnType_);
+            if (!retTy && !activeLambdaStack_.empty() && activeLambdaStack_.back().inferredReturnType) {
+                retTy = activeLambdaStack_.back().inferredReturnType;
+                currentFuncReturnType_ = retTy;
             }
         }
-        const Type* savedFuncRet = currentFuncReturnType_;
-        if (retTy) currentFuncReturnType_ = retTy;
-        for (auto& s : expr.blockBody->stmts) {
-            checkStmt(*s, retTy);
+        if (!retTy && !activeLambdaStack_.empty() && activeLambdaStack_.back().inferredReturnType) {
+            retTy = activeLambdaStack_.back().inferredReturnType;
         }
         currentFuncReturnType_ = savedFuncRet;
         if (!retTy) retTy = tc_.getVoid();
@@ -5278,6 +5408,15 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
             } else {
                 elemTy = resolveType(*v.type);
                 varTy = elemTy;
+            }
+
+            if (elemTy && elemTy->isVoid()) {
+                if (v.isArray) {
+                    diag_.report(v.loc, Severity::Error, "cannot declare array of type 'void'");
+                } else {
+                    diag_.report(v.loc, Severity::Error, "variable '" + v.name + "' cannot be of type 'void'");
+                }
+                return;
             }
 
             if (v.isArray) {
@@ -5676,6 +5815,9 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
             auto& r = static_cast<ReturnStmt&>(stmt);
             if (r.value) {
                 auto valTy = checkExpr(*r.value);
+                if (!activeLambdaStack_.empty() && !activeLambdaStack_.back().inferredReturnType) {
+                    activeLambdaStack_.back().inferredReturnType = valTy;
+                }
                 if (currentFuncReturnType && currentFuncReturnType->isEnum() && currentFuncReturnType->enumName.rfind("Result<", 0) == 0 &&
                     valTy && valTy->isEnum() && valTy->enumName.rfind("Result<", 0) == 0) {
                     setExprType(r.value.get(), currentFuncReturnType);

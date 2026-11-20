@@ -224,35 +224,38 @@ bool Sema::analyzeModules(const std::vector<std::shared_ptr<driver::Module>>& mo
                     }
                 }
 
-                // Attach methods from impl to target struct declaration
-                for (auto& d : mod->ast->decls) {
-                    if (d->kind == DeclKind::Struct) {
-                        auto& sd = static_cast<StructDecl&>(*d);
-                        if (sd.name == targetName) {
-                            for (const auto& im : id.methods) {
-                                bool alreadyHas = false;
-                                for (const auto& sm : sd.methods) {
-                                    if (sm.name == im.name) { alreadyHas = true; break; }
-                                }
-                                if (!alreadyHas) {
-                                    auto clonedRet = Monomorphizer::substituteType(im.returnType.get(), {});
-                                    std::vector<ParamDecl> clonedParams;
-                                    for (const auto& p : im.params) {
-                                        auto pTy = Monomorphizer::substituteType(p.type.get(), {});
-                                        auto pSz = Monomorphizer::substituteExpr(p.arraySize.get(), {});
-                                        auto pDef = p.defaultValue ? Monomorphizer::substituteExpr(p.defaultValue.get(), {}) : nullptr;
-                                        clonedParams.push_back(ParamDecl{
-                                            std::move(pTy), p.name, p.isConst, p.isArray, std::move(pSz), p.loc, std::move(pDef)
+                // Attach methods from impl to target struct declaration across all modules
+                for (const auto& targetMod : modules) {
+                    if (!targetMod || !targetMod->ast) continue;
+                    for (auto& d : targetMod->ast->decls) {
+                        if (d->kind == DeclKind::Struct) {
+                            auto& sd = static_cast<StructDecl&>(*d);
+                            if (sd.name == targetName) {
+                                for (const auto& im : id.methods) {
+                                    bool alreadyHas = false;
+                                    for (const auto& sm : sd.methods) {
+                                        if (sm.name == im.name) { alreadyHas = true; break; }
+                                    }
+                                    if (!alreadyHas) {
+                                        auto clonedRet = Monomorphizer::substituteType(im.returnType.get(), {});
+                                        std::vector<ParamDecl> clonedParams;
+                                        for (const auto& p : im.params) {
+                                            auto pTy = Monomorphizer::substituteType(p.type.get(), {});
+                                            auto pSz = Monomorphizer::substituteExpr(p.arraySize.get(), {});
+                                            auto pDef = p.defaultValue ? Monomorphizer::substituteExpr(p.defaultValue.get(), {}) : nullptr;
+                                            clonedParams.push_back(ParamDecl{
+                                                std::move(pTy), p.name, p.isConst, p.isArray, std::move(pSz), p.loc, std::move(pDef)
+                                            });
+                                        }
+                                        std::unique_ptr<BlockStmt> clonedBody;
+                                        if (im.body) {
+                                            clonedBody = std::unique_ptr<BlockStmt>(static_cast<BlockStmt*>(Monomorphizer::substituteStmt(im.body.get(), {}).release()));
+                                        }
+                                        sd.methods.push_back(MethodDecl{
+                                            std::move(clonedRet), im.name, std::move(clonedParams), std::move(clonedBody),
+                                            im.isConst, im.isVirtual, im.isOverride, im.isPureVirtual, im.isOperator, im.access, im.loc
                                         });
                                     }
-                                    std::unique_ptr<BlockStmt> clonedBody;
-                                    if (im.body) {
-                                        clonedBody = std::unique_ptr<BlockStmt>(static_cast<BlockStmt*>(Monomorphizer::substituteStmt(im.body.get(), {}).release()));
-                                    }
-                                    sd.methods.push_back(MethodDecl{
-                                        std::move(clonedRet), im.name, std::move(clonedParams), std::move(clonedBody),
-                                        im.isConst, im.isVirtual, im.isOverride, im.isPureVirtual, im.isOperator, im.access, im.loc
-                                    });
                                 }
                             }
                         }
@@ -336,17 +339,21 @@ bool Sema::analyzeModules(const std::vector<std::shared_ptr<driver::Module>>& mo
                                      "base class '" + baseName + "' not found");
                     } else {
                         // Check for inheritance cycles
+                        bool hasCycle = false;
                         const Type* cur = baseTy;
                         while (cur) {
                             if (cur->structName == sd.name) {
                                 diag_.report(sd.baseClasses[0].loc, Severity::Error,
                                              "inheritance cycle detected involving '" + sd.name + "'");
+                                hasCycle = true;
                                 break;
                             }
                             cur = cur->baseClass;
                         }
-                        auto thisTy = const_cast<Type*>(tc_.findRecord(sd.name));
-                        if (thisTy) thisTy->baseClass = baseTy;
+                        if (!hasCycle) {
+                            auto thisTy = const_cast<Type*>(tc_.findRecord(sd.name));
+                            if (thisTy) thisTy->baseClass = baseTy;
+                        }
                     }
                 }
             }
@@ -375,6 +382,10 @@ bool Sema::analyzeModules(const std::vector<std::shared_ptr<driver::Module>>& mo
 
                 for (auto& f : sd.fields) {
                     auto fTy = checker_.resolveType(*f.type);
+                    if (fTy && fTy->isVoid()) {
+                        diag_.report(f.loc, Severity::Error,
+                                     "field '" + f.name + "' cannot be of type 'void'");
+                    }
                     if (fTy->isRecord() && fTy->structName == sd.name) {
                         diag_.report(f.loc, Severity::Error,
                                      "recursive struct definition: struct '" + sd.name +
@@ -577,6 +588,10 @@ bool Sema::analyzeModules(const std::vector<std::shared_ptr<driver::Module>>& mo
                 bool seenDefault = false;
                 for (auto& p : fn.params) {
                     auto elemTy = checker_.resolveType(*p.type);
+                    if (elemTy && elemTy->isVoid()) {
+                        diag_.report(p.loc, Severity::Error,
+                                     "parameter '" + p.name + "' cannot be of type 'void'");
+                    }
                     if (elemTy && elemTy->hasResourceOwningClass()) {
                         diag_.report(p.loc, Severity::Error,
                                      "cannot pass resource-owning class '" +
@@ -788,17 +803,21 @@ void Sema::registerTopDecls(ast::Program& prog) {
                                  "base class '" + baseName + "' not found");
                 } else {
                     // Check for inheritance cycles
+                    bool hasCycle = false;
                     const Type* cur = baseTy;
                     while (cur) {
                         if (cur->structName == sd.name) {
                             diag_.report(sd.baseClasses[0].loc, Severity::Error,
                                          "inheritance cycle detected involving '" + sd.name + "'");
+                            hasCycle = true;
                             break;
                         }
                         cur = cur->baseClass;
                     }
-                    auto thisTy = const_cast<Type*>(tc_.findRecord(sd.name));
-                    if (thisTy) thisTy->baseClass = baseTy;
+                    if (!hasCycle) {
+                        auto thisTy = const_cast<Type*>(tc_.findRecord(sd.name));
+                        if (thisTy) thisTy->baseClass = baseTy;
+                    }
                 }
             }
         }
@@ -821,6 +840,10 @@ void Sema::registerTopDecls(ast::Program& prog) {
 
             for (auto& f : sd.fields) {
                 auto fTy = checker_.resolveType(*f.type);
+                if (fTy && fTy->isVoid()) {
+                    diag_.report(f.loc, Severity::Error,
+                                 "field '" + f.name + "' cannot be of type 'void'");
+                }
                 if (fTy->isRecord() && fTy->structName == sd.name) {
                     diag_.report(f.loc, Severity::Error,
                                  "recursive struct definition: struct '" + sd.name +
@@ -1003,6 +1026,10 @@ void Sema::registerTopDecls(ast::Program& prog) {
             bool seenDefault = false;
             for (auto& p : fn.params) {
                 auto elemTy = checker_.resolveType(*p.type);
+                if (elemTy && elemTy->isVoid()) {
+                    diag_.report(p.loc, Severity::Error,
+                                 "parameter '" + p.name + "' cannot be of type 'void'");
+                }
                 if (p.defaultValue) {
                     seenDefault = true;
                     defaultArgs.push_back(p.defaultValue.get());

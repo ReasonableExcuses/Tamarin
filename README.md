@@ -127,7 +127,7 @@ ComputeResult simulate(Particle[1024] particles, int steps) {
 
     // Stack-allocated, borrow-checked closure (16-byte fat pointer)
     int threshold = 100;
-    auto filter_fn = |float pos| -> bool {
+    auto filter_fn = (float pos) -> bool => {
         return pos > (float)threshold;
     };
 
@@ -170,10 +170,12 @@ int main() {
 
 All benchmarks were compiled with maximum optimization flags and executed on dedicated physical hardware.
 
-- **CPU**: AMD Ryzen 5 5600H @ 3.30 GHz (6 Physical Cores, 12 Threads)
-- **Memory**: 16 GB DDR4-3200 MHz
+- **Host System**: HP OMEN 15
+- **CPU**: AMD Ryzen 7 7840HS with Radeon 780M Graphics (8 Physical Cores, 16 Threads)
+- **Memory**: 16 GB DDR5 RAM
+- **Storage**: NVMe SSD
 - **OS**: Microsoft Windows 11 Pro x64 (Build 22631)
-- **Compilers**: Tamarin v0.17.0 (LLVM 21.1.5 backend), Clang C++20 (LLVM 21.1.5 `-O3 -march=native`), MSVC 19.44 (`/O2 /arch:AVX2`), Rustc 1.84 (`-C opt-level=3 -C target-cpu=native`).
+- **Compilers**: Tamarin v0.16.0 (LLVM 21.1.5 backend), Clang C++20 (LLVM 21.1.5 `-O3 -march=native`), MSVC 19.44 (`/O2 /arch:AVX2`), Rustc 1.84 (`-C opt-level=3 -C target-cpu=native`).
 
 ### Benchmark Results Comparison
 
@@ -196,7 +198,7 @@ The Tamarin test suite validates syntax, type soundness, lifetime verification, 
 
 | Test Suite | Scope & Category | Tests | Status |
 | :--- | :--- | :--- | :--- |
-| **`tamarin_tests`** | Unit Tests: Lexer, Parser, Sema, IR, BCE, Codegen, Modules, Stdlib, Troop, @cfg | **360 / 360** | **100% PASS** |
+| **`tamarin_tests`** | Unit Tests: Lexer, Parser, Sema, IR, BCE, Codegen, Modules, Stdlib, Troop, @cfg | **367 / 367** | **100% PASS** |
 | **`test_rust_soundness.ps1`** | Rust-Level Memory Soundness: Borrowing, Mutation Aliasing, Dangling Ref Rejection | **16 / 16** | **100% PASS** |
 | **`test_rust_dark_corners.ps1`** | Adversarial Borrowing: Circular References, Conditional Escaping, Field Splitting | **14 / 14** | **100% PASS** |
 | **`test_boss_corners.ps1`** | Stress Gauntlet: Pointer Provenance, Lifetime Extension, Dynamic Scopes | **6 / 6** | **100% PASS** |
@@ -206,7 +208,7 @@ The Tamarin test suite validates syntax, type soundness, lifetime verification, 
 | **`run_final_suite.ps1`** | Mega Suite: Dynamic/Static Runtime Linking, Clang C ABI Round-Trip, Bounds Traps | **7 / 7** | **100% PASS** |
 | **`test_troop.ps1`** | Package Manager: `new`, `add`, `build`, `run`, `test`, `clean`, `troop.lock` | **10 / 10** | **100% PASS** |
 | **`@cfg & Multi-Target CLI`** | Conditional Compilation Directives & Cross-Target Object Lowering (Linux/macOS/Windows) | **5 / 5** | **100% PASS** |
-| **Total Verified** | **Exhaustive Multi-Platform Verification Score (`python3 tests/run_all.py`)** | **440 / 440** | **100% PASS** |
+| **Total Verified** | **Exhaustive Multi-Platform Verification Score (`python3 tests/run_all.py`)** | **447 / 447** | **100% PASS** |
 
 ---
 

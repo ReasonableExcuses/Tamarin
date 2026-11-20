@@ -511,9 +511,7 @@ int32_t tamarin_async_task_is_ready(void* task_handle) {
 void tamarin_async_task_free(void* task_handle) {
     if (!task_handle) return;
     auto* task = static_cast<tamarin::runtime::TamarinAsyncTask*>(task_handle);
-    if (task->refCount.load(std::memory_order_relaxed) == 1) {
-        tamarin::runtime::t_asyncTaskPool.release(task);
-    } else if (task->refCount.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    if (task->refCount.fetch_sub(1, std::memory_order_acq_rel) == 1) {
         tamarin::runtime::t_asyncTaskPool.release(task);
     }
 }

@@ -2,9 +2,9 @@ name: Tamarin CI
 
 on:
   push:
-    branches: [ main, master, "feat/**" ]
+    branches: [ main, master, "feat/**", "audit*" ]
   pull_request:
-    branches: [ main, master, "feat/**" ]
+    branches: [ main, master, "feat/**", "audit*" ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

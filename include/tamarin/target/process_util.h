@@ -21,38 +21,68 @@
 
 namespace tamarin::target {
 
-/// Parse a command-line string into distinct argument tokens respecting quotes.
+/// Parse a command-line string into distinct argument tokens respecting Windows & POSIX quotes and backslashes.
 inline std::vector<std::string> splitCommandLine(std::string_view cmd) {
     std::vector<std::string> args;
     std::string current;
     bool inQuotes = false;
     char quoteChar = 0;
+    bool hasToken = false;
 
-    for (size_t i = 0; i < cmd.size(); ++i) {
+    for (size_t i = 0; i < cmd.size();) {
         char c = cmd[i];
-        if (inQuotes) {
-            if (c == quoteChar) {
-                inQuotes = false;
-            } else if (c == '\\' && i + 1 < cmd.size() && (cmd[i + 1] == quoteChar || cmd[i + 1] == '\\')) {
-                current += cmd[++i];
+        if (!inQuotes && std::isspace(static_cast<unsigned char>(c))) {
+            if (hasToken) {
+                args.push_back(std::move(current));
+                current.clear();
+                hasToken = false;
+            }
+            ++i;
+            continue;
+        }
+
+        // Count backslashes
+        size_t backslashes = 0;
+        while (i < cmd.size() && cmd[i] == '\\') {
+            backslashes++;
+            i++;
+        }
+
+        if (i < cmd.size() && (cmd[i] == '"' || (cmd[i] == '\'' && (!inQuotes || quoteChar == '\'')))) {
+            char q = cmd[i];
+            current.append(backslashes / 2, '\\');
+            if (backslashes % 2 == 1) {
+                // Escaped quote: emit literal quote character
+                current += q;
+                hasToken = true;
+                ++i;
             } else {
-                current += c;
+                // Unescaped quote: toggle quote mode
+                if (inQuotes && quoteChar == q) {
+                    inQuotes = false;
+                    quoteChar = 0;
+                } else if (!inQuotes) {
+                    inQuotes = true;
+                    quoteChar = q;
+                } else {
+                    current += q;
+                }
+                hasToken = true;
+                ++i;
             }
         } else {
-            if (c == '"' || c == '\'') {
-                inQuotes = true;
-                quoteChar = c;
-            } else if (std::isspace(static_cast<unsigned char>(c))) {
-                if (!current.empty()) {
-                    args.push_back(std::move(current));
-                    current.clear();
-                }
-            } else {
-                current += c;
+            // Backslashes followed by non-quote: emit all backslashes literally
+            current.append(backslashes, '\\');
+            if (backslashes > 0) hasToken = true;
+            if (i < cmd.size()) {
+                current += cmd[i];
+                hasToken = true;
+                ++i;
             }
         }
     }
-    if (!current.empty()) {
+
+    if (hasToken) {
         args.push_back(std::move(current));
     }
     return args;

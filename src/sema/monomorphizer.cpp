@@ -124,6 +124,10 @@ std::string Monomorphizer::mangleTypeNode(const ast::TypeNode* node) {
             s += "ret_" + mangleTypeNode(ft.returnType.get());
             return s;
         }
+        case TypeNodeKind::Task: {
+            auto& tt = static_cast<const TaskTypeNode&>(*node);
+            return "Task_" + (tt.elementType ? mangleTypeNode(tt.elementType.get()) : "void");
+        }
     }
     return "unknown";
 }
@@ -165,6 +169,13 @@ ast::TypePtr Monomorphizer::typeToASTTypeNode(const Type* type, SourceLocation l
                                                    std::make_unique<IntLiteralExpr>(type->arraySize, loc), loc, type->isConst);
         case TypeKind::ArrayView:
             return std::make_unique<ArrayTypeNode>(typeToASTTypeNode(type->elementType, loc), nullptr, loc, type->isConst);
+        case TypeKind::Tuple: {
+            std::vector<TypePtr> elems;
+            for (auto el : type->tupleElements) elems.push_back(typeToASTTypeNode(el, loc));
+            return std::make_unique<TupleTypeNode>(std::move(elems), loc);
+        }
+        case TypeKind::Task:
+            return std::make_unique<TaskTypeNode>(typeToASTTypeNode(type->elementType, loc), loc);
         case TypeKind::Function: {
             std::vector<TypePtr> params;
             for (auto p : type->paramTypes) params.push_back(typeToASTTypeNode(p, loc));
@@ -243,6 +254,11 @@ ast::TypePtr Monomorphizer::substituteType(const ast::TypeNode* node, const Type
             auto ret = substituteType(ft.returnType.get(), subst);
             return std::make_unique<FunctionTypeNode>(std::move(params), std::move(ret), ft.loc);
         }
+        case TypeNodeKind::Task: {
+            auto& tt = static_cast<const TaskTypeNode&>(*node);
+            auto elem = substituteType(tt.elementType.get(), subst);
+            return std::make_unique<TaskTypeNode>(std::move(elem), tt.loc);
+        }
     }
     return nullptr;
 }
@@ -303,6 +319,12 @@ ast::ExprPtr Monomorphizer::substituteExpr(const ast::Expr* expr, const TypeSubs
             std::vector<ExprPtr> args;
             for (const auto& a : e.args) {
                 args.push_back(substituteExpr(a.get(), subst));
+            }
+            if (e.calleeExpr) {
+                auto callee = substituteExpr(e.calleeExpr.get(), subst);
+                auto res = std::make_unique<CallExpr>(std::move(callee), std::move(args), e.loc);
+                res->typeArgs = std::move(typeArgs);
+                return res;
             }
             return std::make_unique<CallExpr>(e.callee, std::move(typeArgs), std::move(args), e.loc);
         }
@@ -452,6 +474,11 @@ ast::ExprPtr Monomorphizer::substituteExpr(const ast::Expr* expr, const TypeSubs
             auto s = substituteExpr(e.start.get(), subst);
             auto end = substituteExpr(e.end.get(), subst);
             return std::make_unique<RangeExpr>(std::move(s), std::move(end), e.loc);
+        }
+        case ExprKind::Await: {
+            auto& e = static_cast<const AwaitExpr&>(*expr);
+            auto op = substituteExpr(e.operand.get(), subst);
+            return std::make_unique<AwaitExpr>(std::move(op), e.loc);
         }
     }
     return nullptr;
@@ -607,8 +634,20 @@ ast::StmtPtr Monomorphizer::substituteStmt(const ast::Stmt* stmt, const TypeSubs
             auto init = substituteExpr(s.initializer.get(), subst);
             return std::make_unique<DestructureVarDeclStmt>(s.names, std::move(init), s.isConst, s.loc);
         }
-        case StmtKind::Switch:
-            return nullptr;
+        case StmtKind::Switch: {
+            auto& s = static_cast<const SwitchStmt&>(*stmt);
+            auto cond = substituteExpr(s.condition.get(), subst);
+            std::vector<CaseClause> newCases;
+            for (const auto& c : s.cases) {
+                CaseClause nc;
+                if (c.value) nc.value = substituteExpr(c.value.get(), subst);
+                for (const auto& b : c.body) {
+                    nc.body.push_back(substituteStmt(b.get(), subst));
+                }
+                newCases.push_back(std::move(nc));
+            }
+            return std::make_unique<SwitchStmt>(std::move(cond), std::move(newCases), s.loc);
+        }
     }
     return nullptr;
 }

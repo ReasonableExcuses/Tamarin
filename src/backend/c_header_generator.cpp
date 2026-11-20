@@ -43,8 +43,7 @@ std::string CHeaderGenerator::toCType(const sema::Type* ty) {
             return inner + "*";
         }
         case sema::TypeKind::ArrayView: {
-            if (ty->elementType && ty->elementType->kind == sema::TypeKind::U8) return "const char*";
-            return toCType(ty->elementType) + "*";
+            return "/* slice type cannot cross C ABI boundaries directly */";
         }
         case sema::TypeKind::Function:
             return "/* closure type cannot cross C ABI boundaries */";
@@ -142,17 +141,24 @@ bool CHeaderGenerator::generateDecls(const std::vector<const ast::Decl*>& decls,
             if (fn.isExported || (fn.isExtern && fn.linkage == "C") || fn.isPublic) {
                 if (fn.returnType) {
                     auto retTy = checker.resolveType(*fn.returnType);
-                    if (retTy && retTy->isFunction()) {
-                        diag_.report(fn.loc, Severity::Error,
-                                     "closure type '" + retTy->toString() + "' has a 16-byte fat-pointer layout and cannot cross C ABI boundaries directly");
+                    if (retTy && (retTy->isFunction() || retTy->isArrayView() || retTy->isTask())) {
+                        std::string kindStr = retTy->isFunction() ? "closure type '" + retTy->toString() + "' has a 16-byte fat-pointer layout and cannot cross C ABI boundaries directly"
+                                            : (retTy->isArrayView() ? "slice type '" + retTy->toString() + "' has a 16-byte fat-pointer layout and cannot cross C ABI boundaries directly; use raw pointer (*T) instead"
+                                                                    : "task type '" + retTy->toString() + "' cannot cross C ABI boundaries directly");
+                        diag_.report(fn.loc, Severity::Error, kindStr);
                     }
                 }
                 for (size_t i = 0; i < fn.params.size(); ++i) {
                     if (fn.params[i].type) {
                         auto pTy = checker.resolveType(*fn.params[i].type);
-                        if (pTy && pTy->isFunction()) {
-                            diag_.report(fn.params[i].loc, Severity::Error,
-                                         "closure type '" + pTy->toString() + "' has a 16-byte fat-pointer layout and cannot cross C ABI boundaries directly");
+                        if (fn.params[i].isArray) {
+                            pTy = checker.context().getArrayView(pTy, fn.params[i].isConst);
+                        }
+                        if (pTy && (pTy->isFunction() || pTy->isArrayView() || pTy->isTask())) {
+                            std::string kindStr = pTy->isFunction() ? "closure type '" + pTy->toString() + "' has a 16-byte fat-pointer layout and cannot cross C ABI boundaries directly"
+                                                : (pTy->isArrayView() ? "slice type '" + pTy->toString() + "' has a 16-byte fat-pointer layout and cannot cross C ABI boundaries directly; use raw pointer (*T) instead"
+                                                                        : "task type '" + pTy->toString() + "' cannot cross C ABI boundaries directly");
+                            diag_.report(fn.params[i].loc, Severity::Error, kindStr);
                         }
                     }
                 }

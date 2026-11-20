@@ -63,7 +63,7 @@ The Tamarin compiler (`tamarin`) is engineered as a modular C++23 compiler pipel
 ### 2.3 Parser and AST (`src/parser/`, `src/ast/`)
 - Recursive descent parser with operator precedence Pratt parsing for binary expressions.
 - Builds an Abstract Syntax Tree (AST) rooted in `TranslationUnitNode`.
-- Supports exact C-style declarations (`int main()`, `float compute(float x)`), algebraic `enum`, `match` expressions, closures `|x| expr`, and `@layout(scan)` struct annotations.
+- Supports exact C-style declarations (`int main()`, `float compute(float x)`), algebraic `enum`, `match` expressions, closures `(x) => expr`, and `@layout(scan)` struct annotations.
 
 ---
 

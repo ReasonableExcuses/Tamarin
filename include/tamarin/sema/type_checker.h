@@ -290,6 +290,7 @@ private:
         ast::LambdaExpr* expr = nullptr;
         size_t scopeDepth = 0;
         std::unordered_map<std::string, LambdaCapture> captures;
+        const Type* inferredReturnType = nullptr;
     };
     std::vector<LambdaCheckContext> activeLambdaStack_;
     std::unordered_map<const ast::LambdaExpr*, std::vector<LambdaCapture>> lambdaCaptures_;

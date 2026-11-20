@@ -102,6 +102,7 @@ private:
     ast::ExprPtr parseLogicOr();
     ast::ExprPtr parseLogicAnd();
     ast::ExprPtr parseComparison();
+    ast::ExprPtr parseRelational();
     ast::ExprPtr parseBitOr();
     ast::ExprPtr parseBitXor();
     ast::ExprPtr parseBitAnd();

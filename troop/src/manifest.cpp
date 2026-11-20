@@ -410,8 +410,10 @@ std::filesystem::path Manifest::getEntryPointPath() const {
         return root / package.entryPoint;
     }
     if (package.kind == "lib") {
+        if (std::filesystem::exists(root / "src" / "lib.tmn")) return root / "src" / "lib.tmn";
         return root / "src" / "lib.tam";
     }
+    if (std::filesystem::exists(root / "src" / "main.tmn")) return root / "src" / "main.tmn";
     return root / "src" / "main.tam";
 }
 

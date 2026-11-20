@@ -160,6 +160,12 @@ bool Parser::isTypeName() {
             while (depth > 0 && idx < 64) {
                 auto tk = lex_.peek(idx).kind;
                 if (tk == TokenKind::Eof || tk == TokenKind::Semicolon || tk == TokenKind::LBrace || tk == TokenKind::RBrace) return false;
+                if (tk == TokenKind::Plus || tk == TokenKind::Minus || tk == TokenKind::Slash ||
+                    tk == TokenKind::Percent || tk == TokenKind::EqEq || tk == TokenKind::BangEq ||
+                    tk == TokenKind::LtEq || tk == TokenKind::GtEq || tk == TokenKind::AmpAmp ||
+                    tk == TokenKind::PipePipe || tk == TokenKind::Eq || tk == TokenKind::Question) {
+                    return false;
+                }
                 if (tk == TokenKind::Lt) depth++;
                 else if (tk == TokenKind::Gt) depth--;
                 else if (tk == TokenKind::GtGt) depth -= 2;
@@ -2134,27 +2140,35 @@ ExprPtr Parser::parseLogicAnd() {
 }
 
 ExprPtr Parser::parseComparison() {
+    auto expr = parseRelational();
+    if (!expr) return nullptr;
+
+    while (check(TokenKind::EqEq) || check(TokenKind::BangEq)) {
+        auto loc = current_.location;
+        BinaryOp op = check(TokenKind::EqEq) ? BinaryOp::EqEq : BinaryOp::NotEq;
+        advance();
+        auto rhs = parseRelational();
+        expr = std::make_unique<BinaryExpr>(op, std::move(expr),
+                                             std::move(rhs), loc);
+    }
+    return expr;
+}
+
+ExprPtr Parser::parseRelational() {
     auto expr = parseBitOr();
     if (!expr) return nullptr;
 
-    auto mapCmpOp = [](TokenKind k) -> std::optional<BinaryOp> {
-        switch (k) {
-            case TokenKind::Lt:     return BinaryOp::Lt;
-            case TokenKind::Gt:     return BinaryOp::Gt;
-            case TokenKind::LtEq:   return BinaryOp::LtEq;
-            case TokenKind::GtEq:   return BinaryOp::GtEq;
-            case TokenKind::EqEq:   return BinaryOp::EqEq;
-            case TokenKind::BangEq: return BinaryOp::NotEq;
-            default: return std::nullopt;
-        }
-    };
-
-    auto op = mapCmpOp(current_.kind);
-    if (op) {
+    while (check(TokenKind::Lt) || check(TokenKind::Gt) ||
+           check(TokenKind::LtEq) || check(TokenKind::GtEq)) {
         auto loc = current_.location;
+        BinaryOp op = BinaryOp::Lt;
+        if (check(TokenKind::Lt)) op = BinaryOp::Lt;
+        else if (check(TokenKind::Gt)) op = BinaryOp::Gt;
+        else if (check(TokenKind::LtEq)) op = BinaryOp::LtEq;
+        else if (check(TokenKind::GtEq)) op = BinaryOp::GtEq;
         advance();
         auto rhs = parseBitOr();
-        expr = std::make_unique<BinaryExpr>(*op, std::move(expr),
+        expr = std::make_unique<BinaryExpr>(op, std::move(expr),
                                              std::move(rhs), loc);
     }
     return expr;
@@ -2443,6 +2457,12 @@ ExprPtr Parser::parsePostfix() {
                                   nextK == TokenKind::Plus ||
                                   nextK == TokenKind::Bang ||
                                   nextK == TokenKind::Tilde ||
+                                  nextK == TokenKind::Star ||
+                                  nextK == TokenKind::Amp ||
+                                  nextK == TokenKind::PlusPlus ||
+                                  nextK == TokenKind::MinusMinus ||
+                                  nextK == TokenKind::Await ||
+                                  nextK == TokenKind::Match ||
                                   nextK == TokenKind::This ||
                                   nextK == TokenKind::Null);
             if (isExprStarter) {
@@ -2606,7 +2626,26 @@ ExprPtr Parser::parsePrimary() {
     if (check(TokenKind::CharLiteral)) {
         auto val = current_.stringValue();
         advance();
-        int64_t code = val.empty() ? 0 : static_cast<uint8_t>(val[0]);
+        int64_t code = 0;
+        if (!val.empty()) {
+            unsigned char b0 = static_cast<unsigned char>(val[0]);
+            if (b0 < 0x80) {
+                code = b0;
+            } else if ((b0 & 0xE0) == 0xC0 && val.size() >= 2) {
+                code = ((b0 & 0x1F) << 6) | (static_cast<unsigned char>(val[1]) & 0x3F);
+            } else if ((b0 & 0xF0) == 0xE0 && val.size() >= 3) {
+                code = ((b0 & 0x0F) << 12) |
+                       ((static_cast<unsigned char>(val[1]) & 0x3F) << 6) |
+                       (static_cast<unsigned char>(val[2]) & 0x3F);
+            } else if ((b0 & 0xF8) == 0xF0 && val.size() >= 4) {
+                code = ((b0 & 0x07) << 18) |
+                       ((static_cast<unsigned char>(val[1]) & 0x3F) << 12) |
+                       ((static_cast<unsigned char>(val[2]) & 0x3F) << 6) |
+                       (static_cast<unsigned char>(val[3]) & 0x3F);
+            } else {
+                code = b0;
+            }
+        }
         return std::make_unique<IntLiteralExpr>(code, loc);
     }
 
@@ -2650,9 +2689,23 @@ ExprPtr Parser::parsePrimary() {
     if (check(TokenKind::LParen)) {
         auto parenLoc = current_.location;
         auto nextK = lex_.peek().kind;
-        bool isType = isTypeNameKind(nextK) || nextK == TokenKind::Struct ||
-                      nextK == TokenKind::Class || nextK == TokenKind::Interface ||
-                      (nextK == TokenKind::Identifier && knownTypes_.count(std::string(lex_.peek().text)));
+        bool isType = false;
+        if (isTypeNameKind(nextK) || nextK == TokenKind::Struct ||
+            nextK == TokenKind::Class || nextK == TokenKind::Interface ||
+            (nextK == TokenKind::Identifier && knownTypes_.count(std::string(lex_.peek().text)))) {
+            isType = true;
+        } else if (nextK == TokenKind::Star) {
+            size_t k = 1;
+            while (lex_.peek(k).kind == TokenKind::Star) {
+                k++;
+            }
+            auto afterStarK = lex_.peek(k).kind;
+            if (isTypeNameKind(afterStarK) || afterStarK == TokenKind::Struct ||
+                afterStarK == TokenKind::Class || afterStarK == TokenKind::Interface ||
+                (afterStarK == TokenKind::Identifier && knownTypes_.count(std::string(lex_.peek(k).text)))) {
+                isType = true;
+            }
+        }
 
         if (isType) {
             advance(); // consume '('
