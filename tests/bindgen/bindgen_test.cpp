@@ -140,7 +140,7 @@ TAMARIN_TEST(Bindgen, ParseFunctionsAndPointers) {
     std::string out = ss.str();
 
     EXPECT_TRUE(out.find("extern \"C\" {") != std::string::npos);
-    EXPECT_TRUE(out.find("void InitWindow(int width, int height, *u8 title);") != std::string::npos);
+    EXPECT_TRUE(out.find("void InitWindow(int width, int height, *const u8 title);") != std::string::npos);
     EXPECT_TRUE(out.find("int AddNumbers(int a, int b);") != std::string::npos);
     EXPECT_TRUE(out.find("void SetUserData(*void data);") != std::string::npos);
     EXPECT_TRUE(out.find("void RegisterLogger(*void") != std::string::npos);

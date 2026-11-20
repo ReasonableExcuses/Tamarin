@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <unordered_set>
+#include <unordered_map>
 
 namespace tamarin::bindgen {
 
@@ -37,6 +38,8 @@ private:
     std::unordered_set<std::string> visitedEnums_;
     std::unordered_set<std::string> visitedTypedefs_;
     std::unordered_set<std::string> visitedFunctions_;
+    std::unordered_set<std::string> opaqueStructs_;
+    std::unordered_map<std::string, std::string> typedefMap_;
 
     bool isFromTargetHeader(CXCursor cursor) const;
     CType convertType(CXType type, CXCursor cursor = clang_getNullCursor());

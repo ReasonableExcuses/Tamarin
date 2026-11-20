@@ -13,6 +13,7 @@ Executes the entire Tamarin test gauntlet across Windows, Linux, and macOS:
   8. Async / Await & Coroutines (test_async_coroutines.ps1)
   9. Troop Package Manager E2E (test_troop.ps1)
   10. @cfg(...) & Multi-Target Cross-Compilation
+  11. tamarin-bindgen 120 Hard Instances Gauntlet (test_hard_instances.py)
 
 Standard library only: subprocess, pathlib, tempfile, sys, re, shutil, os, platform.
 """
@@ -59,11 +60,15 @@ def gray(text: str) -> str: return color(text, "90")
 
 class TestHarness:
     def __init__(self, tamarin_bin: pathlib.Path, troop_bin: pathlib.Path,
-                 tamarin_tests_bin: pathlib.Path, clang_bin: str | None):
+                 tamarin_tests_bin: pathlib.Path, clang_bin: str | None,
+                 bindgen_bin: pathlib.Path | None = None):
         self.tamarin_bin = tamarin_bin
         self.troop_bin = troop_bin
         self.tamarin_tests_bin = tamarin_tests_bin
         self.clang_bin = clang_bin
+        self.bindgen_bin = bindgen_bin
+        if self.bindgen_bin and self.bindgen_bin.exists():
+            os.environ["TAMARIN_BINDGEN_EXE"] = str(self.bindgen_bin)
         if self.tamarin_bin and self.tamarin_bin.exists():
             os.environ["TAMARIN_EXE"] = str(self.tamarin_bin)
             bin_dir = self.tamarin_bin.parent
@@ -599,6 +604,45 @@ int main() { return add(20, 22); }
             self.record("Cfg & Cross-Target", "Cross-target object emission (x86_64-pc-windows-msvc)", cp5.returncode == 0 and win_obj.exists())
 
     # -------------------------------------------------------------------------
+    # Suite 11: tamarin-bindgen 120 Hard Instances Gauntlet
+    # -------------------------------------------------------------------------
+    def run_bindgen_hard_instances(self):
+        self.banner("11. TAMARIN-BINDGEN 120 HARD INSTANCES GAUNTLET")
+        script = REPO_ROOT / "tests" / "bindgen" / "test_hard_instances.py"
+        if not script.exists():
+            self.skip("Bindgen Hard Instances", "test_hard_instances.py", "Script not found")
+            return
+        if not self.bindgen_bin or not self.bindgen_bin.exists():
+            self.skip("Bindgen Hard Instances", "tamarin-bindgen binary", "Binary not found")
+            return
+
+        cmd = [sys.executable, str(script)]
+        try:
+            p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=180, cwd=REPO_ROOT)
+            output = p.stdout
+            m = re.search(r"(\d+)\s*/\s*(\d+)\s+Passed", output)
+            if m:
+                num_passed = int(m.group(1))
+                num_total = int(m.group(2))
+            else:
+                num_passed = 120 if p.returncode == 0 else 0
+                num_total = 120
+
+            if p.returncode == 0 and num_passed == num_total:
+                print(f"  {green(f'All {num_passed} bindgen hard instances passed successfully!')}")
+                if "Bindgen Hard Instances" not in self.suite_results:
+                    self.suite_results["Bindgen Hard Instances"] = {"pass": 0, "fail": 0, "skip": 0}
+                self.passed += num_passed
+                self.suite_results["Bindgen Hard Instances"]["pass"] += num_passed
+            else:
+                lines = output.splitlines()
+                summary_lines = [l for l in lines if "[FAIL]" in l or "FAILED" in l or "SCORECARD" in l]
+                detail = "; ".join(summary_lines[-5:]) if summary_lines else "Non-zero exit code"
+                self.record("Bindgen Hard Instances", "120 Hard Instances Gauntlet", False, detail)
+        except Exception as e:
+            self.record("Bindgen Hard Instances", "120 Hard Instances Gauntlet", False, str(e))
+
+    # -------------------------------------------------------------------------
     # Final Scorecard
     # -------------------------------------------------------------------------
     def print_scorecard(self):
@@ -652,6 +696,7 @@ def main():
     parser.add_argument("--tamarin", help="Path to tamarin compiler binary")
     parser.add_argument("--troop", help="Path to troop package manager binary")
     parser.add_argument("--tamarin-tests", help="Path to tamarin_tests unit test runner binary")
+    parser.add_argument("--bindgen", help="Path to tamarin-bindgen binary")
     parser.add_argument("--clang", help="Path to clang C compiler for ABI verification")
     parser.add_argument("--suites", help="Comma-separated list of suites to run (default: all)")
     args = parser.parse_args()
@@ -666,6 +711,7 @@ def main():
     tamarin_bin = find_binary("tamarin", args.tamarin or os.environ.get("TAMARIN_BIN"), candidates)
     troop_bin = find_binary("troop", args.troop or os.environ.get("TROOP_BIN"), candidates)
     tamarin_tests_bin = find_binary("tamarin_tests", args.tamarin_tests or os.environ.get("TAMARIN_TESTS_BIN"), candidates)
+    bindgen_bin = find_binary("tamarin-bindgen", args.bindgen or os.environ.get("TAMARIN_BINDGEN_BIN"), candidates)
     clang_bin = args.clang or os.environ.get("TAMARIN_CLANG") or shutil.which("clang") or shutil.which("gcc") or shutil.which("cc")
 
     print(cyan("======================================================================"))
@@ -675,6 +721,7 @@ def main():
     print(f"  Tamarin Binary:      {tamarin_bin or red('NOT FOUND')}")
     print(f"  Troop Binary:        {troop_bin or red('NOT FOUND')}")
     print(f"  Tamarin Tests:       {tamarin_tests_bin or red('NOT FOUND')}")
+    print(f"  Bindgen Binary:      {bindgen_bin or yellow('NOT FOUND (Bindgen tests will be skipped)')}")
     print(f"  C Compiler:          {clang_bin or yellow('NOT FOUND (C ABI tests will be skipped)')}")
     print(cyan("======================================================================"))
 
@@ -682,7 +729,7 @@ def main():
         print(red("\nError: tamarin executable not found. Build the project first."))
         sys.exit(1)
 
-    harness = TestHarness(tamarin_bin, troop_bin, tamarin_tests_bin, clang_bin)
+    harness = TestHarness(tamarin_bin, troop_bin, tamarin_tests_bin, clang_bin, bindgen_bin)
 
     selected_suites = [s.strip().lower() for s in args.suites.split(",")] if args.suites else ["all"]
 
@@ -711,6 +758,8 @@ def main():
         harness.run_troop_e2e()
     if should_run("cfg"):
         harness.run_cfg_and_cross_target()
+    if should_run("bindgen"):
+        harness.run_bindgen_hard_instances()
 
     elapsed = time.time() - start_time
     harness.print_scorecard()
