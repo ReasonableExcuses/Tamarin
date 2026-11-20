@@ -636,7 +636,7 @@ int main() { return add(20, 22); }
                 self.suite_results["Bindgen Hard Instances"]["pass"] += num_passed
             else:
                 lines = output.splitlines()
-                summary_lines = [l for l in lines if "[FAIL]" in l or "FAILED" in l or "SCORECARD" in l]
+                summary_lines = [l.strip() for l in lines if "[FAIL]" in l or "FAILED" in l or "SCORECARD" in l or "error:" in l or "Detail:" in l]
                 detail = "; ".join(summary_lines[-5:]) if summary_lines else "Non-zero exit code"
                 self.record("Bindgen Hard Instances", "120 Hard Instances Gauntlet", False, detail)
         except Exception as e:

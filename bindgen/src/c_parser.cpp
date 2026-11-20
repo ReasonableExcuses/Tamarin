@@ -584,8 +584,9 @@ void CParser::processTypedef(CXCursor cursor, CHeaderModel& model) {
     CType target = convertType(uType, cursor);
 
     // If typedef names a struct that had no name or tag name:
-    if (uType.kind == CXType_Record || uType.kind == CXType_Elaborated) {
-        CXCursor declCursor = clang_getTypeDeclaration(uType);
+    CXCursor declCursor = clang_getTypeDeclaration(uType);
+    CXCursorKind declKind = clang_getCursorKind(declCursor);
+    if (declKind == CXCursor_StructDecl || declKind == CXCursor_UnionDecl || declKind == CXCursor_ClassDecl) {
         std::string structSpelling = normalizeTypeName(toStdString(clang_getCursorSpelling(declCursor)));
         if (structSpelling.empty()) {
             // Give the anonymous struct this typedef name
@@ -617,10 +618,7 @@ void CParser::processTypedef(CXCursor cursor, CHeaderModel& model) {
         }
     }
 
-    typedefMap_[name] = target.tamarinType;
-
-    if (uType.kind == CXType_Enum) {
-        CXCursor declCursor = clang_getTypeDeclaration(uType);
+    if (declKind == CXCursor_EnumDecl) {
         std::string enumSpelling = toStdString(clang_getCursorSpelling(declCursor));
         if (enumSpelling.empty()) {
             CEnum en;
@@ -631,6 +629,12 @@ void CParser::processTypedef(CXCursor cursor, CHeaderModel& model) {
             return;
         }
     }
+
+    std::string resolvedTarget = target.tamarinType;
+    while (typedefMap_.find(resolvedTarget) != typedefMap_.end() && typedefMap_[resolvedTarget] != resolvedTarget) {
+        resolvedTarget = typedefMap_[resolvedTarget];
+    }
+    typedefMap_[name] = resolvedTarget;
 
     CTypedef td;
     td.name = name;
