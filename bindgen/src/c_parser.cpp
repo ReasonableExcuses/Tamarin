@@ -1,0 +1,600 @@
+// ============================================================================
+// c_parser.cpp - Implementation of C header parsing via libclang
+// ============================================================================
+
+#include "bindgen/c_parser.h"
+#include <iostream>
+#include <filesystem>
+#include <algorithm>
+
+namespace tamarin::bindgen {
+
+namespace {
+
+std::string toStdString(CXString cx) {
+    if (!cx.data) return "";
+    const char* cstr = clang_getCString(cx);
+    std::string s = cstr ? cstr : "";
+    clang_disposeString(cx);
+    return s;
+}
+
+std::string sanitizeIdentifier(const std::string& name) {
+    static const std::unordered_set<std::string> keywords = {
+        "void", "bool", "char", "byte", "short", "int", "long", "unsigned",
+        "float", "double", "size_t", "ptrdiff_t", "u8", "u16", "u32", "u64", "u128",
+        "usize", "i8", "i16", "i32", "i64", "i128", "isize", "const", "static",
+        "extern", "auto", "if", "else", "while", "for", "do", "switch", "case",
+        "default", "break", "continue", "return", "match", "struct", "class",
+        "interface", "enum", "trait", "impl", "typedef", "sizeof", "type", "fn",
+        "in", "let", "mut", "pub", "alignas", "import", "export", "operator", "select",
+        "spawn", "await"
+    };
+    if (keywords.find(name) != keywords.end()) {
+        return name + "_";
+    }
+    if (name.empty()) {
+        return "_unused";
+    }
+    return name;
+}
+
+std::string normalizeTypeName(std::string name) {
+    if (name.starts_with("struct ")) name = name.substr(7);
+    else if (name.starts_with("union ")) name = name.substr(6);
+    else if (name.starts_with("enum ")) name = name.substr(5);
+    return name;
+}
+
+struct FieldVisitorContext {
+    CParser* parser;
+    CStruct* st;
+};
+
+struct EnumVisitorContext {
+    CEnum* en;
+};
+
+} // namespace
+
+CParser::CParser(ParserOptions options) : options_(std::move(options)) {
+    index_ = clang_createIndex(0, 0);
+}
+
+CParser::~CParser() {
+    if (tu_) {
+        clang_disposeTranslationUnit(tu_);
+        tu_ = nullptr;
+    }
+    if (index_) {
+        clang_disposeIndex(index_);
+        index_ = nullptr;
+    }
+}
+
+bool CParser::isFromTargetHeader(CXCursor cursor) const {
+    if (options_.includeSystemHeaders) return true;
+
+    CXSourceLocation loc = clang_getCursorLocation(cursor);
+    CXFile file;
+    unsigned line, col, offset;
+    clang_getSpellingLocation(loc, &file, &line, &col, &offset);
+
+    if (!file) return false;
+    std::string filePath = toStdString(clang_getFileName(file));
+    if (filePath.empty()) return false;
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path targetPath = fs::canonical(options_.headerPath, ec);
+    if (ec) targetPath = fs::absolute(options_.headerPath);
+
+    fs::path cursorPath = fs::canonical(filePath, ec);
+    if (ec) cursorPath = fs::absolute(filePath);
+
+    if (cursorPath == targetPath) return true;
+
+    // Also accept headers located in user-specified include dirs
+    for (const auto& inc : options_.includeDirs) {
+        fs::path incPath = fs::canonical(inc, ec);
+        if (ec) incPath = fs::absolute(inc);
+        auto rel = fs::relative(cursorPath, incPath, ec);
+        if (!ec && !rel.empty() && !rel.string().starts_with("..")) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+CType CParser::convertType(CXType type, CXCursor /*cursor*/) {
+    CType res;
+    res.rawSpelling = toStdString(clang_getTypeSpelling(type));
+
+    // Const check
+    if (clang_isConstQualifiedType(type)) {
+        res.isConst = true;
+    }
+
+    switch (type.kind) {
+        case CXType_Void:
+            res.tamarinType = "void";
+            return res;
+        case CXType_Bool:
+            res.tamarinType = "bool";
+            return res;
+        case CXType_Char_U:
+        case CXType_UChar:
+            res.tamarinType = "u8";
+            return res;
+        case CXType_Char_S:
+        case CXType_SChar:
+            res.tamarinType = "i8";
+            return res;
+        case CXType_Char16:
+        case CXType_UShort:
+            res.tamarinType = "u16";
+            return res;
+        case CXType_Short:
+            res.tamarinType = "i16";
+            return res;
+        case CXType_Char32:
+        case CXType_UInt:
+            res.tamarinType = "u32";
+            return res;
+        case CXType_Int:
+            res.tamarinType = "int";
+            return res;
+        case CXType_ULong: {
+            long long sz = clang_Type_getSizeOf(type);
+            res.tamarinType = (sz == 8) ? "u64" : "u32";
+            return res;
+        }
+        case CXType_Long: {
+            long long sz = clang_Type_getSizeOf(type);
+            res.tamarinType = (sz == 8) ? "i64" : "int";
+            return res;
+        }
+        case CXType_ULongLong:
+            res.tamarinType = "u64";
+            return res;
+        case CXType_LongLong:
+            res.tamarinType = "i64";
+            return res;
+        case CXType_Float:
+            res.tamarinType = "float";
+            return res;
+        case CXType_Double:
+            res.tamarinType = "double";
+            return res;
+
+        case CXType_Pointer: {
+            res.isPointer = true;
+            CXType pointee = clang_getPointeeType(type);
+            if (pointee.kind == CXType_Void) {
+                res.tamarinType = "*void";
+                return res;
+            }
+            if (pointee.kind == CXType_Char_S || pointee.kind == CXType_Char_U) {
+                res.tamarinType = "*u8";
+                return res;
+            }
+            if (pointee.kind == CXType_FunctionProto) {
+                res.isFunctionPointer = true;
+                CXType retType = clang_getResultType(pointee);
+                std::string fnSig = "fn(";
+                int numArgs = clang_getNumArgTypes(pointee);
+                for (int i = 0; i < numArgs; ++i) {
+                    if (i > 0) fnSig += ", ";
+                    CXType argTy = clang_getArgType(pointee, i);
+                    fnSig += convertType(argTy).tamarinType;
+                }
+                fnSig += ") -> " + convertType(retType).tamarinType;
+                res.tamarinType = "*void /* " + fnSig + " */";
+                return res;
+            }
+            CType inner = convertType(pointee);
+            res.tamarinType = "*" + inner.tamarinType;
+            return res;
+        }
+
+        case CXType_ConstantArray: {
+            long long sz = clang_getArraySize(type);
+            res.arraySize = sz;
+            CXType elemTy = clang_getArrayElementType(type);
+            CType inner = convertType(elemTy);
+            res.tamarinType = inner.tamarinType + "[" + std::to_string(sz) + "]";
+            return res;
+        }
+
+        case CXType_IncompleteArray: {
+            CXType elemTy = clang_getArrayElementType(type);
+            CType inner = convertType(elemTy);
+            res.tamarinType = "*" + inner.tamarinType;
+            return res;
+        }
+
+        case CXType_Typedef: {
+            std::string tName = normalizeTypeName(toStdString(clang_getTypeSpelling(type)));
+            // Map common standard C types directly
+            if (tName == "size_t" || tName == "uintptr_t") { res.tamarinType = "usize"; return res; }
+            if (tName == "intptr_t" || tName == "ptrdiff_t") { res.tamarinType = "isize"; return res; }
+            if (tName == "uint8_t")  { res.tamarinType = "u8"; return res; }
+            if (tName == "uint16_t") { res.tamarinType = "u16"; return res; }
+            if (tName == "uint32_t") { res.tamarinType = "u32"; return res; }
+            if (tName == "uint64_t") { res.tamarinType = "u64"; return res; }
+            if (tName == "int8_t")   { res.tamarinType = "i8"; return res; }
+            if (tName == "int16_t")  { res.tamarinType = "i16"; return res; }
+            if (tName == "int32_t")  { res.tamarinType = "i32"; return res; }
+            if (tName == "int64_t")  { res.tamarinType = "i64"; return res; }
+
+            // Check if typedef is a function pointer
+            CXType canon = clang_getCanonicalType(type);
+            if (canon.kind == CXType_Pointer && clang_getPointeeType(canon).kind == CXType_FunctionProto) {
+                return convertType(canon);
+            }
+            res.tamarinType = tName;
+            return res;
+        }
+
+        case CXType_Enum: {
+            std::string sName = normalizeTypeName(toStdString(clang_getTypeSpelling(type)));
+            if (sName.empty() || sName.find("unnamed") != std::string::npos) {
+                res.tamarinType = "int";
+            } else {
+                res.tamarinType = sName;
+            }
+            return res;
+        }
+
+        case CXType_Record:
+        case CXType_Elaborated: {
+            std::string sName = normalizeTypeName(toStdString(clang_getTypeSpelling(type)));
+            res.tamarinType = sName;
+            return res;
+        }
+
+        default:
+            res.tamarinType = normalizeTypeName(toStdString(clang_getTypeSpelling(type)));
+            return res;
+    }
+}
+
+struct VisitorContext {
+    CParser* parser;
+    CHeaderModel* model;
+};
+
+CXChildVisitResult CParser::visitTopLevel(CXCursor cursor, CXCursor /*parent*/, CXClientData clientData) {
+    auto* ctx = static_cast<VisitorContext*>(clientData);
+    if (!ctx->parser->isFromTargetHeader(cursor)) {
+        return CXChildVisit_Continue;
+    }
+
+    CXCursorKind kind = clang_getCursorKind(cursor);
+    switch (kind) {
+        case CXCursor_StructDecl:
+            ctx->parser->processStruct(cursor, *ctx->model);
+            break;
+        case CXCursor_UnionDecl:
+            ctx->parser->processUnion(cursor, *ctx->model);
+            break;
+        case CXCursor_EnumDecl:
+            ctx->parser->processEnum(cursor, *ctx->model);
+            break;
+        case CXCursor_FunctionDecl:
+            ctx->parser->processFunction(cursor, *ctx->model);
+            break;
+        case CXCursor_TypedefDecl:
+            ctx->parser->processTypedef(cursor, *ctx->model);
+            break;
+        case CXCursor_MacroDefinition:
+            ctx->parser->processMacro(cursor, *ctx->model);
+            break;
+        default:
+            break;
+    }
+    return CXChildVisit_Continue;
+}
+
+void CParser::processStruct(CXCursor cursor, CHeaderModel& model) {
+    if (!clang_isCursorDefinition(cursor)) return;
+
+    std::string name = toStdString(clang_getCursorSpelling(cursor));
+    if (name.empty()) {
+        CXType ty = clang_getCursorType(cursor);
+        name = normalizeTypeName(toStdString(clang_getTypeSpelling(ty)));
+    }
+    name = normalizeTypeName(name);
+    if (name.empty()) return;
+
+    if (!options_.prefixFilter.empty() && !name.starts_with(options_.prefixFilter)) {
+        return;
+    }
+    if (visitedStructs_.find(name) != visitedStructs_.end()) return;
+    visitedStructs_.insert(name);
+
+    CStruct st;
+    st.name = name;
+    st.isUnion = false;
+    CXType curType = clang_getCursorType(cursor);
+    st.sizeInBytes = clang_Type_getSizeOf(curType);
+    st.alignInBytes = clang_Type_getAlignOf(curType);
+
+    FieldVisitorContext fCtx{this, &st};
+
+    clang_visitChildren(cursor, visitStructFields, &fCtx);
+    model.structs.push_back(std::move(st));
+}
+
+CXChildVisitResult CParser::visitStructFields(CXCursor cursor, CXCursor /*parent*/, CXClientData clientData) {
+    auto* ctx = static_cast<FieldVisitorContext*>(clientData);
+    if (clang_getCursorKind(cursor) == CXCursor_FieldDecl) {
+        CField field;
+        field.name = sanitizeIdentifier(toStdString(clang_getCursorSpelling(cursor)));
+        CXType fType = clang_getCursorType(cursor);
+        field.type = ctx->parser->convertType(fType, cursor);
+        if (clang_Cursor_isBitField(cursor)) {
+            field.bitWidth = clang_getFieldDeclBitWidth(cursor);
+        }
+        field.offsetInBits = clang_Cursor_getOffsetOfField(cursor);
+        ctx->st->fields.push_back(std::move(field));
+    }
+    return CXChildVisit_Continue;
+}
+
+void CParser::processUnion(CXCursor cursor, CHeaderModel& model) {
+    if (!clang_isCursorDefinition(cursor)) return;
+
+    std::string name = normalizeTypeName(toStdString(clang_getCursorSpelling(cursor)));
+    if (name.empty()) return;
+
+    if (!options_.prefixFilter.empty() && !name.starts_with(options_.prefixFilter)) {
+        return;
+    }
+    if (visitedStructs_.find(name) != visitedStructs_.end()) return;
+    visitedStructs_.insert(name);
+
+    CStruct un;
+    un.name = name;
+    un.isUnion = true;
+    CXType curType = clang_getCursorType(cursor);
+    un.sizeInBytes = clang_Type_getSizeOf(curType);
+    un.alignInBytes = clang_Type_getAlignOf(curType);
+
+    FieldVisitorContext fCtx{this, &un};
+
+    clang_visitChildren(cursor, visitStructFields, &fCtx);
+    model.structs.push_back(std::move(un));
+}
+
+void CParser::processEnum(CXCursor cursor, CHeaderModel& model) {
+    if (!clang_isCursorDefinition(cursor)) return;
+
+    std::string name = normalizeTypeName(toStdString(clang_getCursorSpelling(cursor)));
+
+    CEnum en;
+    en.name = name;
+
+    EnumVisitorContext eCtx{&en};
+
+    clang_visitChildren(cursor, visitEnumConstants, &eCtx);
+
+    if (name.empty()) {
+        // Anonymous enum: emit individual constants
+        for (const auto& c : en.constants) {
+            CConstant constant;
+            constant.name = c.name;
+            constant.value = std::to_string(c.value);
+            constant.type = "int";
+            model.constants.push_back(std::move(constant));
+        }
+        return;
+    }
+
+    if (!options_.prefixFilter.empty() && !name.starts_with(options_.prefixFilter)) {
+        return;
+    }
+    if (visitedEnums_.find(name) != visitedEnums_.end()) return;
+    visitedEnums_.insert(name);
+
+    model.enums.push_back(std::move(en));
+}
+
+CXChildVisitResult CParser::visitEnumConstants(CXCursor cursor, CXCursor /*parent*/, CXClientData clientData) {
+    auto* ctx = static_cast<EnumVisitorContext*>(clientData);
+    if (clang_getCursorKind(cursor) == CXCursor_EnumConstantDecl) {
+        CEnumConstant ec;
+        ec.name = toStdString(clang_getCursorSpelling(cursor));
+        ec.value = clang_getEnumConstantDeclValue(cursor);
+        ctx->en->constants.push_back(std::move(ec));
+    }
+    return CXChildVisit_Continue;
+}
+
+void CParser::processFunction(CXCursor cursor, CHeaderModel& model) {
+    std::string name = toStdString(clang_getCursorSpelling(cursor));
+    if (name.empty()) return;
+
+    if (!options_.prefixFilter.empty() && !name.starts_with(options_.prefixFilter)) {
+        return;
+    }
+    if (visitedFunctions_.find(name) != visitedFunctions_.end()) return;
+    visitedFunctions_.insert(name);
+
+    CFunction fn;
+    fn.name = name;
+    CXType retTy = clang_getCursorResultType(cursor);
+    fn.returnType = convertType(retTy, cursor);
+    fn.isVariadic = clang_Cursor_isVariadic(cursor);
+
+    int numArgs = clang_Cursor_getNumArguments(cursor);
+    for (int i = 0; i < numArgs; ++i) {
+        CXCursor argCursor = clang_Cursor_getArgument(cursor, i);
+        CParam param;
+        param.name = sanitizeIdentifier(toStdString(clang_getCursorSpelling(argCursor)));
+        if (param.name.empty() || param.name == "_unused") {
+            param.name = "arg" + std::to_string(i);
+        }
+        CXType argTy = clang_getCursorType(argCursor);
+        param.type = convertType(argTy, argCursor);
+        fn.params.push_back(std::move(param));
+    }
+
+    model.functions.push_back(std::move(fn));
+}
+
+void CParser::processTypedef(CXCursor cursor, CHeaderModel& model) {
+    std::string name = toStdString(clang_getCursorSpelling(cursor));
+    if (name.empty()) return;
+
+    if (!options_.prefixFilter.empty() && !name.starts_with(options_.prefixFilter)) {
+        return;
+    }
+    if (visitedTypedefs_.find(name) != visitedTypedefs_.end()) return;
+    visitedTypedefs_.insert(name);
+
+    CXType uType = clang_getTypedefDeclUnderlyingType(cursor);
+    CType target = convertType(uType, cursor);
+
+    // If typedef names a struct that had no name:
+    if (uType.kind == CXType_Record || uType.kind == CXType_Elaborated) {
+        CXCursor declCursor = clang_getTypeDeclaration(uType);
+        std::string structSpelling = toStdString(clang_getCursorSpelling(declCursor));
+        if (structSpelling.empty()) {
+            // Give the anonymous struct this typedef name
+            processStruct(declCursor, model);
+            if (!model.structs.empty() && model.structs.back().name.empty()) {
+                model.structs.back().name = name;
+            }
+            return;
+        }
+    }
+
+    if (uType.kind == CXType_Enum) {
+        CXCursor declCursor = clang_getTypeDeclaration(uType);
+        std::string enumSpelling = toStdString(clang_getCursorSpelling(declCursor));
+        if (enumSpelling.empty()) {
+            CEnum en;
+            en.name = name;
+            EnumVisitorContext eCtx{&en};
+            clang_visitChildren(declCursor, visitEnumConstants, &eCtx);
+            model.enums.push_back(std::move(en));
+            return;
+        }
+    }
+
+    CTypedef td;
+    td.name = name;
+    td.targetType = target;
+    model.typedefs.push_back(std::move(td));
+}
+
+void CParser::processMacro(CXCursor cursor, CHeaderModel& model) {
+    if (clang_Cursor_isMacroFunctionLike(cursor)) return;
+
+    std::string name = toStdString(clang_getCursorSpelling(cursor));
+    if (name.empty() || name.starts_with("__") || name.starts_with("_")) return;
+
+    if (!options_.prefixFilter.empty() && !name.starts_with(options_.prefixFilter)) {
+        return;
+    }
+
+    CXSourceRange range = clang_getCursorExtent(cursor);
+    CXToken* tokens = nullptr;
+    unsigned numTokens = 0;
+    clang_tokenize(tu_, range, &tokens, &numTokens);
+
+    if (numTokens == 2) {
+        // Form: #define NAME VALUE
+        std::string valStr = toStdString(clang_getTokenSpelling(tu_, tokens[1]));
+        if (!valStr.empty()) {
+            CConstant c;
+            c.name = name;
+            c.value = valStr;
+            if (valStr.starts_with("\"")) {
+                c.type = "string";
+            } else if (valStr.find('.') != std::string::npos || valStr.ends_with("f") || valStr.ends_with("F")) {
+                c.type = "float";
+            } else {
+                c.type = "int";
+            }
+            model.constants.push_back(std::move(c));
+        }
+    }
+
+    if (tokens) {
+        clang_disposeTokens(tu_, tokens, numTokens);
+    }
+}
+
+bool CParser::parse(CHeaderModel& outModel, std::string& outError) {
+    outModel.headerPath = options_.headerPath;
+
+    std::vector<const char*> args;
+    args.push_back("-x");
+    args.push_back("c");
+    args.push_back("-std=c11");
+    args.push_back("-D__TAMARIN_BINDGEN__=1");
+
+    std::vector<std::string> incFlags;
+    for (const auto& inc : options_.includeDirs) {
+        incFlags.push_back("-I" + inc);
+    }
+    for (const auto& flag : incFlags) {
+        args.push_back(flag.c_str());
+    }
+
+    std::vector<std::string> defFlags;
+    for (const auto& def : options_.defines) {
+        defFlags.push_back("-D" + def);
+    }
+    for (const auto& flag : defFlags) {
+        args.push_back(flag.c_str());
+    }
+
+    for (const auto& extra : options_.extraClangArgs) {
+        args.push_back(extra.c_str());
+    }
+
+    unsigned flags = CXTranslationUnit_DetailedPreprocessingRecord |
+                     CXTranslationUnit_SkipFunctionBodies;
+
+    tu_ = clang_parseTranslationUnit(
+        index_,
+        options_.headerPath.c_str(),
+        args.data(),
+        static_cast<int>(args.size()),
+        nullptr,
+        0,
+        flags
+    );
+
+    if (!tu_) {
+        outError = "Failed to parse translation unit with libclang: " + options_.headerPath;
+        return false;
+    }
+
+    // Check for diagnostic errors
+    unsigned numDiag = clang_getNumDiagnostics(tu_);
+    for (unsigned i = 0; i < numDiag; ++i) {
+        CXDiagnostic diag = clang_getDiagnostic(tu_, i);
+        CXDiagnosticSeverity sev = clang_getDiagnosticSeverity(diag);
+        if (sev >= CXDiagnostic_Error) {
+            std::string diagMsg = toStdString(clang_formatDiagnostic(diag, clang_defaultDiagnosticDisplayOptions()));
+            // If the error is fatal, record it
+            if (sev >= CXDiagnostic_Fatal) {
+                outError += diagMsg + "\n";
+            }
+        }
+        clang_disposeDiagnostic(diag);
+    }
+
+    CXCursor root = clang_getTranslationUnitCursor(tu_);
+    VisitorContext ctx{this, &outModel};
+    clang_visitChildren(root, visitTopLevel, &ctx);
+
+    return true;
+}
+
+} // namespace tamarin::bindgen

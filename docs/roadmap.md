@@ -85,9 +85,12 @@ The path to **Version 1.0 GA** focuses on cross-platform portability, high-perfo
   - Provide real-time semantic diagnostics, error squiggles, and warning reporting.
   - Implement autocompletion, hover documentation, go-to-definition, and find-all-references using persistent AST symbol graphs.
   - Publish official VS Code, Neovim, and Helix editor extensions.
-- **`tamarin-bindgen` (Automatic C/C++ Binding Generator)**:
-  - Clang LibTooling-based C/C++ header parser that automatically generates idiomatic `@c_layout` and `extern "C"` Tamarin bindings from arbitrary C headers.
-  - Automates type translation (`char*` -> `string_view` / raw pointer, C structs -> `@c_layout struct`, enums, and callback function pointers).
+- **`tamarin-bindgen` (Automatic C/C++ Binding Generator) [COMPLETED]**:
+  - `libclang` C AST cursor visitor generating idiomatic `@c_layout` structs and `extern "C"` declarations directly from arbitrary C headers.
+  - Automatically translates C types, pointers (`*T`, `*const T`), fixed-size arrays (`T[N]`), sequential ADT enums (`enum Name { ... }`), bitflag/non-sequential enums (`const int`), preprocessor `#define` constants, and thin C callback function pointers (`*void /* fn(...) -> ret */`).
+  - Automated keyword sanitization resolving collisions between C identifiers and Tamarin reserved keywords (`type_`, `trait_`, `fn_`, `match_`).
+  - Dual-interface CLI: standalone executable (`tamarin-bindgen`) and integrated compiler subcommand (`tamarin bindgen`).
+  - Fully integrated into CMake with cross-platform `libclang` discovery, comprehensive unit tests, and end-to-end binding compilation verification.
 - **GUI & Graphics Ecosystem (Option B Architecture)**:
   - Clean separation of concerns: GUI and graphics run via high-performance C ABI interop in package space, keeping the compiler core and standard library lightweight, embeddable, and free of massive C++ graphics engine dependencies.
   - Use `tamarin-bindgen` to generate and maintain official community bindings:

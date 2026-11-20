@@ -5,6 +5,7 @@
 #include "tamarin/driver/driver.h"
 #include "tamarin/config.h"
 #include "troop/cli.h"
+#include "bindgen/cli.h"
 
 #include <iostream>
 #include <string_view>
@@ -18,10 +19,11 @@ static void printVersion() {
 static void printHelp() {
     std::cout << "Usage: tamarin <command> [options] <source.tmn>\n\n"
               << "Commands:\n"
-              << "  check <file>     Validate source syntax and types without code generation\n"
-              << "  build <file>     Compile source file to a native executable\n"
-              << "  run   <file>     Compile and immediately run the executable\n"
-              << "  troop <args>     Invoke the Troop package manager\n\n"
+              << "  check   <file>   Validate source syntax and types without code generation\n"
+              << "  build   <file>   Compile source file to a native executable\n"
+              << "  run     <file>   Compile and immediately run the executable\n"
+              << "  troop   <args>   Invoke the Troop package manager\n"
+              << "  bindgen <args>   Generate Tamarin FFI bindings from C headers\n\n"
               << "Options:\n"
               << "  -o <path>             Specify output executable path\n"
               << "  -I <path>             Add directory to module search path\n"
@@ -55,6 +57,10 @@ int main(int argc, char* argv[]) {
 
     if (std::string_view(argv[1]) == "troop") {
         return troop::cliMain(argc - 1, argv + 1);
+    }
+
+    if (std::string_view(argv[1]) == "bindgen") {
+        return tamarin::bindgen::cliMain(argc - 1, argv + 1);
     }
 
     tamarin::driver::DriverOptions opts;

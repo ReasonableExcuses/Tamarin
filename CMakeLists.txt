@@ -27,6 +27,32 @@ if(LLVM_FOUND)
     message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} at ${LLVM_DIR}")
 endif()
 
+# ── Clang / libclang Discovery ─────────────────────────────────────────
+find_path(CLANG_C_INCLUDE_DIR NAMES clang-c/Index.h
+    PATHS
+    "C:/Program Files/LLVM/include"
+    ${LLVM_INCLUDE_DIRS}
+    /usr/include
+    /usr/local/include
+    /opt/homebrew/include
+)
+find_library(CLANG_C_LIBRARY NAMES libclang clang
+    PATHS
+    "C:/Program Files/LLVM/lib"
+    ${LLVM_LIBRARY_DIRS}
+    /usr/lib
+    /usr/local/lib
+    /opt/homebrew/lib
+)
+
+if(CLANG_C_INCLUDE_DIR AND CLANG_C_LIBRARY)
+    message(STATUS "Found libclang: ${CLANG_C_LIBRARY} (headers: ${CLANG_C_INCLUDE_DIR})")
+    set(TAMARIN_HAS_BINDGEN ON)
+else()
+    message(WARNING "libclang not found; tamarin-bindgen will be disabled")
+    set(TAMARIN_HAS_BINDGEN OFF)
+endif()
+
 # ── Configurable Product Name ─────────────────────────────────────────
 set(TAMARIN_PRODUCT_NAME "Tamarin" CACHE STRING "Public product name")
 set(TAMARIN_CODENAME "tamarin" CACHE STRING "Internal codename")
@@ -61,7 +87,9 @@ configure_file(
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/troop/include
+    ${CMAKE_SOURCE_DIR}/bindgen/include
     ${CMAKE_BINARY_DIR}/generated
+    ${CLANG_C_INCLUDE_DIR}
 )
 
 # ── Tamarin Runtime Library (for generated programs) ───────────────────
@@ -144,9 +172,33 @@ target_include_directories(troop_lib PUBLIC
     ${CMAKE_BINARY_DIR}/generated
 )
 
+# ── Bindgen Library & Executable ──────────────────────────────────────
+if(TAMARIN_HAS_BINDGEN)
+    add_library(bindgen_lib STATIC
+        bindgen/src/c_parser.cpp
+        bindgen/src/tamarin_emitter.cpp
+        bindgen/src/cli.cpp
+    )
+    target_include_directories(bindgen_lib PUBLIC
+        ${CMAKE_SOURCE_DIR}/bindgen/include
+        ${CLANG_C_INCLUDE_DIR}
+    )
+    target_link_libraries(bindgen_lib PUBLIC ${CLANG_C_LIBRARY})
+
+    add_executable(tamarin-bindgen bindgen/src/main.cpp)
+    target_link_libraries(tamarin-bindgen PRIVATE bindgen_lib)
+    if(MSVC)
+        set_target_properties(tamarin-bindgen PROPERTIES LINK_FLAGS "/STACK:8388608")
+    endif()
+endif()
+
 # ── Compiler Executable ───────────────────────────────────────────────
 add_executable(tamarin src/main.cpp)
-target_link_libraries(tamarin PRIVATE tamarin_lib troop_lib)
+if(TAMARIN_HAS_BINDGEN)
+    target_link_libraries(tamarin PRIVATE tamarin_lib troop_lib bindgen_lib)
+else()
+    target_link_libraries(tamarin PRIVATE tamarin_lib troop_lib)
+endif()
 
 # ── Troop Executable ──────────────────────────────────────────────────
 add_executable(troop troop/src/main.cpp)
@@ -169,17 +221,31 @@ add_executable(tamarin_tests
 target_include_directories(tamarin_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/troop/include
+    ${CMAKE_SOURCE_DIR}/bindgen/include
     ${CMAKE_BINARY_DIR}/generated
     ${CMAKE_SOURCE_DIR}/tests
 )
 
-target_link_libraries(tamarin_tests PRIVATE tamarin_lib troop_lib)
+if(TAMARIN_HAS_BINDGEN)
+    target_sources(tamarin_tests PRIVATE tests/bindgen/bindgen_test.cpp)
+    target_link_libraries(tamarin_tests PRIVATE tamarin_lib troop_lib bindgen_lib)
+else()
+    target_link_libraries(tamarin_tests PRIVATE tamarin_lib troop_lib)
+endif()
 
 if(MSVC)
-    set_target_properties(tamarin troop tamarin_tests PROPERTIES LINK_FLAGS "/STACK:8388608")
+    if(TAMARIN_HAS_BINDGEN)
+        set_target_properties(tamarin troop tamarin_tests tamarin-bindgen PROPERTIES LINK_FLAGS "/STACK:8388608")
+    else()
+        set_target_properties(tamarin troop tamarin_tests PROPERTIES LINK_FLAGS "/STACK:8388608")
+    endif()
 endif()
 
 add_test(NAME TamarinUnitTests COMMAND tamarin_tests)
 
 # ── Install ───────────────────────────────────────────────────────────
-install(TARGETS tamarin troop RUNTIME DESTINATION bin)
+if(TAMARIN_HAS_BINDGEN)
+    install(TARGETS tamarin troop tamarin-bindgen RUNTIME DESTINATION bin)
+else()
+    install(TARGETS tamarin troop RUNTIME DESTINATION bin)
+endif()
