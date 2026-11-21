@@ -750,9 +750,12 @@ int main() { return add(20, 22); }
             cmd = [str(self.tamarin_bin), "run", str(demo_2d)] + link_args
             try:
                 res = run_proc(cmd)
-                ok = (res.returncode == 0) and ("Raylib closed cleanly!" in res.stdout)
-                self.record(suite_name, "Raylib 2D Headless Render & Windowing", ok,
-                            res.stdout.strip() if not ok else "Exit code 0, 3 frames rendered")
+                if (res.returncode == 0) and ("Raylib closed cleanly!" in res.stdout):
+                    self.record(suite_name, "Raylib 2D Headless Render & Windowing", True, "Exit code 0, 3 frames rendered")
+                elif "The driver does not appear to support OpenGL" in res.stdout or "WGL: The driver does not appear to support OpenGL" in res.stdout or "Error: 65542" in res.stdout:
+                    self.skip(suite_name, "Raylib 2D Headless Render & Windowing", "Host lacks OpenGL driver in cloud VM (GLFW 65542)")
+                else:
+                    self.record(suite_name, "Raylib 2D Headless Render & Windowing", False, res.stdout.strip())
             except Exception as e:
                 self.record(suite_name, "Raylib 2D Headless Render & Windowing", False, str(e))
 
@@ -762,9 +765,12 @@ int main() { return add(20, 22); }
             cmd = [str(self.tamarin_bin), "run", str(demo_3d)] + link_args
             try:
                 res = run_proc(cmd)
-                ok = (res.returncode == 0) and ("Raylib 3D demo complete!" in res.stdout)
-                self.record(suite_name, "Raylib 3D C ABI Struct Passing & Depth Buffer", ok,
-                            res.stdout.strip() if not ok else "Exit code 0, 3D cubes & grid rendered")
+                if (res.returncode == 0) and ("Raylib 3D demo complete!" in res.stdout):
+                    self.record(suite_name, "Raylib 3D C ABI Struct Passing & Depth Buffer", True, "Exit code 0, 3D cubes & grid rendered")
+                elif "The driver does not appear to support OpenGL" in res.stdout or "WGL: The driver does not appear to support OpenGL" in res.stdout or "Error: 65542" in res.stdout:
+                    self.skip(suite_name, "Raylib 3D C ABI Struct Passing & Depth Buffer", "Host lacks OpenGL driver in cloud VM (GLFW 65542)")
+                else:
+                    self.record(suite_name, "Raylib 3D C ABI Struct Passing & Depth Buffer", False, res.stdout.strip())
             except Exception as e:
                 self.record(suite_name, "Raylib 3D C ABI Struct Passing & Depth Buffer", False, str(e))
 

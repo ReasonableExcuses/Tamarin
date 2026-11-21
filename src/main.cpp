@@ -167,6 +167,8 @@ int main(int argc, char* argv[]) {
             opts.linkerFlags.push_back(argv[++i]);
         } else if (arg.starts_with("-Wl,")) {
             opts.linkerFlags.push_back(std::string(arg));
+        } else if (arg == "-framework" && i + 1 < argc) {
+            opts.linkLibs.push_back("-framework " + std::string(argv[++i]));
         } else if (arg == "--clang" && i + 1 < argc) {
             opts.clangPath = argv[++i];
         } else if (arg == "check") {
