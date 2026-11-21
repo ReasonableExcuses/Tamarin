@@ -1,6 +1,6 @@
 # Tamarin Memory Safety and Concurrency Model
 
-**Version:** 0.18.0  
+**Version:** 0.18.5  
 **Classification:** Formal Semantic Safety Specification  
 
 ---
@@ -26,7 +26,7 @@ When a reference is derived via address-of `&var` or pointer arithmetic, the com
 
 ### 2.2 The Active Borrow Invariant
 At every point in the Control Flow Graph (CFG), the compiler tracks active borrows $\mathcal{B} = \{(r, \text{kind}, \text{root})\}$:
-- **Multiple Readers**: Any number of immutable borrows `&T` may coexist for a given root:
+- **Multiple Readers**: Any number of immutable borrows (`&T` or `const T&`) may coexist for a given root:
   $$\forall b \in \mathcal{B}, \quad \text{root}(b) = r \implies \text{kind}(b) = \text{Shared}$$
 - **Exclusive Writer**: A mutable borrow `&mut T` requires total exclusivity. No other borrow of root $r$ may exist:
   $$\exists b \in \mathcal{B} \text{ s.t. } \text{root}(b) = r \land \text{kind}(b) = \text{Exclusive} \implies |\mathcal{B}_r| = 1$$
@@ -35,9 +35,9 @@ Violations trigger compile-time diagnostic errors (e.g., `E0201: cannot borrow '
 
 ### 2.3 Non-Escaping Lifetime Rules
 References cannot outlive the lexical scope of their provenance root:
-1. Returning a reference to a local stack slot is prohibited at compile time.
-2. Storing a reference into a struct with longer lifetime is rejected unless lifetime bounds are strictly satisfied.
-3. Lifetimes end at the point of last use (Non-Lexical Lifetimes - NLL), unlocking the base variable immediately once all borrows are dead.
+1. **Structural Local Reference Escape Prevention**: Returning a reference to a local stack slot is prohibited at compile time. This check applies structurally through member access expressions (`b.data`) and array indexing (`arr[0]`), ensuring compound wrappers and containers cannot be used as an indirection channel to leak stack slot addresses.
+2. **Struct Lifetime Containment**: Storing a reference into a struct with longer lifetime is rejected unless lifetime bounds are strictly satisfied.
+3. **Non-Lexical Lifetimes (NLL)**: Lifetimes end at the point of last use, unlocking the base variable immediately once all borrows are dead.
 
 ---
 
@@ -67,6 +67,10 @@ When a variable is moved inside a conditional branch (e.g., `if (cond) { process
    br i1 %flag, label %do_drop, label %skip_drop
    ```
 4. If static dataflow analysis proves the variable is unconditionally moved along all paths, the drop check and flag are eliminated entirely ($0$ runtime overhead).
+
+### 3.3 Nested Scopes and Loop Affine Invariants
+1. **Lexical Scope Isolation**: Variables moved within nested inner blocks remain marked moved upon exiting those blocks. The compiler tracks a lexical stack (`movedStack_`), preventing variable resurrection or use-after-move across scope boundaries.
+2. **Loop Iteration Soundness**: When an outer variable is moved inside a `for` or `while` loop, subsequent iterations of the loop would execute against an invalidated, consumed state. Tamarin strictly rejects moving loop-external variables inside loop bodies unless the variable is re-assigned an initialized value within that same iteration before any subsequent read.
 
 ---
 

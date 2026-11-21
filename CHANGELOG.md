@@ -9,7 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.18.5] - 2026-11-21
 
-### Added & Hardened — Milestone v0.18.5: Tamarin Graphics & Native Ecosystem (Raylib 5.5, SDL3 Platform & Modern Multi-Backend `SDL_GPU`)
+### Added & Hardened — Milestone v0.18.5: Tamarin Graphics & Native Ecosystem, Compiler Soundness Audit & 200 New Unit Tests
+- **Compiler Soundness & Memory Safety Audit (Bugs BUG-40 through BUG-45)**:
+  - `BUG-40`: Fixed null pointer dereference in `checkUnary` (`src/sema/type_checker.cpp:2128`) on struct field member access without `this.`.
+  - `BUG-41`: Fixed `const int&` incorrectly parsed and treated as mutable reference in parser and Sema (`src/parser/parser.cpp`, `src/sema/type_checker.cpp`).
+  - `BUG-42`: Fixed local stack reference escape vulnerability via struct fields (`b.data`) and array elements (`arr[0]`) returning local addresses (`src/sema/type_checker.cpp:5862`).
+  - `BUG-43`: Fixed affine move tracking loss across nested scopes and `movedStack_` variable declaration initialization (`src/sema/type_checker.cpp:1228, 1251, 5670`).
+  - `BUG-44`: Fixed outer variable moves in `for`/`while` loops without reassignment rejected (`src/sema/type_checker.cpp:2818, 6044, 6070`).
+  - `BUG-45`: Fixed LLVM codegen return opcode emitting scalar `i8` instead of `ptr` for decayed array/string return values (`src/backend/llvm_codegen.h`, `src/backend/llvm_codegen.cpp:2603`).
+- **200 New Comprehensive Compiler Tests (`tests/codegen/`)**:
+  - Added 50 memory safety unit tests (`tests/codegen/memory_safety_test.cpp`): borrow checking, provenance sets, lifetime bounds, reference escape prevention.
+  - Added 50 concurrency soundness unit tests (`tests/codegen/concurrency_soundness_test.cpp`): data race freedom, parallel for affine injectivity, mutex/atomic synchronization.
+  - Added 50 IR/LLVM soundness unit tests (`tests/codegen/ir_llvm_soundness_test.cpp`): SSA dominance invariants, bounds check elimination (BCE), DCE, array decay to pointer types, vectorization.
+  - Added 50 compiler performance unit tests (`tests/codegen/compiler_performance_test.cpp`): throughput scaling, memory usage, monomorphization efficiency.
+  - Expanded `tamarin_tests` to 603 passing unit tests and multi-platform gauntlet to 856 tests (100% pass rate).
+- **Troop Package Manager Hardening (`troop/src/package_manager.cpp`)**:
+  - Implemented automated native `.dll` deployment on Windows builds: inspects `lib-dirs` in `troop.toml` and copies all matching `.dll` files to output `bin/` directory upon build completion.
+  - Added `-t, --template <name>` flags to `troop new` and `troop init` supporting `raylib-game` and `sdl3-app`.
+  - Scaffolds target-aware `troop.toml` manifests, source trees (`src/main.tmn`), and automated platform linking configurations.
+- **GUI Calculator Ecosystem Benchmark (`benchmarks/projects/gui_test/`)**:
+  - Implemented identical Raylib 5.5 GUI Calculator across Tamarin (394 SLOC), C++20 (369 SLOC), and Rust (366 SLOC).
+  - Tamarin matches C++ and outperforms Rust (20.01 ms vs 20.47 ms vs 20.22 ms frame time; 502 KB vs 489 KB vs 641 KB binary size) with zero `unsafe` blocks.
 - **Compiler Linker Directives (`src/main.cpp`)**:
   - Implemented `-l`, `--link`, `-L`, `--lib-dir`, `-Wl,`, and `-Xlinker` CLI flags.
   - Transparently maps linker directives to host toolchains (MSVC `link.exe` on Windows, `clang`/`lld` on POSIX).
@@ -23,12 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Relaxed C ABI escape contract and mutable borrow registration for raw pointer function parameters (`*T`) in semantic type checker.
   - Allowed `null` literal conversions across all raw pointer parameter call sites in Sema and IR builder.
   - Corrected integer bitcast lowering in LLVM codegen to emit `zext`/`sext`/`trunc` across mismatched integer bit widths.
-- **Troop Package Manager Project Templates (`troop/src/cli.cpp`, `troop/src/package_manager.cpp`)**:
-  - Added `-t, --template <name>` flags to `troop new` and `troop init` supporting `raylib-game` and `sdl3-app`.
-  - Scaffolds target-aware `troop.toml` manifests, source trees (`src/main.tmn`), and automated platform linking configurations.
 - **Documentation & Verification**:
   - Published comprehensive graphics guide in `docs/graphics.md`.
   - Extended unified verification harness with Suite 13 (Graphics & Native Ecosystem E2E) across Windows, Linux, and macOS.
+  - Full test suite passing 856 / 856 tests across 13 suites.
 
 ---
 

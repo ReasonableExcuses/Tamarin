@@ -1,4 +1,4 @@
-# TAMARIN Benchmark Suite (v0.13)
+# TAMARIN Benchmark Suite (v0.18.5)
 
 The TAMARIN benchmark infrastructure provides rigorous, reproducible, and defensible performance comparisons between TAMARIN-generated native code, optimized C and C++ (Clang and MSVC), and safe Rust in release mode.
 
@@ -11,6 +11,7 @@ TAMARIN benchmarks enforce strict schema conformity, bit-exact floating-point va
 3. **Native SIMD & N-Body Simulation (`benchmarks/simd_bench/` & `benchmarks/results/nbody_simulation_summary.md`)**: 100M AVX2 accumulations and 335M force-pair gravitational physics simulations comparing native `float8` / `float4` against C++ Clang and Rust AVX2.
 4. **Structured Concurrency (`benchmarks/parallel_bench/`)**: 100M parallel vector operations comparing Tamarin work-stealing thread pools against C++ Clang OpenMP and Rust scoped threads.
 5. **Parallel Reductions (`benchmarks/reduction_bench/`)**: 100M parallel reduction operations comparing Tamarin in-register accumulators against C++ OpenMP and Rust JoinHandles.
+6. **GUI & Native Application Ecosystem (`benchmarks/projects/gui_test/`)**: Full-scale Raylib 5.5 native GUI Calculator comparing Tamarin against C++20 and Rust on frame rendering time, total execution time, stripped binary size, build throughput, and memory safety invariants.
 
 ---
 
@@ -39,10 +40,31 @@ TAMARIN benchmarks enforce strict schema conformity, bit-exact floating-point va
 
 ## Toolchains Evaluated
 
-- **TAMARIN**: `tamarin.exe` v0.13 (`-O0`, `-O1`, `-O2`, `-O3`, `--dynamic`, `--static`) with LLVM backend (`x86_64-pc-windows-msvc`).
+- **TAMARIN**: `tamarin.exe` v0.18.5 (`-O0`, `-O1`, `-O2`, `-O3`, `--dynamic`, `--static`) with LLVM backend (`x86_64-pc-windows-msvc`).
 - **Clang C/C++**: LLVM Clang 23.1.5 (`-O2`, `-O3`, `-fopenmp`).
 - **MSVC C/C++**: Microsoft Visual C++ 19.44.35211 (VS 2022 Community) (`/O2 /W3 /openmp`).
 - **Rust**: `rustc 1.85` / `cargo` (release profile: `opt-level=3`, non-LTO, `codegen-units=16`; and `release-lto`).
+
+---
+
+## Real-World Application Benchmarks (`benchmarks/projects/gui_test/`)
+
+In addition to compute microbenchmarks, the Tamarin benchmark suite evaluates real-world interactive application workloads. The GUI Calculator benchmark evaluates a complete native desktop application implemented in Tamarin, C++, and Rust using Raylib 5.5 (360x560 window, 300 active frames):
+
+| Metric | Tamarin (v0.18.5) | C++ (Clang C++20) | Rust (Edition 2021) | Benchmark Analysis |
+| :--- | :--- | :--- | :--- | :--- |
+| **Frame Pacing (50 FPS target)** | **20.01 ms** | 20.47 ms | 20.22 ms | Smooth locked 50 FPS across all three (sub-ms variance is compositor jitter) |
+| **Total 300-Frame Time** | **6.004 s** | 6.141 s | 6.065 s | Identical display-synchronized completion (~6.0 s) |
+| **Stripped Binary Size** | **502.5 KB** | **489.0 KB** | 641.5 KB | Within **2.7%** of C++; **21.7% smaller** than Rust (no unwinding/format bloat) |
+| **Release Build Time** | **0.73 s** | **0.28 s** | 1.03 s | C++ fastest (single file); Tamarin compiles **29% faster** than `cargo build --release` |
+| **Peak Working Set RAM** | **92.59 MB** | 92.17 MB | 92.23 MB | Virtually identical (within 0.4 MB, dominated by GPU swapchain) |
+| **Source Lines of Code (SLOC)**| 394 lines | 369 lines | 366 lines | Comparable code density across all three implementations |
+| **Safety Invariants** | **Safe by Default** (0 `unsafe`) | Unsafe Manual | Unsafe FFI Blocks | Tamarin requires **zero `unsafe` blocks**; Rust requires `unsafe` for every Raylib call |
+
+To run the GUI application benchmark:
+```powershell
+python benchmarks/projects/gui_test/benchmark.py
+```
 
 ---
 

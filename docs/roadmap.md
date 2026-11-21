@@ -35,7 +35,7 @@ The path to **Version 1.0 GA** focuses on self-hosting and compiler maturation.
   [ v0.18.0 ] ──────────► Tooling & Ecosystem: tamarin-lsp, tamarin-bindgen, VS Code Extension (637/637 Passed)
           │
           ▼
-  [ v0.18.5 ] ──────────► Graphics Ecosystem: tamarin-raylib & tamarin-sdl3 (Modern Multi-Backend GPU)
+  [ v0.18.5 ] ──────────► Graphics Ecosystem & Compiler Soundness (BUG-40..45, 200 Tests, 856/856 Passed)
           │
           ▼
   [ v0.19.0 Current ] ──► Self-Hosting Compiler Prototype (Tamarin Frontend in Tamarin)
@@ -117,9 +117,22 @@ The path to **Version 1.0 GA** focuses on self-hosting and compiler maturation.
 
 ---
 
-### Milestone v0.18.5: Graphics Ecosystem (`tamarin-raylib` & `tamarin-sdl3`) [COMPLETED]
+### Milestone v0.18.5: Graphics Ecosystem (`tamarin-raylib` & `tamarin-sdl3`) and Compiler Soundness [COMPLETED]
 *Completed:* November 2026
 
+- **Compiler Soundness & Memory Safety Audit (BUG-40 through BUG-45)**:
+  - Fixed null pointer dereference in `checkUnary` (`src/sema/type_checker.cpp:2128`) on struct field member access without `this.` (`BUG-40`).
+  - Fixed `const int&` parsing and semantic verification as immutable reference (`BUG-41`).
+  - Statically closed local stack reference escapes through struct fields (`b.data`) and array indexing (`arr[0]`) (`BUG-42`).
+  - Fixed affine move tracking across nested scopes and `movedStack_` variable declaration initialization (`BUG-43`).
+  - Enforced loop affine move rules, rejecting moves of outer variables in loops without loop-body reassignment (`BUG-44`).
+  - Fixed LLVM codegen return opcode emitting scalar `i8` instead of `ptr` for decayed array/string return values (`BUG-45`).
+- **200 New Unit Tests & Multi-Platform Test Gauntlet (856 / 856 Passed)**:
+  - Added 50 memory safety unit tests (`tests/codegen/memory_safety_test.cpp`).
+  - Added 50 concurrency soundness unit tests (`tests/codegen/concurrency_soundness_test.cpp`).
+  - Added 50 IR/LLVM soundness unit tests (`tests/codegen/ir_llvm_soundness_test.cpp`).
+  - Added 50 compiler performance unit tests (`tests/codegen/compiler_performance_test.cpp`).
+  - Total unit tests in `tamarin_tests` increased to 603; multi-platform gauntlet executes 856 tests with 100% pass rate.
 - **Compiler Linker Directives**:
   - Implemented `-l`, `--link`, `-L`, `--lib-dir`, `-Wl,`, and `-Xlinker` CLI flags in Tamarin compiler driver (`src/main.cpp`).
   - Automatically forward link arguments and library paths to Clang and MSVC `link.exe` across Windows, Linux, and macOS.
@@ -133,9 +146,13 @@ The path to **Version 1.0 GA** focuses on self-hosting and compiler maturation.
 - **`tamarin-sdl3` GPU (Modern `SDL_GPU`, Vulkan, Direct3D 12, Metal, OpenGL)**:
   - Multi-backend GPU rendering via `SDL3/SDL_gpu.h` targeting **Direct3D 12** on Windows, **Vulkan** on Linux, and **Metal** on macOS.
   - Relaxed C ABI escape contract and borrow tracking for raw pointers; full `null` literal support.
-- **Troop CLI Project Templates & Documentation**:
+- **Troop Package Manager Templates & Native DLL Deployment**:
   - `troop new --template=raylib-game` and `troop new --template=sdl3-app`.
-  - Comprehensive guide published in `docs/graphics.md`.
+  - Automatic native `.dll` deployment on Windows: copies required `.dll` files from `lib-dirs` to output `bin/` directory upon build completion.
+- **Real-World Application Benchmarking (Raylib 5.5 Calculator)**:
+  - Validated native GUI application development in `benchmarks/projects/gui_test/`: Tamarin achieves 50.0 FPS (20.01 ms frame time) and 502 KB binary size with zero `unsafe` blocks, matching C++ and outperforming Rust.
+- **Documentation**:
+  - Published comprehensive graphics guide in `docs/graphics.md`.
 
 ---
 

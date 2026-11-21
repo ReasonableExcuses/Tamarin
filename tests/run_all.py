@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Tamarin Multi-Platform Test Runner & Verification Harness (v0.16.0)
+Tamarin Multi-Platform Test Runner & Verification Harness (v0.18.5)
 
 Executes the entire Tamarin test gauntlet across Windows, Linux, and macOS:
-  1. C++ Unit Tests (tamarin_tests: 356+ tests)
+  1. C++ Unit Tests (tamarin_tests: 603 tests)
   2. Mega Suite & C ABI Round-Trip (test_tamarin_mega.tam)
   3. Adversarial Soundness Gauntlet (test_rust_soundness.ps1)
   4. Dark Corners Gauntlet (test_rust_dark_corners.ps1)
@@ -954,7 +954,7 @@ def main():
     clang_bin = args.clang or os.environ.get("TAMARIN_CLANG") or shutil.which("clang") or shutil.which("gcc") or shutil.which("cc")
 
     print(cyan("======================================================================"))
-    print(cyan(f" Tamarin Cross-Platform Verification Orchestrator (v0.18.0)"))
+    print(cyan(f" Tamarin Cross-Platform Verification Orchestrator (v0.18.5)"))
     print(cyan(f" OS: {platform.system()} {platform.release()} ({platform.machine()})"))
     print(cyan("======================================================================"))
     print(f"  Tamarin Binary:      {tamarin_bin or red('NOT FOUND')}")

@@ -1,6 +1,6 @@
 # Tamarin Compiler Architecture and Pipeline Specification
 
-**Version:** 0.18.0  
+**Version:** 0.18.5  
 **Classification:** Systems Engineering & Compiler Internals  
 
 ---
@@ -13,7 +13,7 @@ The Tamarin compiler (`tamarin`) is engineered as a modular C++23 compiler pipel
 +---------------------------------------------------------------------------------+
 |                            Tamarin Compiler Architecture                        |
 +---------------------------------------------------------------------------------+
-   Source Files (.tam / .tmn)
+   Source Files (.tmn)
           │
           ▼
    [ SourceManager ] ─────────► UTF-8 Memory Mapping & Line/Column Diagnostics
@@ -76,9 +76,10 @@ The `Sema` phase (`src/sema/`) performs multi-pass semantic verification:
 2. **Type Checking & Monomorphization** (`type_checker.cpp`, `monomorphizer.cpp`):
    Performs type unification, checks assignment compatibility, and monomorphizes generic functions and structs (`Result<T, E>`, `Vector<T>`).
 3. **Borrow Checker** (`BorrowChecker`):
-   Tracks `ProvenanceSet` roots and ensures the reader-writer borrow invariant: any number of immutable references (`&T`) OR exactly one exclusive mutable reference (`&mut T`).
+   Tracks `ProvenanceSet` roots and ensures the reader-writer borrow invariant: any number of immutable references (`&T` or `const T&`) OR exactly one exclusive mutable reference (`&mut T`).
+   Performs structural escape analysis to ensure local stack addresses cannot escape through compound struct fields (`b.data`) or array indexing (`arr[0]`).
 4. **Move Checker** (`MoveChecker`):
-   Validates affine linear consumption: variables passed to `move(x)` are invalidated for subsequent reads. For variables moved along conditional paths, the compiler synthesizes stack-allocated drop flags.
+   Validates affine linear consumption: variables passed to `move(x)` are invalidated for subsequent reads. For variables moved along conditional paths, the compiler synthesizes stack-allocated drop flags. Tracks moved variable stacks across nested lexical scopes and strictly prohibits reading outer variables moved inside loop bodies (`for`, `while`) unless re-assigned within that iteration.
 5. **Data Race Checker** (`DataRaceChecker`):
    Analyzes array index expressions in `parallel for` bodies to prove index injectivity $f(i) = c_1 \cdot i + c_2$ ($c_1 \ne 0$), rejecting race conditions at compile time.
 
@@ -107,6 +108,7 @@ TIR (`src/ir/`) is a mid-level SSA intermediate representation designed to bridg
 - Converts TIR basic blocks and instructions into strongly typed LLVM IR.
 - Configures target machine triples, data layouts, CPU features (e.g., `+avx2,+fma` under `--target-cpu native`), and floating-point models (`--fast-math`).
 - Automatically emits metadata for loop auto-vectorization (`llvm.loop.vectorize.enable`).
+- Preserves pointer return types for decayed fixed-size arrays and string slices (`isPointerValue_`), generating valid `ret ptr` opcodes rather than illegal scalar bitwidth conversions.
 
 ### 5.2 C99 Header Generation (`src/backend/c_header_generator.cpp`)
 - When invoked with `--emit-header`, the backend scans all `@c_layout` structs and `@export` functions, generating an idiomatic, standards-compliant C99 header file with include guards and C ABI type definitions.
@@ -171,6 +173,12 @@ matrix_core = { path = "../matrix_core" }
 - Resolves dependencies using Semantic Versioning (SemVer 2.0.0).
 - Performs depth-first search (DFS) with topological sorting to detect cycles and build a deterministic Directed Acyclic Graph (DAG) compilation schedule.
 - Emits `troop.lock` containing exact package hashes and pinned dependency paths.
+
+### 7.3 Automated Native Dynamic Library Deployment
+On Windows targets, `troop` inspects `lib-dirs` in `troop.toml` (and platform-specific sections `[target.windows]`) and automatically copies all matching native dynamic link libraries (`.dll`) to the target `bin/` directory upon build completion (`package_manager.cpp`). This eliminates runtime missing DLL errors when launching Raylib or SDL3 binaries.
+
+### 7.4 Target-Aware Project Scaffolding
+`troop new` and `troop init` support first-class project templates (`--template=raylib-game`, `--template=sdl3-app`), generating pre-configured manifests, platform linking directives, and entry point boilerplate.
 
 ---
 
@@ -272,3 +280,15 @@ The Tamarin Standard Library (`lib/std/`) is written directly in Tamarin with mi
 - **VS Code Extension**: Clean TypeScript LanguageClient in `editors/vscode/src/extension.ts` that spawns `tamarin-lsp --stdio`.
 - **TextMate Grammar**: `editors/vscode/syntaxes/tamarin.tmLanguage.json` scoping keywords, built-in types, `@layout` / `@c_layout` attributes, comments, numbers, and strings.
 - **Theme-Adaptive File Icons**: Custom dark/light mode icons for `.tam` and `.tmn` files.
+
+---
+
+## 12. Verification Gauntlet & Quality Engineering
+
+The compiler pipeline is validated via a multi-tiered test matrix orchestrated by `python tests/run_all.py`:
+- **Unit & Soundness Test Suite (`tamarin_tests`)**: 603 automated unit tests, including 200 dedicated tests added in v0.18.5:
+  - `MemorySafety` (50 tests): Non-lexical lifetimes, mutable borrow exclusivity, pointer provenance, reference escaping.
+  - `ConcurrencySoundness` (50 tests): Data race prevention, affine loop injectivity, disjoint slicing, atomic primitives.
+  - `IRLLVMSoundness` (50 tests): SSA dominance invariants, bounds check elimination (BCE), dead code elimination (DCE), pointer decay conversions.
+  - `CompilerPerformance` (50 tests): Throughput scaling across lines of code, memory overhead, generic monomorphization depth.
+- **Cross-Platform Verification Gauntlet**: 856 total tests executed across Windows, Linux, and macOS covering C ABI interoperability, adversarial borrow corner cases, coroutine dispatch, package management, language server protocols, and native graphics pipelines.
