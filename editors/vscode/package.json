@@ -4,6 +4,11 @@
   "description": "Rich language support for the Tamarin programming language powered by tamarin-lsp",
   "version": "0.18.0",
   "publisher": "tamarin-lang",
+  "icon": "icons/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ReasonableExcuses/Tamarin"
+  },
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -32,6 +37,10 @@
           ".tam",
           ".tmn"
         ],
+        "icon": {
+          "light": "./icons/tamarin-light.png",
+          "dark": "./icons/tamarin-dark.png"
+        },
         "configuration": "./language-configuration.json"
       }
     ],
