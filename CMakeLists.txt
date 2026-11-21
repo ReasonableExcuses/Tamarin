@@ -88,6 +88,7 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/troop/include
     ${CMAKE_SOURCE_DIR}/bindgen/include
+    ${CMAKE_SOURCE_DIR}/lsp/include
     ${CMAKE_BINARY_DIR}/generated
     ${CLANG_C_INCLUDE_DIR}
 )
@@ -192,12 +193,32 @@ if(TAMARIN_HAS_BINDGEN)
     endif()
 endif()
 
+# ── LSP Library & Executable ──────────────────────────────────────────
+add_library(lsp_lib STATIC
+    lsp/src/json.cpp
+    lsp/src/transport.cpp
+    lsp/src/server.cpp
+    lsp/src/cli.cpp
+)
+target_include_directories(lsp_lib PUBLIC
+    ${CMAKE_SOURCE_DIR}/lsp/include
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/generated
+)
+target_link_libraries(lsp_lib PUBLIC tamarin_lib)
+
+add_executable(tamarin-lsp lsp/src/main.cpp)
+target_link_libraries(tamarin-lsp PRIVATE lsp_lib)
+if(MSVC)
+    set_target_properties(tamarin-lsp PROPERTIES LINK_FLAGS "/STACK:8388608")
+endif()
+
 # ── Compiler Executable ───────────────────────────────────────────────
 add_executable(tamarin src/main.cpp)
 if(TAMARIN_HAS_BINDGEN)
-    target_link_libraries(tamarin PRIVATE tamarin_lib troop_lib bindgen_lib)
+    target_link_libraries(tamarin PRIVATE tamarin_lib troop_lib bindgen_lib lsp_lib)
 else()
-    target_link_libraries(tamarin PRIVATE tamarin_lib troop_lib)
+    target_link_libraries(tamarin PRIVATE tamarin_lib troop_lib lsp_lib)
 endif()
 
 # ── Troop Executable ──────────────────────────────────────────────────
@@ -216,28 +237,30 @@ add_executable(tamarin_tests
     tests/modules/module_test.cpp
     tests/modules/stdlib_test.cpp
     troop/tests/troop_test.cpp
+    tests/lsp/lsp_test.cpp
 )
 
 target_include_directories(tamarin_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/troop/include
     ${CMAKE_SOURCE_DIR}/bindgen/include
+    ${CMAKE_SOURCE_DIR}/lsp/include
     ${CMAKE_BINARY_DIR}/generated
     ${CMAKE_SOURCE_DIR}/tests
 )
 
 if(TAMARIN_HAS_BINDGEN)
     target_sources(tamarin_tests PRIVATE tests/bindgen/bindgen_test.cpp)
-    target_link_libraries(tamarin_tests PRIVATE tamarin_lib troop_lib bindgen_lib)
+    target_link_libraries(tamarin_tests PRIVATE tamarin_lib troop_lib bindgen_lib lsp_lib)
 else()
-    target_link_libraries(tamarin_tests PRIVATE tamarin_lib troop_lib)
+    target_link_libraries(tamarin_tests PRIVATE tamarin_lib troop_lib lsp_lib)
 endif()
 
 if(MSVC)
     if(TAMARIN_HAS_BINDGEN)
-        set_target_properties(tamarin troop tamarin_tests tamarin-bindgen PROPERTIES LINK_FLAGS "/STACK:8388608")
+        set_target_properties(tamarin troop tamarin_tests tamarin-bindgen tamarin-lsp PROPERTIES LINK_FLAGS "/STACK:8388608")
     else()
-        set_target_properties(tamarin troop tamarin_tests PROPERTIES LINK_FLAGS "/STACK:8388608")
+        set_target_properties(tamarin troop tamarin_tests tamarin-lsp PROPERTIES LINK_FLAGS "/STACK:8388608")
     endif()
 endif()
 
@@ -245,7 +268,7 @@ add_test(NAME TamarinUnitTests COMMAND tamarin_tests)
 
 # ── Install ───────────────────────────────────────────────────────────
 if(TAMARIN_HAS_BINDGEN)
-    install(TARGETS tamarin troop tamarin-bindgen RUNTIME DESTINATION bin)
+    install(TARGETS tamarin troop tamarin-bindgen tamarin-lsp RUNTIME DESTINATION bin)
 else()
-    install(TARGETS tamarin troop RUNTIME DESTINATION bin)
+    install(TARGETS tamarin troop tamarin-lsp RUNTIME DESTINATION bin)
 endif()

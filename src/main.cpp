@@ -6,6 +6,7 @@
 #include "tamarin/config.h"
 #include "troop/cli.h"
 #include "bindgen/cli.h"
+#include "lsp/cli.h"
 
 #include <iostream>
 #include <string_view>
@@ -23,7 +24,8 @@ static void printHelp() {
               << "  build   <file>   Compile source file to a native executable\n"
               << "  run     <file>   Compile and immediately run the executable\n"
               << "  troop   <args>   Invoke the Troop package manager\n"
-              << "  bindgen <args>   Generate Tamarin FFI bindings from C headers\n\n"
+              << "  bindgen <args>   Generate Tamarin FFI bindings from C headers\n"
+              << "  lsp     <args>   Invoke the Tamarin Language Server (tamarin-lsp)\n\n"
               << "Options:\n"
               << "  -o <path>             Specify output executable path\n"
               << "  -I <path>             Add directory to module search path\n"
@@ -61,6 +63,10 @@ int main(int argc, char* argv[]) {
 
     if (std::string_view(argv[1]) == "bindgen") {
         return tamarin::bindgen::cliMain(argc - 1, argv + 1);
+    }
+
+    if (std::string_view(argv[1]) == "lsp") {
+        return tamarin::lsp::cliMain(argc - 1, argv + 1);
     }
 
     tamarin::driver::DriverOptions opts;

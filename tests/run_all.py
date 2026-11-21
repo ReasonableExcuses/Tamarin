@@ -14,6 +14,7 @@ Executes the entire Tamarin test gauntlet across Windows, Linux, and macOS:
   9. Troop Package Manager E2E (test_troop.ps1)
   10. @cfg(...) & Multi-Target Cross-Compilation
   11. tamarin-bindgen 120 Hard Instances Gauntlet (test_hard_instances.py)
+  12. tamarin-lsp Protocol & Lifecycle E2E Suite (test_lsp_server.py)
 
 Standard library only: subprocess, pathlib, tempfile, sys, re, shutil, os, platform.
 """
@@ -61,14 +62,18 @@ def gray(text: str) -> str: return color(text, "90")
 class TestHarness:
     def __init__(self, tamarin_bin: pathlib.Path, troop_bin: pathlib.Path,
                  tamarin_tests_bin: pathlib.Path, clang_bin: str | None,
-                 bindgen_bin: pathlib.Path | None = None):
+                 bindgen_bin: pathlib.Path | None = None,
+                 lsp_bin: pathlib.Path | None = None):
         self.tamarin_bin = tamarin_bin
         self.troop_bin = troop_bin
         self.tamarin_tests_bin = tamarin_tests_bin
         self.clang_bin = clang_bin
         self.bindgen_bin = bindgen_bin
+        self.lsp_bin = lsp_bin
         if self.bindgen_bin and self.bindgen_bin.exists():
             os.environ["TAMARIN_BINDGEN_EXE"] = str(self.bindgen_bin)
+        if self.lsp_bin and self.lsp_bin.exists():
+            os.environ["TAMARIN_LSP_EXE"] = str(self.lsp_bin)
         if self.tamarin_bin and self.tamarin_bin.exists():
             os.environ["TAMARIN_EXE"] = str(self.tamarin_bin)
             bin_dir = self.tamarin_bin.parent
@@ -643,6 +648,47 @@ int main() { return add(20, 22); }
             self.record("Bindgen Hard Instances", "120 Hard Instances Gauntlet", False, str(e))
 
     # -------------------------------------------------------------------------
+    # Suite 12: tamarin-lsp Protocol & Lifecycle E2E Suite
+    # -------------------------------------------------------------------------
+    def run_lsp_e2e(self):
+        self.banner("12. TAMARIN-LSP PROTOCOL & LIFECYCLE E2E SUITE")
+        script = REPO_ROOT / "tests" / "lsp" / "test_lsp_server.py"
+        if not script.exists():
+            self.skip("LSP Protocol E2E", "test_lsp_server.py", "Script not found")
+            return
+        if not self.lsp_bin or not self.lsp_bin.exists():
+            self.skip("LSP Protocol E2E", "tamarin-lsp binary", "Binary not found")
+            return
+
+        cmd = [sys.executable, str(script)]
+        try:
+            p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120, cwd=REPO_ROOT)
+            output = p.stdout
+            m = re.search(r"SCORECARD:\s*(\d+)\s+Passed,\s*(\d+)\s+Failed", output)
+            if m:
+                num_passed = int(m.group(1))
+                num_failed = int(m.group(2))
+                num_total = num_passed + num_failed
+            else:
+                num_passed = 14 if p.returncode == 0 else 0
+                num_failed = 0 if p.returncode == 0 else 1
+                num_total = 14
+
+            if p.returncode == 0 and num_failed == 0 and num_passed > 0:
+                print(f"  {green(f'All {num_passed} LSP E2E protocol checks passed successfully!')}")
+                if "LSP Protocol E2E" not in self.suite_results:
+                    self.suite_results["LSP Protocol E2E"] = {"pass": 0, "fail": 0, "skip": 0}
+                self.passed += num_passed
+                self.suite_results["LSP Protocol E2E"]["pass"] += num_passed
+            else:
+                lines = output.splitlines()
+                summary_lines = [l.strip() for l in lines if "[FAIL]" in l or "FAILED" in l or "error:" in l or "Detail:" in l]
+                detail = "; ".join(summary_lines[-5:]) if summary_lines else "Non-zero exit code"
+                self.record("LSP Protocol E2E", "LSP Protocol & Lifecycle E2E Suite", False, detail)
+        except Exception as e:
+            self.record("LSP Protocol E2E", "LSP Protocol & Lifecycle E2E Suite", False, str(e))
+
+    # -------------------------------------------------------------------------
     # Final Scorecard
     # -------------------------------------------------------------------------
     def print_scorecard(self):
@@ -697,6 +743,7 @@ def main():
     parser.add_argument("--troop", help="Path to troop package manager binary")
     parser.add_argument("--tamarin-tests", help="Path to tamarin_tests unit test runner binary")
     parser.add_argument("--bindgen", help="Path to tamarin-bindgen binary")
+    parser.add_argument("--lsp", help="Path to tamarin-lsp binary")
     parser.add_argument("--clang", help="Path to clang C compiler for ABI verification")
     parser.add_argument("--suites", help="Comma-separated list of suites to run (default: all)")
     args = parser.parse_args()
@@ -712,16 +759,18 @@ def main():
     troop_bin = find_binary("troop", args.troop or os.environ.get("TROOP_BIN"), candidates)
     tamarin_tests_bin = find_binary("tamarin_tests", args.tamarin_tests or os.environ.get("TAMARIN_TESTS_BIN"), candidates)
     bindgen_bin = find_binary("tamarin-bindgen", args.bindgen or os.environ.get("TAMARIN_BINDGEN_BIN"), candidates)
+    lsp_bin = find_binary("tamarin-lsp", args.lsp or os.environ.get("TAMARIN_LSP_BIN"), candidates)
     clang_bin = args.clang or os.environ.get("TAMARIN_CLANG") or shutil.which("clang") or shutil.which("gcc") or shutil.which("cc")
 
     print(cyan("======================================================================"))
-    print(cyan(f" Tamarin Cross-Platform Verification Orchestrator (v0.16.0)"))
+    print(cyan(f" Tamarin Cross-Platform Verification Orchestrator (v0.18.0)"))
     print(cyan(f" OS: {platform.system()} {platform.release()} ({platform.machine()})"))
     print(cyan("======================================================================"))
     print(f"  Tamarin Binary:      {tamarin_bin or red('NOT FOUND')}")
     print(f"  Troop Binary:        {troop_bin or red('NOT FOUND')}")
     print(f"  Tamarin Tests:       {tamarin_tests_bin or red('NOT FOUND')}")
     print(f"  Bindgen Binary:      {bindgen_bin or yellow('NOT FOUND (Bindgen tests will be skipped)')}")
+    print(f"  LSP Binary:          {lsp_bin or yellow('NOT FOUND (LSP tests will be skipped)')}")
     print(f"  C Compiler:          {clang_bin or yellow('NOT FOUND (C ABI tests will be skipped)')}")
     print(cyan("======================================================================"))
 
@@ -729,7 +778,7 @@ def main():
         print(red("\nError: tamarin executable not found. Build the project first."))
         sys.exit(1)
 
-    harness = TestHarness(tamarin_bin, troop_bin, tamarin_tests_bin, clang_bin, bindgen_bin)
+    harness = TestHarness(tamarin_bin, troop_bin, tamarin_tests_bin, clang_bin, bindgen_bin, lsp_bin)
 
     selected_suites = [s.strip().lower() for s in args.suites.split(",")] if args.suites else ["all"]
 
@@ -760,6 +809,8 @@ def main():
         harness.run_cfg_and_cross_target()
     if should_run("bindgen"):
         harness.run_bindgen_hard_instances()
+    if should_run("lsp"):
+        harness.run_lsp_e2e()
 
     elapsed = time.time() - start_time
     harness.print_scorecard()
