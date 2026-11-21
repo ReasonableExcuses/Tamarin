@@ -1,0 +1,78 @@
+{
+  "name": "tamarin-vscode",
+  "displayName": "Tamarin Language Support",
+  "description": "Rich language support for the Tamarin programming language powered by tamarin-lsp",
+  "version": "0.18.0",
+  "publisher": "tamarin-lang",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "tamarin",
+    "systems programming",
+    "lsp",
+    "compiler"
+  ],
+  "activationEvents": [
+    "onLanguage:tamarin"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "tamarin",
+        "aliases": [
+          "Tamarin",
+          "tamarin"
+        ],
+        "extensions": [
+          ".tam",
+          ".tmn"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "tamarin",
+        "scopeName": "source.tamarin",
+        "path": "./syntaxes/tamarin.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Tamarin",
+      "properties": {
+        "tamarin.lsp.path": {
+          "type": "string",
+          "default": "tamarin-lsp",
+          "description": "Path to the tamarin-lsp executable"
+        },
+        "tamarin.lsp.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace JSON-RPC communication between VS Code and tamarin-lsp"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.4.0",
+    "vscode-languageclient": "^9.0.1"
+  }
+}

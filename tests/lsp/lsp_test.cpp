@@ -9,6 +9,7 @@
 #include "lsp/server.h"
 #include "lsp/vfs.h"
 #include "lsp/navigation.h"
+#include "lsp/completion.h"
 #include "tamarin/source/source_manager.h"
 #include "tamarin/lexer/lexer.h"
 #include "tamarin/parser/parser.h"
@@ -715,6 +716,181 @@ TAMARIN_TEST(Lsp, ServerNavigationFlow) {
     std::string symOut = out.str();
     EXPECT_TRUE(symOut.find("\"id\":13") != std::string::npos);
     EXPECT_TRUE(symOut.find("\"name\":\"doubleVal\"") != std::string::npos);
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, CompletionKeywordsAndTypes) {
+    std::string code = "int main() {\n    return 0;\n}\n";
+    VfsDocument doc("file:///kw_test.tam", "tamarin", 1, code);
+    DocumentAnalyzer analyzer;
+    auto analysis = analyzer.analyze(doc);
+
+    auto items = getCompletions(doc, analysis, Position{1, 4});
+    EXPECT_GE(items.size(), 30);
+
+    bool hasParallel = false;
+    bool hasAsync = false;
+    bool hasInt = false;
+    bool hasFloat = false;
+
+    for (const auto& item : items) {
+        if (item.label == "parallel" && item.kind == CompletionItemKind::Keyword) hasParallel = true;
+        if (item.label == "async" && item.kind == CompletionItemKind::Keyword) hasAsync = true;
+        if (item.label == "int" && item.kind == CompletionItemKind::Class) hasInt = true;
+        if (item.label == "float" && item.kind == CompletionItemKind::Class) hasFloat = true;
+    }
+
+    EXPECT_TRUE(hasParallel);
+    EXPECT_TRUE(hasAsync);
+    EXPECT_TRUE(hasInt);
+    EXPECT_TRUE(hasFloat);
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, CompletionInScopeIdentifiers) {
+    std::string code =
+        "int calculate(int baseVal, int multiplier) {\n"
+        "    int accumulatedSum = baseVal * multiplier;\n"
+        "    return accumulatedSum;\n"
+        "}\n";
+    VfsDocument doc("file:///scope_test.tam", "tamarin", 1, code);
+    DocumentAnalyzer analyzer;
+    auto analysis = analyzer.analyze(doc);
+
+    auto items = getCompletions(doc, analysis, Position{2, 11});
+
+    bool hasBaseVal = false;
+    bool hasMultiplier = false;
+    bool hasSum = false;
+    bool hasCalculate = false;
+
+    for (const auto& item : items) {
+        if (item.label == "baseVal") hasBaseVal = true;
+        if (item.label == "multiplier") hasMultiplier = true;
+        if (item.label == "accumulatedSum") hasSum = true;
+        if (item.label == "calculate") hasCalculate = true;
+    }
+
+    EXPECT_TRUE(hasBaseVal);
+    EXPECT_TRUE(hasMultiplier);
+    EXPECT_TRUE(hasSum);
+    EXPECT_TRUE(hasCalculate);
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, CompletionStructDot) {
+    std::string code =
+        "struct Vector2 {\n"
+        "    float x;\n"
+        "    float y;\n"
+        "    float length() { return 0.0; }\n"
+        "};\n\n"
+        "int main() {\n"
+        "    Vector2 v;\n"
+        "    v.\n"
+        "    return 0;\n"
+        "}\n";
+    VfsDocument doc("file:///dot_test.tam", "tamarin", 1, code);
+    DocumentAnalyzer analyzer;
+    auto analysis = analyzer.analyze(doc);
+
+    // Cursor right after "    v." (line 8, character 6)
+    auto items = getCompletions(doc, analysis, Position{8, 6});
+
+    bool hasX = false;
+    bool hasY = false;
+    bool hasLength = false;
+
+    for (const auto& item : items) {
+        if (item.label == "x" && item.kind == CompletionItemKind::Field) hasX = true;
+        if (item.label == "y" && item.kind == CompletionItemKind::Field) hasY = true;
+        if (item.label == "length" && item.kind == CompletionItemKind::Method) hasLength = true;
+    }
+
+    EXPECT_TRUE(hasX);
+    EXPECT_TRUE(hasY);
+    EXPECT_TRUE(hasLength);
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, SignatureHelpBasic) {
+    std::string code =
+        "int multiply(int a, int b, int c) {\n"
+        "    return a * b * c;\n"
+        "}\n\n"
+        "int main() {\n"
+        "    int res = multiply(10, 20, 30);\n"
+        "    return res;\n"
+        "}\n";
+    VfsDocument doc("file:///sig_test.tam", "tamarin", 1, code);
+    DocumentAnalyzer analyzer;
+    auto analysis = analyzer.analyze(doc);
+
+    // Cursor inside `multiply(10, ` (line 5, character 27, activeParam 1)
+    auto sig1 = getSignatureHelp(doc, analysis, Position{5, 27});
+    EXPECT_TRUE(sig1.has_value());
+    EXPECT_EQ(sig1->signatures.size(), 1);
+    EXPECT_EQ(sig1->activeParameter, 1);
+    EXPECT_TRUE(sig1->signatures[0].label.find("multiply(int a, int b, int c)") != std::string::npos);
+    EXPECT_EQ(sig1->signatures[0].parameters.size(), 3);
+
+    // Cursor right after opening paren `multiply(` (line 5, character 23, activeParam 0)
+    auto sig0 = getSignatureHelp(doc, analysis, Position{5, 23});
+    EXPECT_TRUE(sig0.has_value());
+    EXPECT_EQ(sig0->activeParameter, 0);
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, ServerCompletionAndSignatureFlow) {
+    std::istringstream in("");
+    std::ostringstream out;
+    LspTransport transport(in, out);
+    LspServer server(transport);
+
+    // 1. Initialize
+    server.processMessage("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}");
+    server.processMessage("{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}");
+    out.str("");
+
+    // 2. Open doc
+    std::string uri = "file:///server_comp_test.tam";
+    std::string openMsg =
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{"
+        "\"textDocument\":{\"uri\":\"" + uri + "\",\"languageId\":\"tamarin\",\"version\":1,"
+        "\"text\":\"int add(int x, int y) { return x + y; }\\nint main() { return add(1, 2); }\\n\"}"
+        "}}";
+    server.processMessage(openMsg);
+    out.str("");
+
+    // 3. Completion request
+    std::string compMsg =
+        "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"textDocument/completion\",\"params\":{"
+        "\"textDocument\":{\"uri\":\"" + uri + "\"},"
+        "\"position\":{\"line\":0,\"character\":0}"
+        "}}";
+    server.processMessage(compMsg);
+    std::string compOut = out.str();
+    EXPECT_TRUE(compOut.find("\"id\":20") != std::string::npos);
+    EXPECT_TRUE(compOut.find("\"label\":\"parallel\"") != std::string::npos);
+    EXPECT_TRUE(compOut.find("\"label\":\"add\"") != std::string::npos);
+    out.str("");
+
+    // 4. Signature Help request inside `add(1, `
+    std::string sigMsg =
+        "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"textDocument/signatureHelp\",\"params\":{"
+        "\"textDocument\":{\"uri\":\"" + uri + "\"},"
+        "\"position\":{\"line\":1,\"character\":26}"
+        "}}";
+    server.processMessage(sigMsg);
+    std::string sigOut = out.str();
+    EXPECT_TRUE(sigOut.find("\"id\":21") != std::string::npos);
+    EXPECT_TRUE(sigOut.find("\"activeParameter\":1") != std::string::npos);
+    EXPECT_TRUE(sigOut.find("add(int x, int y)") != std::string::npos);
 
     return true;
 }

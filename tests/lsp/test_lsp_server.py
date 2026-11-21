@@ -258,6 +258,31 @@ def run_tests():
             syms_list = resp_syms.get("result", [])
             check("Document has 'main' symbol", any(s.get("name") == "main" for s in syms_list))
 
+        # 5e. Code Completion
+        client.send_request("textDocument/completion", 7, {
+            "textDocument": {"uri": doc_uri},
+            "position": {"line": 1, "character": 4}
+        })
+        resp_comp = client.read_message()
+        check("Completion response received", resp_comp is not None)
+        if resp_comp:
+            check("Completion response id == 7", resp_comp.get("id") == 7)
+            comp_list = resp_comp.get("result", [])
+            check("Completion offers >= 10 candidates", len(comp_list) >= 10, f"Count={len(comp_list)}")
+            labels = {c.get("label") for c in comp_list}
+            check("Completion contains 'parallel' keyword", "parallel" in labels)
+            check("Completion contains 'int' type", "int" in labels)
+
+        # 5f. Signature Help
+        client.send_request("textDocument/signatureHelp", 8, {
+            "textDocument": {"uri": doc_uri},
+            "position": {"line": 0, "character": 9}
+        })
+        resp_sig = client.read_message()
+        check("SignatureHelp response received", resp_sig is not None)
+        if resp_sig:
+            check("SignatureHelp response id == 8", resp_sig.get("id") == 8)
+
         client.send_notification("textDocument/didClose", {
             "textDocument": {"uri": doc_uri}
         })
@@ -265,11 +290,11 @@ def run_tests():
         check("didClose clears diagnostics", diag_msg3 is not None and diag_msg3.get("method") == "textDocument/publishDiagnostics")
 
         # Test 6: Shutdown request
-        client.send_request("shutdown", 7)
+        client.send_request("shutdown", 9)
         resp4 = client.read_message()
         check("Shutdown response received", resp4 is not None)
         if resp4:
-            check("Shutdown response id == 7", resp4.get("id") == 7)
+            check("Shutdown response id == 9", resp4.get("id") == 9)
             check("Shutdown result is null", resp4.get("result") is None)
 
         # Test 7: Exit notification terminates process with 0

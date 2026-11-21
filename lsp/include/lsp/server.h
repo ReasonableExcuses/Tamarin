@@ -78,6 +78,7 @@ private:
     JsonRpcResponse handleDefinition(const JsonRpcRequest& req);
     JsonRpcResponse handleReferences(const JsonRpcRequest& req);
     JsonRpcResponse handleCompletion(const JsonRpcRequest& req);
+    JsonRpcResponse handleSignatureHelp(const JsonRpcRequest& req);
     JsonRpcResponse handleDocumentSymbol(const JsonRpcRequest& req);
 
     // Notification handlers

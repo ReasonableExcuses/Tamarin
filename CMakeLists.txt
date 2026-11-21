@@ -200,6 +200,7 @@ add_library(lsp_lib STATIC
     lsp/src/vfs.cpp
     lsp/src/analyzer.cpp
     lsp/src/navigation.cpp
+    lsp/src/completion.cpp
     lsp/src/server.cpp
     lsp/src/cli.cpp
 )

@@ -4,6 +4,7 @@
 
 #include "lsp/server.h"
 #include "lsp/navigation.h"
+#include "lsp/completion.h"
 
 #include <iostream>
 
@@ -84,6 +85,9 @@ std::optional<JsonRpcResponse> LspServer::handleRequest(const JsonRpcRequest& re
     if (req.method == "textDocument/completion") {
         return handleCompletion(req);
     }
+    if (req.method == "textDocument/signatureHelp") {
+        return handleSignatureHelp(req);
+    }
     if (req.method == "textDocument/documentSymbol") {
         return handleDocumentSymbol(req);
     }
@@ -134,6 +138,13 @@ JsonRpcResponse LspServer::handleInitialize(const JsonRpcRequest& req) {
     triggerChars.push_back(":");
     completionProvider["triggerCharacters"] = std::move(triggerChars);
     capabilities["completionProvider"] = std::move(completionProvider);
+
+    JsonValue sigProvider = JsonValue::object();
+    JsonValue sigTriggers = JsonValue::array();
+    sigTriggers.push_back("(");
+    sigTriggers.push_back(",");
+    sigProvider["triggerCharacters"] = std::move(sigTriggers);
+    capabilities["signatureHelpProvider"] = std::move(sigProvider);
 
     JsonValue serverInfo = JsonValue::object();
     serverInfo["name"] = "tamarin-lsp";
@@ -262,8 +273,44 @@ JsonRpcResponse LspServer::handleReferences(const JsonRpcRequest& req) {
 }
 
 JsonRpcResponse LspServer::handleCompletion(const JsonRpcRequest& req) {
-    // Default placeholder in Phase 4, implemented in Phase 5
-    return JsonRpcResponse::makeResult(req.id, JsonValue::array());
+    if (req.params.isNull()) return JsonRpcResponse::makeResult(req.id, JsonValue::array());
+    auto params = TextDocumentPositionParams::fromJson(req.params);
+    auto docOpt = vfs_.getDocument(params.textDocument.uri);
+    if (!docOpt.has_value()) return JsonRpcResponse::makeResult(req.id, JsonValue::array());
+
+    auto analysis = analyzer_.getCached(params.textDocument.uri);
+    if (!analysis) {
+        auto res = analyzer_.analyze(*docOpt);
+        analyzer_.updateCache(params.textDocument.uri, std::move(res));
+        analysis = analyzer_.getCached(params.textDocument.uri);
+    }
+
+    auto items = getCompletions(*docOpt, *analysis, params.position);
+    JsonValue arr = JsonValue::array();
+    for (const auto& item : items) {
+        arr.push_back(item.toJson());
+    }
+    return JsonRpcResponse::makeResult(req.id, std::move(arr));
+}
+
+JsonRpcResponse LspServer::handleSignatureHelp(const JsonRpcRequest& req) {
+    if (req.params.isNull()) return JsonRpcResponse::makeResult(req.id, nullptr);
+    auto params = TextDocumentPositionParams::fromJson(req.params);
+    auto docOpt = vfs_.getDocument(params.textDocument.uri);
+    if (!docOpt.has_value()) return JsonRpcResponse::makeResult(req.id, nullptr);
+
+    auto analysis = analyzer_.getCached(params.textDocument.uri);
+    if (!analysis) {
+        auto res = analyzer_.analyze(*docOpt);
+        analyzer_.updateCache(params.textDocument.uri, std::move(res));
+        analysis = analyzer_.getCached(params.textDocument.uri);
+    }
+
+    auto sig = getSignatureHelp(*docOpt, *analysis, params.position);
+    if (sig.has_value()) {
+        return JsonRpcResponse::makeResult(req.id, sig->toJson());
+    }
+    return JsonRpcResponse::makeResult(req.id, nullptr);
 }
 
 JsonRpcResponse LspServer::handleDocumentSymbol(const JsonRpcRequest& req) {

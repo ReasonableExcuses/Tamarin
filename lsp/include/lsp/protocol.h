@@ -307,6 +307,62 @@ struct CompletionItem {
     }
 };
 
+struct ParameterInformation {
+    std::string label;
+    std::string documentation;
+
+    JsonValue toJson() const {
+        JsonValue j = JsonValue::object();
+        j["label"] = label;
+        if (!documentation.empty()) {
+            j["documentation"] = JsonValue{
+                {"kind", "markdown"},
+                {"value", documentation}
+            };
+        }
+        return j;
+    }
+};
+
+struct SignatureInformation {
+    std::string label;
+    std::string documentation;
+    std::vector<ParameterInformation> parameters;
+    int activeParameter = 0;
+
+    JsonValue toJson() const {
+        JsonValue j = JsonValue::object();
+        j["label"] = label;
+        if (!documentation.empty()) {
+            j["documentation"] = JsonValue{
+                {"kind", "markdown"},
+                {"value", documentation}
+            };
+        }
+        JsonValue params = JsonValue::array();
+        for (const auto& p : parameters) params.push_back(p.toJson());
+        j["parameters"] = std::move(params);
+        j["activeParameter"] = activeParameter;
+        return j;
+    }
+};
+
+struct SignatureHelp {
+    std::vector<SignatureInformation> signatures;
+    int activeSignature = 0;
+    int activeParameter = 0;
+
+    JsonValue toJson() const {
+        JsonValue j = JsonValue::object();
+        JsonValue sigs = JsonValue::array();
+        for (const auto& s : signatures) sigs.push_back(s.toJson());
+        j["signatures"] = std::move(sigs);
+        j["activeSignature"] = activeSignature;
+        j["activeParameter"] = activeParameter;
+        return j;
+    }
+};
+
 enum class SymbolKind : int {
     File = 1,
     Module = 2,

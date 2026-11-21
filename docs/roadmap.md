@@ -1,6 +1,6 @@
 # Tamarin Technical Roadmap: Towards Version 1.0 GA
 
-**Current Version:** 0.17.0  
+**Current Version:** 0.18.0  
 **Target Milestone:** 1.0.0 General Availability  
 **Document Classification:** Systems Engineering & Compiler Architecture Plan  
 
@@ -16,8 +16,9 @@ Tamarin has established a verified, zero-compromise foundation:
 - **Package Management**: Native `troop` CLI with deterministic SemVer 2.0.0 resolution and lockfile generation.
 - **Tier 1 Cross-Platform Portability**: First-class native support across Windows MSVC (`x86_64`), Linux GNU (`x86_64`, `aarch64`), and Apple Silicon macOS Darwin (`aarch64`), with `@cfg(...)` conditional compilation directives and multi-OS GitHub Actions CI.
 - **High-Performance Standard Library**: Abseil-style Swiss Table `HashMap<K, V>` with 16-way SIMD group probing, zero-allocation streaming `std.json`, and hardware bit-twiddling intrinsics (`std.bits`).
+- **Developer Tooling & Interoperability**: Production-grade `tamarin-lsp` (LSP 3.17 server with real-time squiggles, hover, definition, references, outline, completion, signature help) and `tamarin-bindgen` (automated C header binding generator).
 
-The path to **Version 1.0 GA** focuses on cross-platform portability, high-performance standard library algorithms, developer tooling (LSP), and self-hosting.
+The path to **Version 1.0 GA** focuses on developer ecosystem maturity, graphics/GUI bindings, and self-hosting.
 
 ---
 
@@ -27,10 +28,10 @@ The path to **Version 1.0 GA** focuses on cross-platform portability, high-perfo
   [ v0.16.0 ] ──────────► Cross-Platform Native Portability, @cfg, Multi-OS CI (Windows, Linux, macOS)
           │
           ▼
-  [ v0.17.0 Current ] ──► High-Performance Stdlib: Swiss Table, Zero-Alloc JSON, Hardware std.bits (440/440 Passed)
+  [ v0.17.0 ] ──────────► High-Performance Stdlib: Swiss Table, Zero-Alloc JSON, Hardware std.bits (440/440 Passed)
           │
           ▼
-  [ v0.18.0 ] ──────────► Tooling & Ecosystem: tamarin-lsp, tamarin-bindgen, & GUI Packages (Raylib/SDL3)
+  [ v0.18.0 Current ] ──► Tooling & Ecosystem: tamarin-lsp, tamarin-bindgen, VS Code Extension (625/625 Passed)
           │
           ▼
   [ v0.19.0 ] ──────────► Self-Hosting Compiler Prototype (Tamarin Frontend in Tamarin)
@@ -77,20 +78,31 @@ The path to **Version 1.0 GA** focuses on cross-platform portability, high-perfo
 
 ---
 
-### Milestone v0.18.0: Developer Tooling (`tamarin-lsp`), `tamarin-bindgen`, and GUI Ecosystem
-*Target Date:* Q3 2027
+### Milestone v0.18.0: Developer Tooling (`tamarin-lsp`), `tamarin-bindgen`, and Editor Packaging [COMPLETED]
+*Completed:* November 2026
 
 - **`tamarin-lsp` (Language Server Protocol Engine)**:
-  - Implement full LSP JSON-RPC server communicating over standard I/O.
-  - Provide real-time semantic diagnostics, error squiggles, and warning reporting.
-  - Implement autocompletion, hover documentation, go-to-definition, and find-all-references using persistent AST symbol graphs.
-  - Publish official VS Code, Neovim, and Helix editor extensions.
-- **`tamarin-bindgen` (Automatic C/C++ Binding Generator) [COMPLETED]**:
+  - Implemented full LSP 3.17 JSON-RPC 2.0 server communicating over standard I/O (`--stdio`).
+  - **In-Memory VFS & UTF-16 Position Translation**: Real-time multi-document synchronization tracking open buffers, incremental edits, and bidirectional UTF-8/UTF-16 code unit offset mappings.
+  - **Fault-Tolerant Parser Error Recovery**: Resynchronization tokens for incomplete statements and blocks, keeping the AST and document outline valid during active keystrokes.
+  - **Real-Time Diagnostic Engine**: Instantaneous error and warning squiggles published via `textDocument/publishDiagnostics` with source spans, severity levels, and automated squiggle clearing upon edit fixes.
+  - **Semantic Navigation & Inspection**:
+    - `textDocument/hover`: Markdown formatted tooltips with full type signatures, parameter docs, and struct memory layout directives (`@c_layout`, `@layout(scan)`).
+    - `textDocument/definition`: Instant go-to-definition jump targeting local variables, function parameters, methods, functions, structs, enums, variants, and traits.
+    - `textDocument/references`: Find-references locating all lexical usages across the document.
+    - `textDocument/documentSymbol`: Hierarchical document outline tree and editor breadcrumbs.
+  - **Intelligent Code Completion & Signature Help**:
+    - `textDocument/completion`: Complete keyword set, built-in types, in-scope identifiers, and struct dot-completion (`v.`) enumerating fields and methods.
+    - `textDocument/signatureHelp`: Interactive parameter help and active parameter tracking during function calls.
+- **Official Editor Extensions & Packaging**:
+  - VS Code extension in `editors/vscode/` (`tamarin-vscode-0.18.0`) with TextMate grammar, language configuration, and language client bootstrap.
+  - Comprehensive editor configuration guides in `docs/lsp.md` for VS Code, Neovim (`nvim-lspconfig`), Helix (`languages.toml`), and Sublime Text (`LSP`).
+- **`tamarin-bindgen` (Automatic C/C++ Binding Generator)**:
   - `libclang` C AST cursor visitor generating idiomatic `@c_layout` structs and `extern "C"` declarations directly from arbitrary C headers.
   - Automatically translates C types, pointers (`*T`, `*const T`), fixed-size arrays (`T[N]`), sequential ADT enums (`enum Name { ... }`), bitflag/non-sequential enums (`const int`), preprocessor `#define` constants, and thin C callback function pointers (`*void /* fn(...) -> ret */`).
   - Automated keyword sanitization resolving collisions between C identifiers and Tamarin reserved keywords (`type_`, `trait_`, `fn_`, `match_`).
   - Dual-interface CLI: standalone executable (`tamarin-bindgen`) and integrated compiler subcommand (`tamarin bindgen`).
-  - Fully integrated into CMake with cross-platform `libclang` discovery, comprehensive unit tests, and end-to-end binding compilation verification.
+  - Validated on 120 hard real-world C header patterns with 100% pass rate.
 - **GUI & Graphics Ecosystem (Option B Architecture)**:
   - Clean separation of concerns: GUI and graphics run via high-performance C ABI interop in package space, keeping the compiler core and standard library lightweight, embeddable, and free of massive C++ graphics engine dependencies.
   - Use `tamarin-bindgen` to generate and maintain official community bindings:
