@@ -732,7 +732,7 @@ int main() { return add(20, 22); }
             link_args = ["-l", "raylib", "-l", "m", "-l", "pthread", "-l", "dl", "-l", "GL", "-l", "rt", "-l", "X11"]
         elif IS_DARWIN:
             has_native = True
-            link_args = ["-l", "raylib", "-framework", "OpenGL", "-framework", "Cocoa", "-framework", "IOKit", "-framework", "CoreVideo"]
+            link_args = ["-L", "/opt/homebrew/lib", "-L", "/usr/local/lib", "-l", "raylib", "-framework", "OpenGL", "-framework", "Cocoa", "-framework", "IOKit", "-framework", "CoreVideo"]
 
         if not has_native:
             self.skip(suite_name, "Raylib Headless Demos", "Raylib native libraries not found")

@@ -15,3 +15,4 @@ links = ["m", "pthread", "dl", "GL", "rt", "X11"]
 
 [target.macos]
 links = ["-framework OpenGL", "-framework Cocoa", "-framework IOKit", "-framework CoreVideo"]
+lib-dirs = ["/opt/homebrew/lib", "/usr/local/lib"]
