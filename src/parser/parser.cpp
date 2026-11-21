@@ -1277,6 +1277,9 @@ ParamDecl Parser::parseParam() {
     }
 
     auto type = parseType();
+    if (isConst && type && type->kind == TypeNodeKind::Reference) {
+        static_cast<ReferenceTypeNode*>(type.get())->isConst = true;
+    }
     bool isArray = false;
     ExprPtr arraySize;
 
@@ -1525,6 +1528,9 @@ StmtPtr Parser::parseVarDeclOrExprStmt(bool isConst) {
     // We need to distinguish "int x = ..." from "x + y;"
     // If we see a type keyword followed by identifier, it's a decl
     auto type = parseType();
+    if (isConst && type && type->kind == TypeNodeKind::Reference) {
+        static_cast<ReferenceTypeNode*>(type.get())->isConst = true;
+    }
     bool isArray = false;
     ExprPtr arraySize;
 

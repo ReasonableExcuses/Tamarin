@@ -968,6 +968,14 @@ bool TypeChecker::registerBorrow(const std::string& borrower, const std::string&
                     diag_.report(loc, Severity::Error,
                                  "cannot borrow '" + target + "' as mutable more than once at a time; already borrowed by '" + b.borrower + "'");
                     return false;
+                } else if (isMutable && !b.isMutable) {
+                    diag_.report(loc, Severity::Error,
+                                 "cannot borrow '" + target + "' as mutable while also borrowed as immutable by '" + b.borrower + "'");
+                    return false;
+                } else if (!isMutable && b.isMutable) {
+                    diag_.report(loc, Severity::Error,
+                                 "cannot borrow '" + target + "' as immutable while also borrowed as mutable by '" + b.borrower + "'");
+                    return false;
                 }
             }
         }
@@ -1218,36 +1226,42 @@ bool TypeChecker::isRValue(const ast::Expr* expr) {
 }
 
 void TypeChecker::markAssigned(const std::string& name) {
+    bool foundInAssigned = false;
     for (auto it = assignedStack_.rbegin(); it != assignedStack_.rend(); ++it) {
         auto found = it->find(name);
         if (found != it->end()) {
             found->second = true;
-            return;
+            foundInAssigned = true;
             break;
         }
     }
-    if (!assignedStack_.empty()) {
+    if (!foundInAssigned && !assignedStack_.empty()) {
         assignedStack_.back()[name] = true;
     }
     // Clear moved state upon reassignment
+    bool foundInMoved = false;
     for (auto it = movedStack_.rbegin(); it != movedStack_.rend(); ++it) {
         auto found = it->find(name);
         if (found != it->end()) {
             found->second = false;
-            break;
+            foundInMoved = true;
         }
+    }
+    if (!foundInMoved && !movedStack_.empty()) {
+        movedStack_.back()[name] = false;
     }
 }
 
 void TypeChecker::markMoved(const std::string& name) {
+    bool foundInMoved = false;
     for (auto it = movedStack_.rbegin(); it != movedStack_.rend(); ++it) {
         auto found = it->find(name);
         if (found != it->end()) {
             found->second = true;
-            break;
+            foundInMoved = true;
         }
     }
-    if (!movedStack_.empty()) {
+    if (!foundInMoved && !movedStack_.empty()) {
         movedStack_.back()[name] = true;
     }
     // Also mark as unassigned
@@ -1814,15 +1828,13 @@ const Type* TypeChecker::checkIdentifier(IdentifierExpr& expr) {
         expr.name = sym->mangledName;
     }
 
-    if (!sym->isFunction && !sym->isParameter && !sym->isConst && !sym->type->isArray() &&
-        !sym->type->isRef() && !isAssigned(expr.name)) {
-        if (isMoved(expr.name)) {
-            diag_.report(expr.loc, Severity::Error,
-                         "use of moved variable '" + expr.name + "'");
-        } else {
-            diag_.report(expr.loc, Severity::Error,
-                         "variable '" + expr.name + "' is used before being initialized");
-        }
+    if (isMoved(expr.name)) {
+        diag_.report(expr.loc, Severity::Error,
+                     "use of moved variable '" + expr.name + "'");
+    } else if (!sym->isFunction && !sym->isParameter && !sym->isConst && !sym->type->isArray() &&
+               !sym->type->isRef() && !isAssigned(expr.name)) {
+        diag_.report(expr.loc, Severity::Error,
+                     "variable '" + expr.name + "' is used before being initialized");
     }
 
     ProvenanceSet pSet = getVarProvenance(sym->name);
@@ -2111,13 +2123,10 @@ const Type* TypeChecker::checkUnary(UnaryExpr& expr) {
                 if (sym && sym->isConst) {
                     diag_.report(expr.loc, Severity::Error, "cannot modify const variable '" + id.name + "'");
                 }
-                if (!isAssigned(id.name)) {
+                if (isMoved(id.name)) {
+                    diag_.report(id.loc, Severity::Error, "use of moved variable '" + id.name + "'");
+                } else if (sym && !sym->isParameter && !isAssigned(id.name)) {
                     diag_.report(id.loc, Severity::Error, "variable '" + id.name + "' is used before being initialized");
-                    if (isMoved(id.name)) {
-                        diag_.report(id.loc, Severity::Error, "use of moved variable '" + id.name + "'");
-                    } else {
-                        diag_.report(id.loc, Severity::Error, "variable '" + id.name + "' is used before being initialized");
-                    }
                 }
                 if (!activeLambdaStack_.empty() && sym && !sym->isFunction && !sym->isGlobal) {
                     size_t symDepth = syms_.lookupScopeDepth(id.name);
@@ -2269,13 +2278,11 @@ const Type* TypeChecker::checkAssign(AssignExpr& expr) {
                 diag_.report(expr.loc, Severity::Error,
                              "cannot assign to const reference '" + id.name + "'");
             }
-            if (expr.op != AssignOp::Assign && !sym->type->isRef() && !isAssigned(id.name)) {
-                diag_.report(expr.loc, Severity::Error,
-                             "variable '" + id.name + "' is used before being initialized");
+            if (expr.op != AssignOp::Assign && !sym->type->isRef()) {
                 if (isMoved(id.name)) {
                     diag_.report(expr.loc, Severity::Error,
                                  "use of moved variable '" + id.name + "'");
-                } else {
+                } else if (!sym->isParameter && !sym->isConst && !isAssigned(id.name)) {
                     diag_.report(expr.loc, Severity::Error,
                                  "variable '" + id.name + "' is used before being initialized");
                 }
@@ -2808,11 +2815,14 @@ const Type* TypeChecker::checkCall(CallExpr& expr) {
         checkBorrowMove(id.name, expr.loc);
 
         // Check if already moved or uninitialized
-        if (!isAssigned(id.name)) {
-            if (isMoved(id.name)) {
+        if (isMoved(id.name)) {
+            diag_.report(expr.loc, Severity::Error, "use of moved variable '" + id.name + "'");
+        } else if (!isAssigned(id.name)) {
+            diag_.report(expr.loc, Severity::Error, "variable '" + id.name + "' is used before being initialized");
+        } else if (!loopEntryDepths_.empty()) {
+            size_t declDepth = syms_.lookupScopeDepth(id.name);
+            if (declDepth > 0 && declDepth < loopEntryDepths_.back()) {
                 diag_.report(expr.loc, Severity::Error, "use of moved variable '" + id.name + "'");
-            } else {
-                diag_.report(expr.loc, Severity::Error, "variable '" + id.name + "' is used before being initialized");
             }
         }
 
@@ -5417,6 +5427,9 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
             } else {
                 elemTy = resolveType(*v.type);
                 varTy = elemTy;
+                if (v.isConst && varTy && varTy->isReference() && !varTy->isConstRef) {
+                    varTy = tc_.getReference(varTy->elementType, true, varTy->isRawPointer);
+                }
             }
 
             if (elemTy && elemTy->isVoid()) {
@@ -5573,6 +5586,10 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
                             }
                             if (!tStr.empty()) break;
                         }
+                        if (tStr.empty()) {
+                            tStr = srcName;
+                            rTarget = srcName;
+                        }
                     }
                 }
                 if (tStr.empty() && v.initializer) {
@@ -5655,6 +5672,9 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
 
             if (!assignedStack_.empty()) {
                 assignedStack_.back()[v.name] = isInitialized;
+            }
+            if (!movedStack_.empty()) {
+                movedStack_.back()[v.name] = false;
             }
 
             uint64_t curRid = currentRegionId();
@@ -5844,12 +5864,32 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
                     }
                 }
                 if (currentFuncReturnType && currentFuncReturnType->isReference()) {
+                    std::string rootName;
                     if (r.value->kind == ExprKind::Identifier) {
-                        auto& id = static_cast<IdentifierExpr&>(*r.value);
-                        auto sym = syms_.lookup(id.name);
+                        rootName = static_cast<IdentifierExpr&>(*r.value).name;
+                    } else if (r.value->kind == ExprKind::Field) {
+                        auto cur = r.value.get();
+                        while (cur && cur->kind == ExprKind::Field) {
+                            cur = static_cast<FieldExpr*>(cur)->object.get();
+                        }
+                        if (cur && cur->kind == ExprKind::Identifier) {
+                            rootName = static_cast<IdentifierExpr*>(cur)->name;
+                        }
+                    } else if (r.value->kind == ExprKind::Index) {
+                        auto cur = r.value.get();
+                        while (cur && (cur->kind == ExprKind::Index || cur->kind == ExprKind::Field)) {
+                            if (cur->kind == ExprKind::Index) cur = static_cast<IndexExpr*>(cur)->array.get();
+                            else cur = static_cast<FieldExpr*>(cur)->object.get();
+                        }
+                        if (cur && cur->kind == ExprKind::Identifier) {
+                            rootName = static_cast<IdentifierExpr*>(cur)->name;
+                        }
+                    }
+                    if (!rootName.empty()) {
+                        auto sym = syms_.lookup(rootName);
                         if (sym && !sym->isParameter) {
                             diag_.report(r.value->loc, Severity::Error,
-                                         "cannot return reference to local variable '" + id.name + "'");
+                                         "cannot return reference to local variable '" + rootName + "'");
                         }
                     }
                 }
@@ -5958,12 +5998,26 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
                     }
                 }
                 for (size_t depth = 0; depth < movedStack_.size(); ++depth) {
-                    for (auto& [var, moved] : movedStack_[depth]) {
-                        bool inThenM = (depth < thenMoved.size() && thenMoved[depth].count(var) && thenMoved[depth].at(var));
-                        bool inElseM = (depth < elseMoved.size() && elseMoved[depth].count(var) && elseMoved[depth].at(var));
-                        moved = inThenM || inElseM;
-                        if (inThenM != inElseM) {
-                            conditionallyMovedVars_.insert(var);
+                    if (depth < thenMoved.size()) {
+                        for (const auto& [var, wasMoved] : thenMoved[depth]) {
+                            if (wasMoved) {
+                                bool inElseM = (depth < elseMoved.size() && elseMoved[depth].count(var) && elseMoved[depth].at(var));
+                                movedStack_[depth][var] = true;
+                                if (!inElseM) {
+                                    conditionallyMovedVars_.insert(var);
+                                }
+                            }
+                        }
+                    }
+                    if (depth < elseMoved.size()) {
+                        for (const auto& [var, wasMoved] : elseMoved[depth]) {
+                            if (wasMoved) {
+                                bool inThenM = (depth < thenMoved.size() && thenMoved[depth].count(var) && thenMoved[depth].at(var));
+                                movedStack_[depth][var] = true;
+                                if (!inThenM) {
+                                    conditionallyMovedVars_.insert(var);
+                                }
+                            }
                         }
                     }
                 }
@@ -5979,11 +6033,12 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
                     }
                 }
                 for (size_t depth = 0; depth < movedStack_.size(); ++depth) {
-                    for (auto& [var, moved] : movedStack_[depth]) {
-                        bool inThenM = (depth < thenMoved.size() && thenMoved[depth].count(var) && thenMoved[depth].at(var));
-                        if (inThenM) {
-                            moved = true;
-                            conditionallyMovedVars_.insert(var);
+                    if (depth < thenMoved.size()) {
+                        for (const auto& [var, wasMoved] : thenMoved[depth]) {
+                            if (wasMoved) {
+                                movedStack_[depth][var] = true;
+                                conditionallyMovedVars_.insert(var);
+                            }
                         }
                     }
                 }
@@ -5999,7 +6054,9 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
             }
             auto beforeStack = assignedStack_;
             ++loopDepth_;
+            loopEntryDepths_.push_back(syms_.depth());
             checkStmt(*w.body, currentFuncReturnType);
+            loopEntryDepths_.pop_back();
             --loopDepth_;
             assignedStack_ = beforeStack;
             break;
@@ -6019,7 +6076,9 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
             }
             if (f.increment) checkExpr(*f.increment);
             ++loopDepth_;
+            loopEntryDepths_.push_back(syms_.depth());
             checkStmt(*f.body, currentFuncReturnType);
+            loopEntryDepths_.pop_back();
             --loopDepth_;
             popScope();
             syms_.popScope();

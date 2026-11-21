@@ -221,7 +221,7 @@ int main() {
 }
 "@ `
     -ExpectedOutcome "COMPILE_FAIL" `
-    -ExpectedDiagnostic "variable 'v' is used before being initialized"
+    -ExpectedDiagnostic "use of moved variable 'v'"
 
 Run-Probe `
     -Name "Reject copying resource-owning Vec<int> without explicit move" `

@@ -238,6 +238,10 @@ add_executable(tamarin_tests
     tests/parser/parser_test.cpp
     tests/sema/sema_test.cpp
     tests/codegen/codegen_test.cpp
+    tests/codegen/memory_safety_test.cpp
+    tests/codegen/concurrency_soundness_test.cpp
+    tests/codegen/ir_llvm_soundness_test.cpp
+    tests/codegen/compiler_performance_test.cpp
     tests/modules/module_test.cpp
     tests/modules/stdlib_test.cpp
     troop/tests/troop_test.cpp

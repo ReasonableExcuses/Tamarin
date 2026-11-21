@@ -303,6 +303,7 @@ private:
                                    const std::vector<const Type*>& paramTypes,
                                    SourceLocation loc);
     int loopDepth_ = 0;
+    std::vector<size_t> loopEntryDepths_;
     size_t parallelLoopScopeDepth_ = 0;
     int taskScopeDepth_ = 0;
     std::unordered_set<std::string> parallelLoopInductionVars_;
