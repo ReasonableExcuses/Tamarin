@@ -1,0 +1,451 @@
+// ============================================================================
+// Tamarin GUI Calculator - High-Performance Native Raylib 5.5 App
+// ============================================================================
+import raylib as rl;
+
+// ── Calculator State ────────────────────────────────────────────────────────
+struct CalcState {
+    int displayLen;
+    int exprLen;
+    double storedVal;
+    u8 pendingOp; // 0, '+', '-', '*', '/'
+    bool hasPendingOp;
+    bool shouldResetOnDigit;
+    bool hasError;
+};
+
+void resetAll(CalcState& s, u8 display[], u8 expr[]) {
+    display[0] = 48u8; // '0'
+    display[1] = 0u8;
+    s.displayLen = 1;
+    expr[0] = 0u8;
+    s.exprLen = 0;
+    s.storedVal = 0.0;
+    s.pendingOp = 0u8;
+    s.hasPendingOp = false;
+    s.shouldResetOnDigit = false;
+    s.hasError = false;
+}
+
+double parseDouble(const u8 buf[], int len) {
+    double res = 0.0;
+    double frac = 0.0;
+    double div = 10.0;
+    bool inFrac = false;
+    bool neg = false;
+    int i = 0;
+    if (len > 0 && buf[0] == 45u8) {
+        neg = true;
+        i = 1;
+    }
+    while (i < len) {
+        u8 c = buf[i];
+        if (c == 46u8) {
+            inFrac = true;
+        } else if (c >= 48u8 && c <= 57u8) {
+            double digit = (double)(c - 48u8);
+            if (!inFrac) {
+                res = res * 10.0 + digit;
+            } else {
+                frac = frac + digit / div;
+                div = div * 10.0;
+            }
+        }
+        i = i + 1;
+    }
+    double total = res + frac;
+    if (neg) { total = -total; }
+    return total;
+}
+
+void formatDouble(double val, u8 buf[], int& outLen) {
+    if (val != val) {
+        buf[0] = 69u8; buf[1] = 114u8; buf[2] = 114u8; buf[3] = 0u8;
+        outLen = 3;
+        return;
+    }
+    bool neg = false;
+    if (val < 0.0) {
+        neg = true;
+        val = -val;
+    }
+    int intPart = (int)val;
+    double fracPart = val - (double)intPart;
+
+    u8 temp[32];
+    int tLen = 0;
+    if (intPart == 0) {
+        temp[0] = 48u8;
+        tLen = 1;
+    } else {
+        int n = intPart;
+        while (n > 0) {
+            int rem = n % 10;
+            temp[tLen] = (u8)(48 + rem);
+            tLen = tLen + 1;
+            n = n / 10;
+        }
+    }
+
+    int pos = 0;
+    if (neg) {
+        buf[pos] = 45u8;
+        pos = pos + 1;
+    }
+    int k = tLen - 1;
+    while (k >= 0) {
+        buf[pos] = temp[k];
+        pos = pos + 1;
+        k = k - 1;
+    }
+
+    if (fracPart > 0.0000001 && pos < 20) {
+        buf[pos] = 46u8;
+        pos = pos + 1;
+        int decimals = 0;
+        while (decimals < 6 && fracPart > 0.0000001 && pos < 26) {
+            fracPart = fracPart * 10.0;
+            int d = (int)fracPart;
+            buf[pos] = (u8)(48 + d);
+            pos = pos + 1;
+            fracPart = fracPart - (double)d;
+            decimals = decimals + 1;
+        }
+        while (pos > 0 && buf[pos - 1] == 48u8) {
+            pos = pos - 1;
+        }
+        if (pos > 0 && buf[pos - 1] == 46u8) {
+            pos = pos - 1;
+        }
+    }
+    buf[pos] = 0u8;
+    outLen = pos;
+}
+
+void appendDigit(CalcState& s, u8 display[], u8 digit) {
+    if (s.hasError || s.shouldResetOnDigit || (s.displayLen == 1 && display[0] == 48u8)) {
+        display[0] = digit;
+        display[1] = 0u8;
+        s.displayLen = 1;
+        s.shouldResetOnDigit = false;
+        s.hasError = false;
+    } else if (s.displayLen < 15) {
+        display[s.displayLen] = digit;
+        s.displayLen = s.displayLen + 1;
+        display[s.displayLen] = 0u8;
+    }
+}
+
+void appendDot(CalcState& s, u8 display[]) {
+    if (s.hasError || s.shouldResetOnDigit) {
+        display[0] = 48u8;
+        display[1] = 46u8;
+        display[2] = 0u8;
+        s.displayLen = 2;
+        s.shouldResetOnDigit = false;
+        s.hasError = false;
+        return;
+    }
+    bool hasDot = false;
+    for (int i = 0; i < s.displayLen; i = i + 1) {
+        if (display[i] == 46u8) { hasDot = true; }
+    }
+    if (!hasDot && s.displayLen < 15) {
+        display[s.displayLen] = 46u8;
+        s.displayLen = s.displayLen + 1;
+        display[s.displayLen] = 0u8;
+    }
+}
+
+void doBackspace(CalcState& s, u8 display[], u8 expr[]) {
+    if (s.hasError || s.shouldResetOnDigit) {
+        resetAll(s, display, expr);
+        return;
+    }
+    if (s.displayLen > 1) {
+        s.displayLen = s.displayLen - 1;
+        display[s.displayLen] = 0u8;
+    } else {
+        display[0] = 48u8;
+        display[1] = 0u8;
+        s.displayLen = 1;
+    }
+}
+
+void doToggleSign(CalcState& s, u8 display[]) {
+    if (s.hasError) return;
+    if (s.displayLen == 1 && display[0] == 48u8) return;
+    if (display[0] == 45u8) {
+        for (int i = 0; i < s.displayLen - 1; i = i + 1) {
+            display[i] = display[i + 1];
+        }
+        s.displayLen = s.displayLen - 1;
+        display[s.displayLen] = 0u8;
+    } else if (s.displayLen < 30) {
+        for (int i = s.displayLen; i >= 0; i = i - 1) {
+            display[i + 1] = display[i];
+        }
+        display[0] = 45u8;
+        s.displayLen = s.displayLen + 1;
+        display[s.displayLen] = 0u8;
+    }
+}
+
+void doPercent(CalcState& s, u8 display[]) {
+    if (s.hasError) return;
+    double v = parseDouble(display, s.displayLen) / 100.0;
+    formatDouble(v, display, s.displayLen);
+}
+
+void executePending(CalcState& s, u8 display[]) {
+    if (!s.hasPendingOp) return;
+    double current = parseDouble(display, s.displayLen);
+    double result = 0.0;
+    if (s.pendingOp == 43u8) { // '+'
+        result = s.storedVal + current;
+    } else if (s.pendingOp == 45u8) { // '-'
+        result = s.storedVal - current;
+    } else if (s.pendingOp == 42u8) { // '*'
+        result = s.storedVal * current;
+    } else if (s.pendingOp == 47u8) { // '/'
+        if (current == 0.0) {
+            s.hasError = true;
+            display[0] = 69u8; display[1] = 114u8; display[2] = 114u8; display[3] = 111u8; display[4] = 114u8; display[5] = 0u8;
+            s.displayLen = 5;
+            s.hasPendingOp = false;
+            s.shouldResetOnDigit = true;
+            return;
+        }
+        result = s.storedVal / current;
+    }
+    formatDouble(result, display, s.displayLen);
+    s.storedVal = result;
+}
+
+void doOperator(CalcState& s, u8 display[], u8 expr[], u8 op) {
+    if (s.hasError) return;
+    if (s.hasPendingOp && !s.shouldResetOnDigit) {
+        executePending(s, display);
+    } else {
+        s.storedVal = parseDouble(display, s.displayLen);
+    }
+    s.pendingOp = op;
+    s.hasPendingOp = true;
+    s.shouldResetOnDigit = true;
+
+    for (int i = 0; i < s.displayLen; i = i + 1) {
+        expr[i] = display[i];
+    }
+    expr[s.displayLen] = 32u8; // ' '
+    expr[s.displayLen + 1] = op;
+    expr[s.displayLen + 2] = 0u8;
+    s.exprLen = s.displayLen + 2;
+}
+
+void doEquals(CalcState& s, u8 display[], u8 expr[]) {
+    if (s.hasError || !s.hasPendingOp) return;
+    executePending(s, display);
+    s.hasPendingOp = false;
+    s.pendingOp = 0u8;
+    s.shouldResetOnDigit = true;
+    expr[0] = 0u8;
+    s.exprLen = 0;
+}
+
+*const u8 getBtnLabel(int idx) {
+    if (idx == 0) return "C";
+    if (idx == 1) return "+/-";
+    if (idx == 2) return "%";
+    if (idx == 3) return "/";
+    if (idx == 4) return "7";
+    if (idx == 5) return "8";
+    if (idx == 6) return "9";
+    if (idx == 7) return "*";
+    if (idx == 8) return "4";
+    if (idx == 9) return "5";
+    if (idx == 10) return "6";
+    if (idx == 11) return "-";
+    if (idx == 12) return "1";
+    if (idx == 13) return "2";
+    if (idx == 14) return "3";
+    if (idx == 15) return "+";
+    if (idx == 16) return "0";
+    if (idx == 17) return ".";
+    if (idx == 18) return "DEL";
+    if (idx == 19) return "=";
+    return "";
+}
+
+extern "C" {
+    *u8 getenv(*const u8 name);
+}
+
+// ── Main UI Window Loop ─────────────────────────────────────────────────────
+int main() {
+    const int winWidth = 360;
+    const int winHeight = 560;
+
+    *u8 benchEnv = getenv("TAMARIN_CALC_BENCH");
+    int maxFrames = 0;
+    if (benchEnv != null) {
+        maxFrames = 300;
+        rl::SetConfigFlags(rl::FLAG_WINDOW_HIDDEN);
+    }
+
+    rl::InitWindow(winWidth, winHeight, "Tamarin GUI Calculator");
+    rl::SetTargetFPS(60);
+
+    CalcState state;
+    state.displayLen = 1;
+    state.exprLen = 0;
+    state.storedVal = 0.0;
+    state.pendingOp = 0u8;
+    state.hasPendingOp = false;
+    state.shouldResetOnDigit = false;
+    state.hasError = false;
+
+    u8 display[32] = { 48u8, 0u8 };
+    u8 expr[48] = { 0u8 };
+
+    // Color Palette
+    rl::Color colBg       = { 30u8, 30u8, 46u8, 255u8 };     // Deep Charcoal
+    rl::Color colDispBg   = { 24u8, 24u8, 37u8, 255u8 };     // Display Panel
+    rl::Color colBtnNum   = { 49u8, 50u8, 68u8, 255u8 };     // Dark Slate
+    rl::Color colBtnHover = { 69u8, 71u8, 90u8, 255u8 };     // Hover Slate
+    rl::Color colBtnTop   = { 59u8, 62u8, 82u8, 255u8 };     // Top row fn buttons
+    rl::Color colBtnOp    = { 108u8, 92u8, 231u8, 255u8 };   // Vibrant Indigo
+    rl::Color colBtnOpHov = { 162u8, 155u8, 254u8, 255u8 };  // Light Indigo
+    rl::Color colBtnEq    = { 0u8, 184u8, 148u8, 255u8 };    // Emerald Accent
+    rl::Color colBtnEqHov = { 85u8, 239u8, 196u8, 255u8 };   // Bright Emerald
+    rl::Color colBtnDel   = { 214u8, 48u8, 49u8, 255u8 };    // Crimson
+    rl::Color colBtnDelHov= { 255u8, 118u8, 117u8, 255u8 };  // Soft Crimson
+    rl::Color colTextWhite= { 240u8, 240u8, 245u8, 255u8 };
+    rl::Color colTextMuted= { 147u8, 153u8, 178u8, 255u8 };
+    rl::Color colTextDark = { 20u8, 25u8, 35u8, 255u8 };
+    rl::Color colBorder   = { 49u8, 50u8, 68u8, 255u8 };
+
+    int frameCount = 0;
+    while (!rl::WindowShouldClose()) {
+        if (maxFrames > 0 && frameCount >= maxFrames) {
+            break;
+        }
+        frameCount = frameCount + 1;
+
+        rl::Vector2 mouse = rl::GetMousePosition();
+        bool mouseClicked = rl::IsMouseButtonPressed(rl::MOUSE_LEFT_BUTTON);
+
+        // Keyboard Shortcuts
+        if (rl::IsKeyPressed(rl::KEY_ZERO) || rl::IsKeyPressed(rl::KEY_KP_0)) appendDigit(state, display, 48u8);
+        if (rl::IsKeyPressed(rl::KEY_ONE) || rl::IsKeyPressed(rl::KEY_KP_1)) appendDigit(state, display, 49u8);
+        if (rl::IsKeyPressed(rl::KEY_TWO) || rl::IsKeyPressed(rl::KEY_KP_2)) appendDigit(state, display, 50u8);
+        if (rl::IsKeyPressed(rl::KEY_THREE) || rl::IsKeyPressed(rl::KEY_KP_3)) appendDigit(state, display, 51u8);
+        if (rl::IsKeyPressed(rl::KEY_FOUR) || rl::IsKeyPressed(rl::KEY_KP_4)) appendDigit(state, display, 52u8);
+        if (rl::IsKeyPressed(rl::KEY_FIVE) || rl::IsKeyPressed(rl::KEY_KP_5)) appendDigit(state, display, 53u8);
+        if (rl::IsKeyPressed(rl::KEY_SIX) || rl::IsKeyPressed(rl::KEY_KP_6)) appendDigit(state, display, 54u8);
+        if (rl::IsKeyPressed(rl::KEY_SEVEN) || rl::IsKeyPressed(rl::KEY_KP_7)) appendDigit(state, display, 55u8);
+        if (rl::IsKeyPressed(rl::KEY_EIGHT) || rl::IsKeyPressed(rl::KEY_KP_8)) appendDigit(state, display, 56u8);
+        if (rl::IsKeyPressed(rl::KEY_NINE) || rl::IsKeyPressed(rl::KEY_KP_9)) appendDigit(state, display, 57u8);
+        if (rl::IsKeyPressed(rl::KEY_PERIOD) || rl::IsKeyPressed(rl::KEY_KP_DECIMAL)) appendDot(state, display);
+        if (rl::IsKeyPressed(rl::KEY_KP_ADD)) doOperator(state, display, expr, 43u8);
+        if (rl::IsKeyPressed(rl::KEY_KP_SUBTRACT) || rl::IsKeyPressed(rl::KEY_MINUS)) doOperator(state, display, expr, 45u8);
+        if (rl::IsKeyPressed(rl::KEY_KP_MULTIPLY)) doOperator(state, display, expr, 42u8);
+        if (rl::IsKeyPressed(rl::KEY_KP_DIVIDE) || rl::IsKeyPressed(rl::KEY_SLASH)) doOperator(state, display, expr, 47u8);
+        if (rl::IsKeyPressed(rl::KEY_ENTER) || rl::IsKeyPressed(rl::KEY_KP_ENTER) || rl::IsKeyPressed(rl::KEY_EQUAL)) doEquals(state, display, expr);
+        if (rl::IsKeyPressed(rl::KEY_BACKSPACE)) doBackspace(state, display, expr);
+        if (rl::IsKeyPressed(rl::KEY_ESCAPE) || rl::IsKeyPressed(rl::KEY_C)) resetAll(state, display, expr);
+
+        rl::BeginDrawing();
+        rl::ClearBackground(colBg);
+
+        // 1. Draw Display Screen
+        rl::Rectangle dispRec = { 16.0f, 16.0f, 328.0f, 100.0f };
+        rl::DrawRectangleRec(dispRec, colDispBg);
+        rl::DrawRectangleLinesEx(dispRec, 2.0f, colBorder);
+
+        // Top expression line
+        if (state.exprLen > 0) {
+            int exprW = rl::MeasureText(&expr[0], 18);
+            rl::DrawText(&expr[0], 330 - exprW, 26, 18, colTextMuted);
+        }
+
+        // Main value line
+        int textW = rl::MeasureText(&display[0], 36);
+        rl::DrawText(&display[0], 330 - textW, 60, 36, colTextWhite);
+
+        // 2. Draw 5x4 Button Grid
+        int btnW = 74;
+        int btnH = 68;
+        int startX = 16;
+        int startY = 132;
+        int gapX = 10;
+        int gapY = 12;
+
+        int row = 0;
+        while (row < 5) {
+            int col = 0;
+            while (col < 4) {
+                int idx = row * 4 + col;
+                int bx = startX + col * (btnW + gapX);
+                int by = startY + row * (btnH + gapY);
+                rl::Rectangle bRec = { (float)bx, (float)by, (float)btnW, (float)btnH };
+
+                bool hov = rl::CheckCollisionPointRec(mouse, bRec);
+
+                rl::Color curCol = colBtnNum;
+                rl::Color curTxt = colTextWhite;
+
+                if (idx == 0 || idx == 1 || idx == 2) {
+                    curCol = hov ? colBtnHover : colBtnTop;
+                } else if (idx == 3 || idx == 7 || idx == 11 || idx == 15) {
+                    curCol = hov ? colBtnOpHov : colBtnOp;
+                } else if (idx == 18) { // DEL
+                    curCol = hov ? colBtnDelHov : colBtnDel;
+                } else if (idx == 19) { // =
+                    curCol = hov ? colBtnEqHov : colBtnEq;
+                    curTxt = colTextDark;
+                } else {
+                    curCol = hov ? colBtnHover : colBtnNum;
+                }
+
+                rl::DrawRectangleRec(bRec, curCol);
+
+                *const u8 lbl = getBtnLabel(idx);
+                int lblW = rl::MeasureText(lbl, 22);
+                int lblX = bx + (btnW - lblW) / 2;
+                int lblY = by + (btnH - 22) / 2;
+                rl::DrawText(lbl, lblX, lblY, 22, curTxt);
+
+                if (hov && mouseClicked) {
+                    if (idx == 0) { resetAll(state, display, expr); }
+                    else if (idx == 1) { doToggleSign(state, display); }
+                    else if (idx == 2) { doPercent(state, display); }
+                    else if (idx == 3) { doOperator(state, display, expr, 47u8); } // '/'
+                    else if (idx == 4) { appendDigit(state, display, 55u8); } // '7'
+                    else if (idx == 5) { appendDigit(state, display, 56u8); } // '8'
+                    else if (idx == 6) { appendDigit(state, display, 57u8); } // '9'
+                    else if (idx == 7) { doOperator(state, display, expr, 42u8); } // '*'
+                    else if (idx == 8) { appendDigit(state, display, 52u8); } // '4'
+                    else if (idx == 9) { appendDigit(state, display, 53u8); } // '5'
+                    else if (idx == 10) { appendDigit(state, display, 54u8); } // '6'
+                    else if (idx == 11) { doOperator(state, display, expr, 45u8); } // '-'
+                    else if (idx == 12) { appendDigit(state, display, 49u8); } // '1'
+                    else if (idx == 13) { appendDigit(state, display, 50u8); } // '2'
+                    else if (idx == 14) { appendDigit(state, display, 51u8); } // '3'
+                    else if (idx == 15) { doOperator(state, display, expr, 43u8); } // '+'
+                    else if (idx == 16) { appendDigit(state, display, 48u8); } // '0'
+                    else if (idx == 17) { appendDot(state, display); }
+                    else if (idx == 18) { doBackspace(state, display, expr); }
+                    else if (idx == 19) { doEquals(state, display, expr); }
+                }
+
+                col = col + 1;
+            }
+            row = row + 1;
+        }
+
+        rl::EndDrawing();
+    }
+
+    rl::CloseWindow();
+    return 0;
+}

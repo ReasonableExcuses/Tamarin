@@ -439,6 +439,23 @@ int PackageManager::buildPackage(const std::filesystem::path& manifestPath, bool
 
     int exitCode = runCommand(cmd.str());
     if (exitCode == 0) {
+#ifdef _WIN32
+        // Deploy .dll dependencies from native lib-dirs next to the executable
+        auto destDir = outBinary.parent_path();
+        for (const auto& d : allLibDirs) {
+            std::filesystem::path p(d);
+            if (!p.is_absolute()) p = rootDir / p;
+            if (std::filesystem::exists(p) && std::filesystem::is_directory(p)) {
+                for (const auto& entry : std::filesystem::directory_iterator(p)) {
+                    if (entry.is_regular_file() && entry.path().extension() == ".dll") {
+                        std::error_code ec;
+                        std::filesystem::copy_file(entry.path(), destDir / entry.path().filename(),
+                            std::filesystem::copy_options::overwrite_existing, ec);
+                    }
+                }
+            }
+        }
+#endif
         std::cout << "   Finished " << (isRelease ? "release [optimized]" : "dev [unoptimized]")
                   << " target(s) in " << outBinary.string() << "\n";
     } else {

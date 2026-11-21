@@ -148,6 +148,7 @@ private:
     std::vector<std::string> linkDirs_;
     std::vector<std::string> linkerFlags_;
     std::unordered_map<std::string, const ir::IRFunction*> functionMap_;
+    const ir::IRFunction* currentFn_ = nullptr;
     std::unordered_set<int32_t> loopUnrollsUsed_;
     std::map<LoopMetaKey, int32_t> loopMetadataMap_;
 };

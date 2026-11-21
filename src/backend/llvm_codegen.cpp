@@ -2088,6 +2088,7 @@ void LLVMCodeGen::emitRuntimeHelpers(std::ostream& os) {
 }
 
 void LLVMCodeGen::emitFunction(const ir::IRFunction& fn, std::ostream& os) {
+    currentFn_ = &fn;
     valueTypes_.clear();
     intConstants_.clear();
     floatConstants_.clear();
@@ -2600,7 +2601,14 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
         case ir::Opcode::Return:
             if (inst.op1 != ir::InvalidValue) {
                 auto retTy = getValueType(inst.op1);
-                std::string tyStr = retTy ? llvmType(retTy) : "i32";
+                std::string tyStr = "i32";
+                if (isPointerValue_.count(inst.op1) ||
+                    (currentFn_ && currentFn_->returnType && (currentFn_->returnType->isPointer() || currentFn_->returnType->isRef())) ||
+                    (retTy && (retTy->isPointer() || retTy->isRef()))) {
+                    tyStr = "ptr";
+                } else if (retTy) {
+                    tyStr = llvmType(retTy);
+                }
                 os << "  ret " << tyStr << " " << formatOperand(inst.op1, retTy) << "\n";
             } else {
                 os << "  ret void\n";

@@ -1,0 +1,6 @@
+// Basic test for tamarin
+
+int main() {
+    println("Test passed for tamarin!");
+    return 0;
+}

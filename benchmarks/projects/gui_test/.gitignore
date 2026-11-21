@@ -1,0 +1,9 @@
+# Build artifacts
+**/bin/
+**/target/
+**/*.exe
+**/*.dll
+**/*.pdb
+**/*.obj
+**/*.o
+**/*.d
