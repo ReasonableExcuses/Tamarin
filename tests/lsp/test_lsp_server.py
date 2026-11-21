@@ -169,15 +169,53 @@ def run_tests():
             err = resp3.get("error", {})
             check("Unknown method error code == -32601", err.get("code") == -32601)
 
-        # Test 4: Shutdown request
-        client.send_request("shutdown", 3)
+        # Test 4: Document synchronization (didOpen, didChange, didClose)
+        doc_uri = "file:///workspace/sample.tam"
+        client.send_notification("textDocument/didOpen", {
+            "textDocument": {
+                "uri": doc_uri,
+                "languageId": "tamarin",
+                "version": 1,
+                "text": "int main() {\n    return 0;\n}\n"
+            }
+        })
+        check("didOpen notification handled without crashing", client.proc.poll() is None)
+
+        client.send_notification("textDocument/didChange", {
+            "textDocument": {
+                "uri": doc_uri,
+                "version": 2
+            },
+            "contentChanges": [
+                {"text": "int main() {\n    return 42;\n}\n"}
+            ]
+        })
+        check("didChange notification handled without crashing", client.proc.poll() is None)
+
+        # Test 5: Hover request on open document returns valid JSON-RPC response
+        client.send_request("textDocument/hover", 3, {
+            "textDocument": {"uri": doc_uri},
+            "position": {"line": 1, "character": 4}
+        })
+        resp_hover = client.read_message()
+        check("Hover response received", resp_hover is not None)
+        if resp_hover:
+            check("Hover response id == 3", resp_hover.get("id") == 3)
+
+        client.send_notification("textDocument/didClose", {
+            "textDocument": {"uri": doc_uri}
+        })
+        check("didClose notification handled without crashing", client.proc.poll() is None)
+
+        # Test 6: Shutdown request
+        client.send_request("shutdown", 4)
         resp4 = client.read_message()
         check("Shutdown response received", resp4 is not None)
         if resp4:
-            check("Shutdown response id == 3", resp4.get("id") == 3)
+            check("Shutdown response id == 4", resp4.get("id") == 4)
             check("Shutdown result is null", resp4.get("result") is None)
 
-        # Test 5: Exit notification terminates process with 0
+        # Test 7: Exit notification terminates process with 0
         client.send_notification("exit")
         ret = client.proc.wait(timeout=3.0)
         check("Process exits cleanly with code 0 on exit notification", ret == 0, f"ExitCode={ret}")

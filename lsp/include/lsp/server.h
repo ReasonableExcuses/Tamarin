@@ -6,6 +6,7 @@
 #include "lsp/json.h"
 #include "lsp/protocol.h"
 #include "lsp/transport.h"
+#include "lsp/vfs.h"
 
 #include <string>
 #include <vector>
@@ -38,6 +39,10 @@ public:
     /// Server state query.
     [[nodiscard]] ServerState state() const noexcept { return state_; }
 
+    /// Virtual File System access
+    [[nodiscard]] const Vfs& vfs() const noexcept { return vfs_; }
+    [[nodiscard]] Vfs& vfs() noexcept { return vfs_; }
+
     /// Publish diagnostics for a document.
     bool publishDiagnostics(const std::string& uri, const std::vector<Diagnostic>& diagnostics);
 
@@ -49,6 +54,7 @@ public:
 
 private:
     LspTransport& transport_;
+    Vfs vfs_;
     ServerState state_ = ServerState::Uninitialized;
     int exitCode_ = 0;
 

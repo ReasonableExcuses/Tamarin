@@ -167,6 +167,50 @@ struct TextDocumentContentChangeEvent {
     }
 };
 
+struct DidOpenTextDocumentParams {
+    TextDocumentItem textDocument;
+
+    static DidOpenTextDocumentParams fromJson(const JsonValue& j) {
+        DidOpenTextDocumentParams p;
+        if (const auto* td = j.get("textDocument")) {
+            p.textDocument = TextDocumentItem::fromJson(*td);
+        }
+        return p;
+    }
+};
+
+struct DidChangeTextDocumentParams {
+    VersionedTextDocumentIdentifier textDocument;
+    std::vector<TextDocumentContentChangeEvent> contentChanges;
+
+    static DidChangeTextDocumentParams fromJson(const JsonValue& j) {
+        DidChangeTextDocumentParams p;
+        if (const auto* td = j.get("textDocument")) {
+            p.textDocument = VersionedTextDocumentIdentifier::fromJson(*td);
+        }
+        if (const auto* cc = j.get("contentChanges")) {
+            if (cc->isArray()) {
+                for (const auto& item : cc->asArray()) {
+                    p.contentChanges.push_back(TextDocumentContentChangeEvent::fromJson(item));
+                }
+            }
+        }
+        return p;
+    }
+};
+
+struct DidCloseTextDocumentParams {
+    TextDocumentIdentifier textDocument;
+
+    static DidCloseTextDocumentParams fromJson(const JsonValue& j) {
+        DidCloseTextDocumentParams p;
+        if (const auto* td = j.get("textDocument")) {
+            p.textDocument = TextDocumentIdentifier::fromJson(*td);
+        }
+        return p;
+    }
+};
+
 // ── Navigation & Intelligence ───────────────────────────────────────────────
 
 struct Hover {

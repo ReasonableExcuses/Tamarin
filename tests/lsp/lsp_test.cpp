@@ -7,6 +7,11 @@
 #include "lsp/protocol.h"
 #include "lsp/transport.h"
 #include "lsp/server.h"
+#include "lsp/vfs.h"
+#include "tamarin/source/source_manager.h"
+#include "tamarin/lexer/lexer.h"
+#include "tamarin/parser/parser.h"
+#include "tamarin/diagnostics/diagnostic_engine.h"
 
 #include <sstream>
 
@@ -178,6 +183,199 @@ TAMARIN_TEST(Lsp, ServerLifecycle) {
     // 6. Exit notification transitions to Exited
     server.processMessage("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
     EXPECT_EQ(server.state(), ServerState::Exited);
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, VfsDocumentLifecycle) {
+    Vfs vfs;
+    std::string uri = "file:///c:/project/main.tam";
+    TextDocumentItem item{uri, "tamarin", 1, "int main() {\n    return 0;\n}\n"};
+
+    EXPECT_FALSE(vfs.hasDocument(uri));
+    vfs.openDocument(item);
+    EXPECT_TRUE(vfs.hasDocument(uri));
+
+    // Case-insensitivity & drive-letter normalization
+    EXPECT_TRUE(vfs.hasDocument("file:///C:/project/main.tam"));
+
+    auto doc = vfs.getDocument(uri);
+    EXPECT_TRUE(doc.has_value());
+    EXPECT_EQ(doc->version(), 1);
+    EXPECT_EQ(doc->lineCount(), 4);
+    EXPECT_EQ(doc->text(), item.text);
+
+    // Update
+    vfs.updateDocument(uri, 2, "int main() { return 42; }");
+    doc = vfs.getDocument(uri);
+    EXPECT_TRUE(doc.has_value());
+    EXPECT_EQ(doc->version(), 2);
+    EXPECT_EQ(doc->text(), "int main() { return 42; }");
+
+    // Close
+    vfs.closeDocument(uri);
+    EXPECT_FALSE(vfs.hasDocument(uri));
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, VfsUtf16PositionTranslation) {
+    // UTF-8 string containing ASCII and an astral-plane emoji:
+    // U+1F680 (🚀) is 4 bytes in UTF-8 (\xF0\x9F\x9A\x80) and 2 UTF-16 code units.
+    std::string code = "let a = 10;\nlet s = \"hi \xF0\x9F\x9A\x80!\";\n";
+    VfsDocument doc("file:///utf.tam", "tamarin", 1, code);
+
+    // Line 0: "let a = 10;\n"
+    EXPECT_EQ(doc.positionToOffset(Position{0, 0}), 0);
+    EXPECT_EQ(doc.positionToOffset(Position{0, 4}), 4); // 'a'
+    EXPECT_EQ(doc.offsetToPosition(4), (Position{0, 4}));
+
+    // Line 1:
+    // "let s = \"hi " has 12 ASCII chars (offsets 12..23, UTF-16 units 0..11)
+    // 🚀 is at offset 24, UTF-16 units 12 and 13.
+    // '!' is at offset 28 (24 + 4), UTF-16 unit 14.
+    size_t line1Start = doc.positionToOffset(Position{1, 0});
+    EXPECT_EQ(line1Start, 12);
+
+    size_t bangOffset = doc.positionToOffset(Position{1, 14});
+    EXPECT_EQ(bangOffset, 28);
+    EXPECT_EQ(code[bangOffset], '!');
+
+    Position bangPos = doc.offsetToPosition(bangOffset);
+    EXPECT_EQ(bangPos.line, 1);
+    EXPECT_EQ(bangPos.character, 14);
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, VfsIncrementalChange) {
+    Vfs vfs;
+    std::string uri = "file:///change.tam";
+    TextDocumentItem item{uri, "tamarin", 1, "int x = 10;\nint y = 20;\n"};
+    vfs.openDocument(item);
+
+    // Incremental change: replace "10" with "999"
+    // "10" is on Line 0, character 8 to 10
+    DidChangeTextDocumentParams changeParams;
+    changeParams.textDocument.uri = uri;
+    changeParams.textDocument.version = 2;
+
+    TextDocumentContentChangeEvent ev;
+    ev.range = Range{Position{0, 8}, Position{0, 10}};
+    ev.text = "999";
+    changeParams.contentChanges.push_back(ev);
+
+    EXPECT_TRUE(vfs.applyChanges(changeParams));
+
+    auto doc = vfs.getDocument(uri);
+    EXPECT_TRUE(doc.has_value());
+    EXPECT_EQ(doc->version(), 2);
+    EXPECT_EQ(doc->text(), "int x = 999;\nint y = 20;\n");
+
+    // Full document change (range is nullopt)
+    DidChangeTextDocumentParams fullParams;
+    fullParams.textDocument.uri = uri;
+    fullParams.textDocument.version = 3;
+
+    TextDocumentContentChangeEvent fullEv;
+    fullEv.text = "int z = 100;\n";
+    fullParams.contentChanges.push_back(fullEv);
+
+    EXPECT_TRUE(vfs.applyChanges(fullParams));
+    doc = vfs.getDocument(uri);
+    EXPECT_TRUE(doc.has_value());
+    EXPECT_EQ(doc->version(), 3);
+    EXPECT_EQ(doc->text(), "int z = 100;\n");
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, ParserFaultTolerance) {
+    // A source file where the first function has an intentional syntax error,
+    // but the second function is completely valid.
+    std::string source =
+        "int broken(int a {\n"
+        "    return 1;\n"
+        "}\n"
+        "\n"
+        "int valid_function() {\n"
+        "    int b = 42;\n"
+        "    return b;\n"
+        "}\n";
+
+    tamarin::SourceManager sm;
+    auto fileId = sm.addSource("fault_test.tam", source);
+    std::ostringstream errs;
+    tamarin::DiagnosticEngine diag(sm, errs);
+    tamarin::lexer::Lexer lex(sm, fileId, diag);
+    tamarin::parser::Parser parser(lex, diag);
+
+    auto prog = parser.parseProgram();
+
+    // The parser should report errors on the broken function
+    EXPECT_TRUE(diag.hasErrors());
+
+    // The parser should have recovered and parsed valid_function
+    bool foundValid = false;
+    for (const auto& decl : prog.decls) {
+        if (decl && decl->kind == tamarin::ast::DeclKind::Function) {
+            auto& fn = static_cast<tamarin::ast::FunctionDecl&>(*decl);
+            if (fn.name == "valid_function") {
+                foundValid = true;
+                break;
+            }
+        }
+    }
+    EXPECT_TRUE(foundValid);
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, ServerDocumentSync) {
+    std::istringstream in("");
+    std::ostringstream out;
+    LspTransport transport(in, out);
+    LspServer server(transport);
+
+    // Initialize server
+    server.processMessage("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}");
+    server.processMessage("{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}");
+
+    std::string uri = "file:///workspace/app.tam";
+    EXPECT_FALSE(server.vfs().hasDocument(uri));
+
+    // textDocument/didOpen
+    std::string openMsg =
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{"
+        "\"textDocument\":{\"uri\":\"" + uri + "\",\"languageId\":\"tamarin\",\"version\":1,\"text\":\"fn main() { return 0; }\"}"
+        "}}";
+    server.processMessage(openMsg);
+
+    EXPECT_TRUE(server.vfs().hasDocument(uri));
+    auto doc = server.vfs().getDocument(uri);
+    EXPECT_TRUE(doc.has_value());
+    EXPECT_EQ(doc->text(), "fn main() { return 0; }");
+
+    // textDocument/didChange (full replacement)
+    std::string changeMsg =
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{"
+        "\"textDocument\":{\"uri\":\"" + uri + "\",\"version\":2},"
+        "\"contentChanges\":[{\"text\":\"fn main() { return 100; }\"}]"
+        "}}";
+    server.processMessage(changeMsg);
+
+    doc = server.vfs().getDocument(uri);
+    EXPECT_TRUE(doc.has_value());
+    EXPECT_EQ(doc->version(), 2);
+    EXPECT_EQ(doc->text(), "fn main() { return 100; }");
+
+    // textDocument/didClose
+    std::string closeMsg =
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didClose\",\"params\":{"
+        "\"textDocument\":{\"uri\":\"" + uri + "\"}"
+        "}}";
+    server.processMessage(closeMsg);
+    EXPECT_FALSE(server.vfs().hasDocument(uri));
 
     return true;
 }

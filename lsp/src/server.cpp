@@ -163,20 +163,26 @@ void LspServer::handleExit(const JsonRpcRequest& /*notif*/) {
     state_ = ServerState::Exited;
 }
 
-void LspServer::handleDidOpen(const JsonRpcRequest& /*notif*/) {
-    // Handled in Phase 2 with VFS
+void LspServer::handleDidOpen(const JsonRpcRequest& notif) {
+    if (notif.params.isNull()) return;
+    auto params = DidOpenTextDocumentParams::fromJson(notif.params);
+    vfs_.openDocument(params.textDocument);
 }
 
-void LspServer::handleDidChange(const JsonRpcRequest& /*notif*/) {
-    // Handled in Phase 2 with VFS
+void LspServer::handleDidChange(const JsonRpcRequest& notif) {
+    if (notif.params.isNull()) return;
+    auto params = DidChangeTextDocumentParams::fromJson(notif.params);
+    vfs_.applyChanges(params);
 }
 
-void LspServer::handleDidClose(const JsonRpcRequest& /*notif*/) {
-    // Handled in Phase 2 with VFS
+void LspServer::handleDidClose(const JsonRpcRequest& notif) {
+    if (notif.params.isNull()) return;
+    auto params = DidCloseTextDocumentParams::fromJson(notif.params);
+    vfs_.closeDocument(params.textDocument.uri);
 }
 
 void LspServer::handleDidSave(const JsonRpcRequest& /*notif*/) {
-    // Handled in Phase 2 with VFS
+    // Optional save handler
 }
 
 JsonRpcResponse LspServer::handleHover(const JsonRpcRequest& req) {

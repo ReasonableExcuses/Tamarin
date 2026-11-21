@@ -559,25 +559,39 @@ Program Parser::parseProgram() {
     // 1. Imports at the beginning of the file (can have @cfg)
     while (true) {
         if (check(TokenKind::Import)) {
-            prog.imports.push_back(parseImport());
+            try {
+                prog.imports.push_back(parseImport());
+            } catch (const std::runtime_error&) {
+                while (!check(TokenKind::Eof) && !check(TokenKind::Semicolon)) {
+                    advance();
+                }
+                if (check(TokenKind::Semicolon)) advance();
+            }
         } else if (check(TokenKind::At) && lex_.peek().kind == TokenKind::Identifier && lex_.peek().text == "cfg") {
-            advance(); // eat '@'
-            advance(); // eat 'cfg'
-            auto cfg = parseCfgExpr();
-            if (check(TokenKind::Import)) {
-                auto imp = parseImport();
-                imp.cfg = cfg;
-                if (!cfg || cfg->evaluate(targetTriple_)) {
-                    prog.imports.push_back(std::move(imp));
-                }
-            } else {
-                // Not followed by import -> top-level declaration with this cfg
-                if (auto d = parseTopDecl(/*defaultExtern=*/false, /*defaultLinkage=*/"", cfg)) {
-                    if (!d->cfg || d->cfg->evaluate(targetTriple_)) {
-                        prog.decls.push_back(std::move(d));
+            try {
+                advance(); // eat '@'
+                advance(); // eat 'cfg'
+                auto cfg = parseCfgExpr();
+                if (check(TokenKind::Import)) {
+                    auto imp = parseImport();
+                    imp.cfg = cfg;
+                    if (!cfg || cfg->evaluate(targetTriple_)) {
+                        prog.imports.push_back(std::move(imp));
                     }
+                } else {
+                    // Not followed by import -> top-level declaration with this cfg
+                    if (auto d = parseTopDecl(/*defaultExtern=*/false, /*defaultLinkage=*/"", cfg)) {
+                        if (!d->cfg || d->cfg->evaluate(targetTriple_)) {
+                            prog.decls.push_back(std::move(d));
+                        }
+                    }
+                    break;
                 }
-                break;
+            } catch (const std::runtime_error&) {
+                while (!check(TokenKind::Eof) && !check(TokenKind::Semicolon) && !check(TokenKind::RBrace)) {
+                    advance();
+                }
+                if (check(TokenKind::Semicolon) || check(TokenKind::RBrace)) advance();
             }
         } else {
             break;
@@ -624,11 +638,20 @@ Program Parser::parseProgram() {
                 if (!d->cfg || d->cfg->evaluate(targetTriple_)) {
                     prog.decls.push_back(std::move(d));
                 }
+            } else {
+                if (!check(TokenKind::Eof)) advance();
             }
         } catch (const std::runtime_error&) {
-            // Skip to next semicolon or brace for recovery
+            // Skip to next semicolon or brace for recovery, or next top-level declaration keyword
             while (!check(TokenKind::Eof) && !check(TokenKind::Semicolon) &&
                    !check(TokenKind::RBrace)) {
+                if (isTypeName() || check(TokenKind::Struct) ||
+                    check(TokenKind::Class) || check(TokenKind::Enum) ||
+                    check(TokenKind::Trait) || check(TokenKind::Impl) ||
+                    check(TokenKind::Import) || check(TokenKind::Extern) ||
+                    check(TokenKind::At)) {
+                    break;
+                }
                 advance();
             }
             if (check(TokenKind::Semicolon) || check(TokenKind::RBrace)) advance();
@@ -1340,6 +1363,12 @@ std::unique_ptr<BlockStmt> Parser::parseBlock() {
         } catch (const std::runtime_error&) {
             while (!check(TokenKind::Eof) && !check(TokenKind::Semicolon) &&
                    !check(TokenKind::RBrace)) {
+                if (check(TokenKind::Auto) || check(TokenKind::Const) ||
+                    check(TokenKind::If) || check(TokenKind::While) ||
+                    check(TokenKind::For) || check(TokenKind::Return) ||
+                    isTypeName()) {
+                    break;
+                }
                 advance();
             }
             if (check(TokenKind::Semicolon)) advance();
