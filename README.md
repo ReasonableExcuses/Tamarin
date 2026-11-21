@@ -69,6 +69,8 @@ The Tamarin compilation pipeline translates high-level semantic guarantees direc
 - **Compile-Time Data-Race Freedom**: Proves affine index injectivity $f(i) = c_1 \cdot i + c_2$ ($c_1 \ne 0$) on `parallel for` loops, guaranteeing disjoint memory writes across worker threads.
 - **High-Performance Standard Library**: Google Abseil-style Swiss Table `HashMap<K, V>` with 16-way SIMD/group probing, zero-allocation streaming `std.json` with contiguous tape AST representation, and hardware-accelerated bit-twiddling intrinsics (`std.bits`).
 - **Native C99 ABI & Header Generation**: Direct `@c_layout` struct alignment, `@export` un-mangled calling conventions, and automated C99 `.h` emission via `--emit-header`.
+- **Automated C Binding Generator (`tamarin-bindgen`)**: `libclang`-powered tool that translates arbitrary C/C++ header files into idiomatic Tamarin bindings with zero manual boilerplate.
+- **Language Server Protocol (`tamarin-lsp`)**: Production-grade LSP 3.17 server with sub-50ms diagnostics, hover type tooltips, go-to-definition, reference finder, hierarchical outline, code completion, and signature help.
 - **Integrated Package Management**: The `troop` build tool and package manager provides deterministic SemVer 2.0.0 resolution, dependency graph DAG scheduling, and reproducible lockfiles (`troop.lock`).
 
 ---
@@ -198,7 +200,7 @@ The Tamarin test suite validates syntax, type soundness, lifetime verification, 
 
 | Test Suite | Scope & Category | Tests | Status |
 | :--- | :--- | :--- | :--- |
-| **`tamarin_tests`** | Unit Tests: Lexer, Parser, Sema, IR, BCE, Codegen, Modules, Stdlib, Troop, @cfg | **367 / 367** | **100% PASS** |
+| **`tamarin_tests`** | Unit Tests: Lexer, Parser, Sema, IR, BCE, Codegen, Modules, Stdlib, Troop, @cfg, LSP | **396 / 396** | **100% PASS** |
 | **`test_rust_soundness.ps1`** | Rust-Level Memory Soundness: Borrowing, Mutation Aliasing, Dangling Ref Rejection | **16 / 16** | **100% PASS** |
 | **`test_rust_dark_corners.ps1`** | Adversarial Borrowing: Circular References, Conditional Escaping, Field Splitting | **14 / 14** | **100% PASS** |
 | **`test_boss_corners.ps1`** | Stress Gauntlet: Pointer Provenance, Lifetime Extension, Dynamic Scopes | **6 / 6** | **100% PASS** |
@@ -208,7 +210,9 @@ The Tamarin test suite validates syntax, type soundness, lifetime verification, 
 | **`run_final_suite.ps1`** | Mega Suite: Dynamic/Static Runtime Linking, Clang C ABI Round-Trip, Bounds Traps | **7 / 7** | **100% PASS** |
 | **`test_troop.ps1`** | Package Manager: `new`, `add`, `build`, `run`, `test`, `clean`, `troop.lock` | **10 / 10** | **100% PASS** |
 | **`@cfg & Multi-Target CLI`** | Conditional Compilation Directives & Cross-Target Object Lowering (Linux/macOS/Windows) | **5 / 5** | **100% PASS** |
-| **Total Verified** | **Exhaustive Multi-Platform Verification Score (`python3 tests/run_all.py`)** | **447 / 447** | **100% PASS** |
+| **`tamarin-bindgen`** | Adversarial C Header Translation: Enums, Structs, Pointers, Callbacks, Keywords | **120 / 120** | **100% PASS** |
+| **`tamarin-lsp`** | LSP 3.17 Protocol & Lifecycle: Diagnostics, Hover, Definition, References, Completion | **41 / 41** | **100% PASS** |
+| **Total Verified** | **Exhaustive Multi-Platform Verification Score (`python3 tests/run_all.py`)** | **637 / 637** | **100% PASS** |
 
 ---
 
@@ -217,7 +221,8 @@ The Tamarin test suite validates syntax, type soundness, lifetime verification, 
 - [Language Reference](docs/language-reference.md): Grammar, types, `@layout(scan)`, SIMD vectors, enums, closures, and async.
 - [Memory Safety & Concurrency](docs/memory-and-concurrency.md): Provenance sets, active borrows, destructive moves, affine loop injectivity, and regions.
 - [Compiler Architecture](docs/compiler-architecture.md): Frontend, TIR intermediate representation, optimization passes, LLVM lowering, and Troop internals.
-- [C ABI Interoperability](docs/c-abi-interop.md): `@c_layout`, `@export`, header generation (`--emit-header`), and calling convention rules.
+- [C ABI Interoperability](docs/c-abi-interop.md): `@c_layout`, `@export`, header generation (`--emit-header`), and `tamarin-bindgen` foreign function bindings.
+- [Language Server Protocol (`tamarin-lsp`)](docs/lsp.md): VS Code extension, Neovim, Helix configuration, and real-time editor intelligence.
 - [Technical Roadmap](docs/roadmap.md): Version milestones from v0.16.0 (cross-platform Linux/macOS) to v1.0.0 GA.
 
 ---

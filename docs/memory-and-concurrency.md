@@ -1,6 +1,6 @@
 # Tamarin Memory Safety and Concurrency Model
 
-**Version:** 0.16.0  
+**Version:** 0.18.0  
 **Classification:** Formal Semantic Safety Specification  
 
 ---

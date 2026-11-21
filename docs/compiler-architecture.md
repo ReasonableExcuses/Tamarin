@@ -1,6 +1,6 @@
 # Tamarin Compiler Architecture and Pipeline Specification
 
-**Version:** 0.17.0  
+**Version:** 0.18.0  
 **Classification:** Systems Engineering & Compiler Internals  
 
 ---
@@ -193,3 +193,82 @@ The Tamarin Standard Library (`lib/std/`) is written directly in Tamarin with mi
 ### 8.3 Hardware Bit Intrinsics (`lib/std/bits.tmn`)
 - Direct lowering to LLVM target intrinsics (`llvm.ctpop`, `llvm.ctlz`, `llvm.cttz`, `llvm.bitreverse`, `llvm.bswap`).
 - Emits native x86-64 instructions (`popcnt`, `lzcnt`, `tzcnt`, `bswap`) and ARM64 NEON instructions (`cnt`, `clz`, `rbit`, `rev`).
+
+---
+
+## 9. Automatic C Binding Generator Architecture (`bindgen/`)
+
+`tamarin-bindgen` is an automated C header visitor built directly on `libclang`:
+
+```text
++---------------------------------------------------------------------------------+
+|                       tamarin-bindgen Translation Pipeline                      |
++---------------------------------------------------------------------------------+
+   C Header (.h)
+          │
+          ▼
+   [ libclang Clang Index & TranslationUnit ]
+          │
+          ▼
+   [ Cursor AST Visitor & Symbol Filter ]
+     ├── Struct & Union Records (Calculates Offsets & Sizes)
+     ├── Enums (Sequential ADT enum vs Bitflag const int)
+     ├── Typedefs & Function Pointers (*void callback prototypes)
+     └── Function Declarations (extern "C" signatures)
+          │
+          ▼
+   [ Keyword Sanitizer & Type Mapper ]
+     └── Disambiguates type_, trait_, fn_, match_, auto_ collisions
+          │
+          ▼
+   Idiomatic Tamarin Bindings (.tmn)
+```
+
+- **Type Lowering**: Automatically resolves recursive typedefs, pointer qualifiers (`*const T`, `*T`), fixed-size arrays (`T[N]`), and preprocessor `#define` integer/float constants.
+- **CLI Modes**: Available as standalone `tamarin-bindgen` and compiler subcommand `tamarin bindgen`.
+
+---
+
+## 10. Language Server Protocol Engine (`lsp/`)
+
+`tamarin-lsp` implements the Language Server Protocol (LSP 3.17) over standard I/O:
+
+```text
++---------------------------------------------------------------------------------+
+|                            tamarin-lsp Server Pipeline                          |
++---------------------------------------------------------------------------------+
+   JSON-RPC Wire Protocol (Content-Length: <bytes>\r\n\r\n{...})
+          │
+          ▼
+   [ Transport & Framer ] (transport.cpp)
+          │
+          ▼
+   [ In-Memory Virtual File System (VFS) ] (vfs.cpp)
+     ├── Text Buffer Snapshots (didOpen, didChange, didClose)
+     └── UTF-8 Byte Offset <---> UTF-16 Line/Character Translation
+          │
+          ▼
+   [ Document Analyzer ] (analyzer.cpp)
+     ├── Lexer -> Fault-Tolerant Parser -> Sema Pipeline
+     └── textDocument/publishDiagnostics (Live Error/Warning Squiggles)
+          │
+          ▼
+   [ Language Intelligence Handlers ]
+     ├── textDocument/hover (navigation.cpp)
+     ├── textDocument/definition (navigation.cpp)
+     ├── textDocument/references (navigation.cpp)
+     ├── textDocument/documentSymbol (navigation.cpp)
+     ├── textDocument/completion (completion.cpp)
+     └── textDocument/signatureHelp (completion.cpp)
+```
+
+- **Fault-Tolerant Resynchronization**: Parser recovers on missing semicolons and unclosed blocks, maintaining outline symbols and hover documentation during typing.
+- **Cache Invalidation**: Analysis results are cached per document URI and invalidated on incremental edits.
+
+---
+
+## 11. Official Editor Packaging (`editors/vscode/`)
+
+- **VS Code Extension**: Clean TypeScript LanguageClient in `editors/vscode/src/extension.ts` that spawns `tamarin-lsp --stdio`.
+- **TextMate Grammar**: `editors/vscode/syntaxes/tamarin.tmLanguage.json` scoping keywords, built-in types, `@layout` / `@c_layout` attributes, comments, numbers, and strings.
+- **Theme-Adaptive File Icons**: Custom dark/light mode icons for `.tam` and `.tmn` files.

@@ -1,6 +1,6 @@
 # Tamarin Language Reference Specification
 
-**Version:** 0.17.0  
+**Version:** 0.18.0  
 **Target:** LLVM 20+ / C99 ABI  
 **Classification:** Systems Programming Language Specification  
 

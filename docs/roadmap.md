@@ -31,7 +31,10 @@ The path to **Version 1.0 GA** focuses on developer ecosystem maturity, graphics
   [ v0.17.0 ] ──────────► High-Performance Stdlib: Swiss Table, Zero-Alloc JSON, Hardware std.bits (440/440 Passed)
           │
           ▼
-  [ v0.18.0 Current ] ──► Tooling & Ecosystem: tamarin-lsp, tamarin-bindgen, VS Code Extension (625/625 Passed)
+  [ v0.18.0 ] ──────────► Tooling & Ecosystem: tamarin-lsp, tamarin-bindgen, VS Code Extension (637/637 Passed)
+          │
+          ▼
+  [ v0.18.5 Current ] ──► Graphics Ecosystem: tamarin-raylib & tamarin-sdl3 (Modern Multi-Backend GPU)
           │
           ▼
   [ v0.19.0 ] ──────────► Self-Hosting Compiler Prototype (Tamarin Frontend in Tamarin)
@@ -110,6 +113,28 @@ The path to **Version 1.0 GA** focuses on developer ecosystem maturity, graphics
     - **SDL3 (`tamarin-sdl3`)**: Industry-standard cross-platform window management, hardware event handling, and GPU rendering pipelines.
     - **Dear ImGui (`tamarin-imgui`)**: High-performance immediate-mode GUI for developer tooling, debuggers, game UI, and native desktop dashboards.
   - Showcase example applications distributed via `troop add` templates (`tamarin init --template=raylib-game`).
+
+---
+
+### Milestone v0.18.5: Graphics Ecosystem (`tamarin-raylib` & `tamarin-sdl3`) [IN PROGRESS]
+*Target Date:* Q1 2027
+
+- **Phase 1: Compiler Native Linker Directives**:
+  - Implement `-l<lib>` and `-L<dir>` flags in `tamarin build` and `[package] links = [...]` in `troop.toml`.
+  - Automatically forward link arguments and library paths to Clang across Windows MSVC, Linux GNU, and macOS Darwin.
+- **Phase 2: `tamarin-raylib` (Raylib 5.5 Integration)**:
+  - Generate idiomatic bindings via `tamarin-bindgen` for `raylib.h`, `raymath.h`, and `rlgl.h`.
+  - Safe wrappers for `Color`, `Vector2`, `Vector3`, `Texture2D`, `Shader`, and window lifecycle.
+  - Interactive 2D/3D physics & geometry demos with automated headless CI verification.
+- **Phase 3: `tamarin-sdl3` Core (Platform, Windowing, Events, Input)**:
+  - Generate bindings for `SDL3/SDL.h`.
+  - High-DPI window lifecycle, event loop dispatch, keyboard/mouse/gamepad input handling.
+- **Phase 4: `tamarin-sdl3` GPU (Modern `SDL_GPU`, Vulkan & OpenGL)**:
+  - Multi-backend GPU rendering via `SDL3/SDL_gpu.h` targeting **Direct3D 12** on Windows, **Vulkan** on Linux, and **Metal** on macOS.
+  - Raw `SDL_Vulkan_CreateSurface` and `SDL_GL_CreateContext` hooks for engine architects.
+- **Phase 5: Troop CLI Project Templates & Documentation**:
+  - `tamarin init --template=raylib-game` and `tamarin init --template=sdl3-app`.
+  - Comprehensive guide in `docs/graphics.md`.
 
 ---
 
