@@ -205,15 +205,58 @@ def run_tests():
             diags = p.get("diagnostics", [])
             check("Squiggles cleared (0 diagnostics) on fix", len(diags) == 0, f"Count={len(diags)}")
 
-        # Test 5: Hover request on open document returns valid JSON-RPC response
+        # Test 5: Navigation requests on open document
+        # 5a. Hover on 'x'
         client.send_request("textDocument/hover", 3, {
             "textDocument": {"uri": doc_uri},
-            "position": {"line": 1, "character": 4}
+            "position": {"line": 1, "character": 8} # character 8 is 'x' in '    int x = 42;'
         })
         resp_hover = client.read_message()
         check("Hover response received", resp_hover is not None)
         if resp_hover:
             check("Hover response id == 3", resp_hover.get("id") == 3)
+            h_res = resp_hover.get("result", {})
+            check("Hover result contains contents", h_res is not None and "contents" in h_res)
+            if h_res:
+                check("Hover markdown contains 'int x'", "int x" in str(h_res.get("contents", "")))
+
+        # 5b. Go-to-Definition on 'x'
+        client.send_request("textDocument/definition", 4, {
+            "textDocument": {"uri": doc_uri},
+            "position": {"line": 2, "character": 11} # 'x' in 'return x;'
+        })
+        resp_def = client.read_message()
+        check("Definition response received", resp_def is not None)
+        if resp_def:
+            check("Definition response id == 4", resp_def.get("id") == 4)
+            d_res = resp_def.get("result", {})
+            check("Definition points to same document", d_res is not None and d_res.get("uri") == doc_uri)
+            if d_res and "range" in d_res:
+                check("Definition points to declaration line 1", d_res["range"]["start"]["line"] == 1)
+
+        # 5c. Find References on 'x'
+        client.send_request("textDocument/references", 5, {
+            "textDocument": {"uri": doc_uri},
+            "position": {"line": 1, "character": 8},
+            "context": {"includeDeclaration": True}
+        })
+        resp_refs = client.read_message()
+        check("References response received", resp_refs is not None)
+        if resp_refs:
+            check("References response id == 5", resp_refs.get("id") == 5)
+            refs_list = resp_refs.get("result", [])
+            check("Found 2 references for 'x'", len(refs_list) == 2, f"Count={len(refs_list)}")
+
+        # 5d. Document Symbols
+        client.send_request("textDocument/documentSymbol", 6, {
+            "textDocument": {"uri": doc_uri}
+        })
+        resp_syms = client.read_message()
+        check("DocumentSymbol response received", resp_syms is not None)
+        if resp_syms:
+            check("DocumentSymbol response id == 6", resp_syms.get("id") == 6)
+            syms_list = resp_syms.get("result", [])
+            check("Document has 'main' symbol", any(s.get("name") == "main" for s in syms_list))
 
         client.send_notification("textDocument/didClose", {
             "textDocument": {"uri": doc_uri}
@@ -222,11 +265,11 @@ def run_tests():
         check("didClose clears diagnostics", diag_msg3 is not None and diag_msg3.get("method") == "textDocument/publishDiagnostics")
 
         # Test 6: Shutdown request
-        client.send_request("shutdown", 4)
+        client.send_request("shutdown", 7)
         resp4 = client.read_message()
         check("Shutdown response received", resp4 is not None)
         if resp4:
-            check("Shutdown response id == 4", resp4.get("id") == 4)
+            check("Shutdown response id == 7", resp4.get("id") == 7)
             check("Shutdown result is null", resp4.get("result") is None)
 
         # Test 7: Exit notification terminates process with 0

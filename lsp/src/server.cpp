@@ -3,6 +3,7 @@
 // ============================================================================
 
 #include "lsp/server.h"
+#include "lsp/navigation.h"
 
 #include <iostream>
 
@@ -200,28 +201,90 @@ void LspServer::analyzeAndPublish(const std::string& uri) {
 }
 
 JsonRpcResponse LspServer::handleHover(const JsonRpcRequest& req) {
-    // Default placeholder in Phase 1
+    if (req.params.isNull()) return JsonRpcResponse::makeResult(req.id, nullptr);
+    auto params = TextDocumentPositionParams::fromJson(req.params);
+    auto docOpt = vfs_.getDocument(params.textDocument.uri);
+    if (!docOpt.has_value()) return JsonRpcResponse::makeResult(req.id, nullptr);
+
+    auto analysis = analyzer_.getCached(params.textDocument.uri);
+    if (!analysis) {
+        auto res = analyzer_.analyze(*docOpt);
+        analyzer_.updateCache(params.textDocument.uri, std::move(res));
+        analysis = analyzer_.getCached(params.textDocument.uri);
+    }
+
+    auto hover = getHover(*docOpt, *analysis, params.position);
+    if (hover.has_value()) {
+        return JsonRpcResponse::makeResult(req.id, hover->toJson());
+    }
     return JsonRpcResponse::makeResult(req.id, nullptr);
 }
 
 JsonRpcResponse LspServer::handleDefinition(const JsonRpcRequest& req) {
-    // Default placeholder in Phase 1
+    if (req.params.isNull()) return JsonRpcResponse::makeResult(req.id, nullptr);
+    auto params = TextDocumentPositionParams::fromJson(req.params);
+    auto docOpt = vfs_.getDocument(params.textDocument.uri);
+    if (!docOpt.has_value()) return JsonRpcResponse::makeResult(req.id, nullptr);
+
+    auto analysis = analyzer_.getCached(params.textDocument.uri);
+    if (!analysis) {
+        auto res = analyzer_.analyze(*docOpt);
+        analyzer_.updateCache(params.textDocument.uri, std::move(res));
+        analysis = analyzer_.getCached(params.textDocument.uri);
+    }
+
+    auto loc = getDefinition(*docOpt, *analysis, params.position);
+    if (loc.has_value()) {
+        return JsonRpcResponse::makeResult(req.id, loc->toJson());
+    }
     return JsonRpcResponse::makeResult(req.id, nullptr);
 }
 
 JsonRpcResponse LspServer::handleReferences(const JsonRpcRequest& req) {
-    // Default placeholder in Phase 1
-    return JsonRpcResponse::makeResult(req.id, JsonValue::array());
+    if (req.params.isNull()) return JsonRpcResponse::makeResult(req.id, JsonValue::array());
+    auto params = TextDocumentPositionParams::fromJson(req.params);
+    auto docOpt = vfs_.getDocument(params.textDocument.uri);
+    if (!docOpt.has_value()) return JsonRpcResponse::makeResult(req.id, JsonValue::array());
+
+    auto analysis = analyzer_.getCached(params.textDocument.uri);
+    if (!analysis) {
+        auto res = analyzer_.analyze(*docOpt);
+        analyzer_.updateCache(params.textDocument.uri, std::move(res));
+        analysis = analyzer_.getCached(params.textDocument.uri);
+    }
+
+    auto refs = getReferences(*docOpt, *analysis, params.position);
+    JsonValue arr = JsonValue::array();
+    for (const auto& r : refs) {
+        arr.push_back(r.toJson());
+    }
+    return JsonRpcResponse::makeResult(req.id, std::move(arr));
 }
 
 JsonRpcResponse LspServer::handleCompletion(const JsonRpcRequest& req) {
-    // Default placeholder in Phase 1
+    // Default placeholder in Phase 4, implemented in Phase 5
     return JsonRpcResponse::makeResult(req.id, JsonValue::array());
 }
 
 JsonRpcResponse LspServer::handleDocumentSymbol(const JsonRpcRequest& req) {
-    // Default placeholder in Phase 1
-    return JsonRpcResponse::makeResult(req.id, JsonValue::array());
+    if (req.params.isNull()) return JsonRpcResponse::makeResult(req.id, JsonValue::array());
+    auto params = DocumentSymbolParams::fromJson(req.params);
+    auto docOpt = vfs_.getDocument(params.textDocument.uri);
+    if (!docOpt.has_value()) return JsonRpcResponse::makeResult(req.id, JsonValue::array());
+
+    auto analysis = analyzer_.getCached(params.textDocument.uri);
+    if (!analysis) {
+        auto res = analyzer_.analyze(*docOpt);
+        analyzer_.updateCache(params.textDocument.uri, std::move(res));
+        analysis = analyzer_.getCached(params.textDocument.uri);
+    }
+
+    auto syms = getDocumentSymbols(*docOpt, *analysis);
+    JsonValue arr = JsonValue::array();
+    for (const auto& s : syms) {
+        arr.push_back(s.toJson());
+    }
+    return JsonRpcResponse::makeResult(req.id, std::move(arr));
 }
 
 bool LspServer::publishDiagnostics(const std::string& uri, const std::vector<Diagnostic>& diagnostics) {

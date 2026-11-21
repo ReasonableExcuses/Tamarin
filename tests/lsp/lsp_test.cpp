@@ -8,6 +8,7 @@
 #include "lsp/transport.h"
 #include "lsp/server.h"
 #include "lsp/vfs.h"
+#include "lsp/navigation.h"
 #include "tamarin/source/source_manager.h"
 #include "tamarin/lexer/lexer.h"
 #include "tamarin/parser/parser.h"
@@ -513,6 +514,207 @@ TAMARIN_TEST(Lsp, ServerPublishDiagnosticsFlow) {
     std::string outClose = out.str();
     EXPECT_TRUE(outClose.find("textDocument/publishDiagnostics") != std::string::npos);
     EXPECT_TRUE(outClose.find("\"diagnostics\":[]") != std::string::npos);
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, NavigationHover) {
+    std::string code =
+        "struct Point {\n"
+        "    int x;\n"
+        "    int y;\n"
+        "};\n\n"
+        "int add(int a, int b) {\n"
+        "    int res = a + b;\n"
+        "    return res;\n"
+        "}\n";
+    VfsDocument doc("file:///test.tam", "tamarin", 1, code);
+    DocumentAnalyzer analyzer;
+    auto analysis = analyzer.analyze(doc);
+
+    // Hover on 'add' (line 5, character 5)
+    auto hoverFn = getHover(doc, analysis, Position{5, 5});
+    EXPECT_TRUE(hoverFn.has_value());
+    EXPECT_TRUE(hoverFn->contents.find("int add(int a, int b)") != std::string::npos);
+
+    // Hover on parameter 'a' (line 5, character 13)
+    auto hoverParam = getHover(doc, analysis, Position{5, 13});
+    EXPECT_TRUE(hoverParam.has_value());
+    EXPECT_TRUE(hoverParam->contents.find("(parameter) int a") != std::string::npos);
+
+    // Hover on local var 'res' (line 6, character 9)
+    auto hoverVar = getHover(doc, analysis, Position{6, 9});
+    EXPECT_TRUE(hoverVar.has_value());
+    EXPECT_TRUE(hoverVar->contents.find("int res") != std::string::npos);
+
+    // Hover on struct 'Point' (line 0, character 8)
+    auto hoverStruct = getHover(doc, analysis, Position{0, 8});
+    EXPECT_TRUE(hoverStruct.has_value());
+    EXPECT_TRUE(hoverStruct->contents.find("struct Point") != std::string::npos);
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, NavigationDefinition) {
+    std::string code =
+        "int square(int x) {\n"
+        "    return x * x;\n"
+        "}\n\n"
+        "int main() {\n"
+        "    int val = square(5);\n"
+        "    return val;\n"
+        "}\n";
+    VfsDocument doc("file:///def_test.tam", "tamarin", 1, code);
+    DocumentAnalyzer analyzer;
+    auto analysis = analyzer.analyze(doc);
+
+    // Go-to-definition on 'square' in main (line 5, character 16)
+    auto defFn = getDefinition(doc, analysis, Position{5, 16});
+    EXPECT_TRUE(defFn.has_value());
+    EXPECT_EQ(defFn->uri, "file:///def_test.tam");
+    // Definition of 'square' starts at line 0
+    EXPECT_EQ(defFn->range.start.line, 0);
+
+    // Go-to-definition on 'val' in return (line 6, character 12)
+    auto defVal = getDefinition(doc, analysis, Position{6, 12});
+    EXPECT_TRUE(defVal.has_value());
+    EXPECT_EQ(defVal->range.start.line, 5); // declared on line 5
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, NavigationReferences) {
+    std::string code =
+        "int compute(int x) {\n"
+        "    int y = x + x;\n"
+        "    return y;\n"
+        "}\n";
+    VfsDocument doc("file:///ref_test.tam", "tamarin", 1, code);
+    DocumentAnalyzer analyzer;
+    auto analysis = analyzer.analyze(doc);
+
+    // References to 'x' (line 0, character 17)
+    auto refs = getReferences(doc, analysis, Position{0, 17});
+    // 'x' appears: param 'x', and 'x + x' -> 3 occurrences
+    EXPECT_EQ(refs.size(), 3);
+    for (const auto& r : refs) {
+        EXPECT_EQ(r.uri, "file:///ref_test.tam");
+    }
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, NavigationDocumentSymbols) {
+    std::string code =
+        "enum Color {\n"
+        "    Red,\n"
+        "    Green,\n"
+        "    Blue,\n"
+        "}\n\n"
+        "struct Vector2 {\n"
+        "    float x;\n"
+        "    float y;\n"
+        "};\n\n"
+        "int calc() {\n"
+        "    return 42;\n"
+        "}\n";
+    VfsDocument doc("file:///symbols.tam", "tamarin", 1, code);
+    DocumentAnalyzer analyzer;
+    auto analysis = analyzer.analyze(doc);
+
+    auto syms = getDocumentSymbols(doc, analysis);
+    EXPECT_GE(syms.size(), 3);
+
+    bool foundEnum = false;
+    bool foundStruct = false;
+    bool foundFn = false;
+
+    for (const auto& s : syms) {
+        if (s.name == "Color" && s.kind == SymbolKind::Enum) {
+            foundEnum = true;
+            EXPECT_EQ(s.children.size(), 3); // Red, Green, Blue
+        } else if (s.name == "Vector2" && s.kind == SymbolKind::Struct) {
+            foundStruct = true;
+            EXPECT_EQ(s.children.size(), 2); // x, y
+        } else if (s.name == "calc" && s.kind == SymbolKind::Function) {
+            foundFn = true;
+        }
+    }
+
+    EXPECT_TRUE(foundEnum);
+    EXPECT_TRUE(foundStruct);
+    EXPECT_TRUE(foundFn);
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, ServerNavigationFlow) {
+    std::istringstream in("");
+    std::ostringstream out;
+    LspTransport transport(in, out);
+    LspServer server(transport);
+
+    // 1. Initialize
+    server.processMessage("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}");
+    server.processMessage("{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}");
+    out.str("");
+
+    // 2. Open doc
+    std::string uri = "file:///nav_test.tam";
+    std::string openMsg =
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{"
+        "\"textDocument\":{\"uri\":\"" + uri + "\",\"languageId\":\"tamarin\",\"version\":1,"
+        "\"text\":\"int doubleVal(int x) { return x * 2; }\"}"
+        "}}";
+    server.processMessage(openMsg);
+    out.str("");
+
+    // 3. Hover request
+    std::string hoverMsg =
+        "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"textDocument/hover\",\"params\":{"
+        "\"textDocument\":{\"uri\":\"" + uri + "\"},"
+        "\"position\":{\"line\":0,\"character\":6}"
+        "}}";
+    server.processMessage(hoverMsg);
+    std::string hoverOut = out.str();
+    EXPECT_TRUE(hoverOut.find("\"id\":10") != std::string::npos);
+    EXPECT_TRUE(hoverOut.find("doubleVal") != std::string::npos);
+    out.str("");
+
+    // 4. Definition request
+    std::string defMsg =
+        "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"textDocument/definition\",\"params\":{"
+        "\"textDocument\":{\"uri\":\"" + uri + "\"},"
+        "\"position\":{\"line\":0,\"character\":6}"
+        "}}";
+    server.processMessage(defMsg);
+    std::string defOut = out.str();
+    EXPECT_TRUE(defOut.find("\"id\":11") != std::string::npos);
+    EXPECT_TRUE(defOut.find(uri) != std::string::npos);
+    out.str("");
+
+    // 5. References request
+    std::string refMsg =
+        "{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"textDocument/references\",\"params\":{"
+        "\"textDocument\":{\"uri\":\"" + uri + "\"},"
+        "\"position\":{\"line\":0,\"character\":19},"
+        "\"context\":{\"includeDeclaration\":true}"
+        "}}";
+    server.processMessage(refMsg);
+    std::string refOut = out.str();
+    EXPECT_TRUE(refOut.find("\"id\":12") != std::string::npos);
+    EXPECT_TRUE(refOut.find("\"line\":0") != std::string::npos);
+    out.str("");
+
+    // 6. Document symbols request
+    std::string symMsg =
+        "{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"textDocument/documentSymbol\",\"params\":{"
+        "\"textDocument\":{\"uri\":\"" + uri + "\"}"
+        "}}";
+    server.processMessage(symMsg);
+    std::string symOut = out.str();
+    EXPECT_TRUE(symOut.find("\"id\":13") != std::string::npos);
+    EXPECT_TRUE(symOut.find("\"name\":\"doubleVal\"") != std::string::npos);
 
     return true;
 }

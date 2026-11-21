@@ -211,6 +211,34 @@ struct DidCloseTextDocumentParams {
     }
 };
 
+struct TextDocumentPositionParams {
+    TextDocumentIdentifier textDocument;
+    Position position;
+
+    static TextDocumentPositionParams fromJson(const JsonValue& j) {
+        TextDocumentPositionParams p;
+        if (const auto* td = j.get("textDocument")) {
+            p.textDocument = TextDocumentIdentifier::fromJson(*td);
+        }
+        if (const auto* pos = j.get("position")) {
+            p.position = Position::fromJson(*pos);
+        }
+        return p;
+    }
+};
+
+struct DocumentSymbolParams {
+    TextDocumentIdentifier textDocument;
+
+    static DocumentSymbolParams fromJson(const JsonValue& j) {
+        DocumentSymbolParams p;
+        if (const auto* td = j.get("textDocument")) {
+            p.textDocument = TextDocumentIdentifier::fromJson(*td);
+        }
+        return p;
+    }
+};
+
 // ── Navigation & Intelligence ───────────────────────────────────────────────
 
 struct Hover {
