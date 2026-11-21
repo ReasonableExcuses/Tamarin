@@ -7,6 +7,7 @@
 #include "lsp/protocol.h"
 #include "lsp/transport.h"
 #include "lsp/vfs.h"
+#include "lsp/analyzer.h"
 
 #include <string>
 #include <vector>
@@ -43,6 +44,13 @@ public:
     [[nodiscard]] const Vfs& vfs() const noexcept { return vfs_; }
     [[nodiscard]] Vfs& vfs() noexcept { return vfs_; }
 
+    /// Document analyzer access
+    [[nodiscard]] const DocumentAnalyzer& analyzer() const noexcept { return analyzer_; }
+    [[nodiscard]] DocumentAnalyzer& analyzer() noexcept { return analyzer_; }
+
+    /// Run analysis pipeline and publish diagnostic squiggles
+    void analyzeAndPublish(const std::string& uri);
+
     /// Publish diagnostics for a document.
     bool publishDiagnostics(const std::string& uri, const std::vector<Diagnostic>& diagnostics);
 
@@ -55,6 +63,7 @@ public:
 private:
     LspTransport& transport_;
     Vfs vfs_;
+    DocumentAnalyzer analyzer_;
     ServerState state_ = ServerState::Uninitialized;
     int exitCode_ = 0;
 

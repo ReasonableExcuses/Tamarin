@@ -169,28 +169,41 @@ def run_tests():
             err = resp3.get("error", {})
             check("Unknown method error code == -32601", err.get("code") == -32601)
 
-        # Test 4: Document synchronization (didOpen, didChange, didClose)
+        # Test 4: Document synchronization & real-time publishDiagnostics
         doc_uri = "file:///workspace/sample.tam"
         client.send_notification("textDocument/didOpen", {
             "textDocument": {
                 "uri": doc_uri,
                 "languageId": "tamarin",
                 "version": 1,
-                "text": "int main() {\n    return 0;\n}\n"
+                "text": "int main() {\n    int x = true;\n    return 0;\n}\n"
             }
         })
-        check("didOpen notification handled without crashing", client.proc.poll() is None)
+        diag_msg1 = client.read_message()
+        check("didOpen triggers publishDiagnostics notification", diag_msg1 is not None and diag_msg1.get("method") == "textDocument/publishDiagnostics")
+        if diag_msg1:
+            p = diag_msg1.get("params", {})
+            diags = p.get("diagnostics", [])
+            check("Type error diagnosed on didOpen", len(diags) > 0, f"Count={len(diags)}")
+            if len(diags) > 0:
+                check("Diagnostic severity is Error (1)", diags[0].get("severity") == 1)
 
+        # Fix error via didChange
         client.send_notification("textDocument/didChange", {
             "textDocument": {
                 "uri": doc_uri,
                 "version": 2
             },
             "contentChanges": [
-                {"text": "int main() {\n    return 42;\n}\n"}
+                {"text": "int main() {\n    int x = 42;\n    return x;\n}\n"}
             ]
         })
-        check("didChange notification handled without crashing", client.proc.poll() is None)
+        diag_msg2 = client.read_message()
+        check("didChange triggers updated publishDiagnostics", diag_msg2 is not None and diag_msg2.get("method") == "textDocument/publishDiagnostics")
+        if diag_msg2:
+            p = diag_msg2.get("params", {})
+            diags = p.get("diagnostics", [])
+            check("Squiggles cleared (0 diagnostics) on fix", len(diags) == 0, f"Count={len(diags)}")
 
         # Test 5: Hover request on open document returns valid JSON-RPC response
         client.send_request("textDocument/hover", 3, {
@@ -205,7 +218,8 @@ def run_tests():
         client.send_notification("textDocument/didClose", {
             "textDocument": {"uri": doc_uri}
         })
-        check("didClose notification handled without crashing", client.proc.poll() is None)
+        diag_msg3 = client.read_message()
+        check("didClose clears diagnostics", diag_msg3 is not None and diag_msg3.get("method") == "textDocument/publishDiagnostics")
 
         # Test 6: Shutdown request
         client.send_request("shutdown", 4)

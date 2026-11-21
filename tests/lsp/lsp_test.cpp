@@ -379,3 +379,140 @@ TAMARIN_TEST(Lsp, ServerDocumentSync) {
 
     return true;
 }
+
+TAMARIN_TEST(Lsp, DocumentAnalyzerCleanCode) {
+    VfsDocument doc("file:///clean.tam", "tamarin", 1,
+                    "int add(int a, int b) {\n"
+                    "    return a + b;\n"
+                    "}\n");
+    DocumentAnalyzer analyzer;
+    auto res = analyzer.analyze(doc);
+
+    EXPECT_EQ(res.diagnostics.size(), 0);
+    EXPECT_TRUE(res.sema != nullptr);
+    EXPECT_EQ(res.program.decls.size(), 1);
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, DocumentAnalyzerSyntaxError) {
+    VfsDocument doc("file:///syntax_err.tam", "tamarin", 1,
+                    "int broken( {\n"
+                    "    return 1;\n"
+                    "}\n");
+    DocumentAnalyzer analyzer;
+    auto res = analyzer.analyze(doc);
+
+    EXPECT_GE(res.diagnostics.size(), 1);
+    EXPECT_EQ(res.diagnostics[0].severity, DiagnosticSeverity::Error);
+    EXPECT_TRUE(res.diagnostics[0].message.find("expected") != std::string::npos ||
+                res.diagnostics[0].message.find("error") != std::string::npos);
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, DocumentAnalyzerTypeMismatch) {
+    VfsDocument doc("file:///type_err.tam", "tamarin", 1,
+                    "int compute() {\n"
+                    "    int x = true;\n"
+                    "    return x;\n"
+                    "}\n");
+    DocumentAnalyzer analyzer;
+    auto res = analyzer.analyze(doc);
+
+    EXPECT_GE(res.diagnostics.size(), 1);
+    bool foundTypeErr = false;
+    for (const auto& d : res.diagnostics) {
+        if (d.severity == DiagnosticSeverity::Error) {
+            foundTypeErr = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundTypeErr);
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, DocumentAnalyzerBorrowCheck) {
+    // Attempt simultaneous active mutable borrows
+    VfsDocument doc("file:///borrow_err.tam", "tamarin", 1,
+                    "int test_borrow() {\n"
+                    "    int x = 10;\n"
+                    "    *int p1 = &x;\n"
+                    "    *int p2 = &x;\n"
+                    "    *p1 = 20;\n"
+                    "    *p2 = 30;\n"
+                    "    return x;\n"
+                    "}\n");
+    DocumentAnalyzer analyzer;
+    auto res = analyzer.analyze(doc);
+
+    EXPECT_GE(res.diagnostics.size(), 1);
+    bool foundBorrowErr = false;
+    for (const auto& d : res.diagnostics) {
+        if (d.severity == DiagnosticSeverity::Error &&
+            (d.message.find("borrow") != std::string::npos ||
+             d.message.find("alias") != std::string::npos ||
+             d.message.find("mutable") != std::string::npos)) {
+            foundBorrowErr = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundBorrowErr);
+
+    return true;
+}
+
+TAMARIN_TEST(Lsp, ServerPublishDiagnosticsFlow) {
+    std::istringstream in("");
+    std::ostringstream out;
+    LspTransport transport(in, out);
+    LspServer server(transport);
+
+    // Initialize
+    server.processMessage("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}");
+    server.processMessage("{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}");
+
+    out.str(""); // clear init responses
+
+    // 1. Open document with type mismatch -> should emit textDocument/publishDiagnostics with error
+    std::string uri = "file:///diag_test.tam";
+    std::string openMsg =
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{"
+        "\"textDocument\":{\"uri\":\"" + uri + "\",\"languageId\":\"tamarin\",\"version\":1,"
+        "\"text\":\"int foo() { int x = true; return x; }\"}"
+        "}}";
+    server.processMessage(openMsg);
+
+    std::string outOpen = out.str();
+    EXPECT_TRUE(outOpen.find("textDocument/publishDiagnostics") != std::string::npos);
+    EXPECT_TRUE(outOpen.find(uri) != std::string::npos);
+    EXPECT_TRUE(outOpen.find("\"severity\":1") != std::string::npos); // Error
+
+    // 2. Change document to valid code -> should emit publishDiagnostics with empty array
+    out.str("");
+    std::string fixMsg =
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{"
+        "\"textDocument\":{\"uri\":\"" + uri + "\",\"version\":2},"
+        "\"contentChanges\":[{\"text\":\"int foo() { int x = 42; return x; }\"}]"
+        "}}";
+    server.processMessage(fixMsg);
+
+    std::string outFix = out.str();
+    EXPECT_TRUE(outFix.find("textDocument/publishDiagnostics") != std::string::npos);
+    EXPECT_TRUE(outFix.find("\"diagnostics\":[]") != std::string::npos); // Cleared squiggles!
+
+    // 3. Close document -> emits empty diagnostics to clear
+    out.str("");
+    std::string closeMsg =
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didClose\",\"params\":{"
+        "\"textDocument\":{\"uri\":\"" + uri + "\"}"
+        "}}";
+    server.processMessage(closeMsg);
+
+    std::string outClose = out.str();
+    EXPECT_TRUE(outClose.find("textDocument/publishDiagnostics") != std::string::npos);
+    EXPECT_TRUE(outClose.find("\"diagnostics\":[]") != std::string::npos);
+
+    return true;
+}

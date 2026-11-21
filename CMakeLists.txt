@@ -198,6 +198,7 @@ add_library(lsp_lib STATIC
     lsp/src/json.cpp
     lsp/src/transport.cpp
     lsp/src/vfs.cpp
+    lsp/src/analyzer.cpp
     lsp/src/server.cpp
     lsp/src/cli.cpp
 )

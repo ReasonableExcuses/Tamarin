@@ -74,6 +74,16 @@ public:
     /// Number of warnings reported so far.
     [[nodiscard]] uint32_t warningCount() const noexcept { return warningCount_; }
 
+    /// Return all diagnostics recorded so far.
+    [[nodiscard]] const std::vector<Diagnostic>& getDiagnostics() const noexcept { return diagnostics_; }
+
+    /// Clear all diagnostics and reset counters.
+    void clearDiagnostics() noexcept {
+        diagnostics_.clear();
+        errorCount_ = 0;
+        warningCount_ = 0;
+    }
+
 private:
     /// Format and write a single diagnostic to the output stream.
     void emit(const Diagnostic& diag);
@@ -82,6 +92,7 @@ private:
     std::ostream&        os_;
     uint32_t             errorCount_   = 0;
     uint32_t             warningCount_ = 0;
+    std::vector<Diagnostic> diagnostics_;
 };
 
 } // namespace tamarin

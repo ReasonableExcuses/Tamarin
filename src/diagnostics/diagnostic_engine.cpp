@@ -43,6 +43,7 @@ void DiagnosticEngine::report(SourceLocation loc, Severity sev,
         case Severity::Note:    break;
     }
 
+    diagnostics_.push_back(diag);
     emit(diag);
 }
 

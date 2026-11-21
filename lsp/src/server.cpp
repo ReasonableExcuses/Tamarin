@@ -167,22 +167,36 @@ void LspServer::handleDidOpen(const JsonRpcRequest& notif) {
     if (notif.params.isNull()) return;
     auto params = DidOpenTextDocumentParams::fromJson(notif.params);
     vfs_.openDocument(params.textDocument);
+    analyzeAndPublish(params.textDocument.uri);
 }
 
 void LspServer::handleDidChange(const JsonRpcRequest& notif) {
     if (notif.params.isNull()) return;
     auto params = DidChangeTextDocumentParams::fromJson(notif.params);
-    vfs_.applyChanges(params);
+    if (vfs_.applyChanges(params)) {
+        analyzeAndPublish(params.textDocument.uri);
+    }
 }
 
 void LspServer::handleDidClose(const JsonRpcRequest& notif) {
     if (notif.params.isNull()) return;
     auto params = DidCloseTextDocumentParams::fromJson(notif.params);
     vfs_.closeDocument(params.textDocument.uri);
+    analyzer_.evictCache(params.textDocument.uri);
+    publishDiagnostics(params.textDocument.uri, {});
 }
 
 void LspServer::handleDidSave(const JsonRpcRequest& /*notif*/) {
     // Optional save handler
+}
+
+void LspServer::analyzeAndPublish(const std::string& uri) {
+    auto docOpt = vfs_.getDocument(uri);
+    if (!docOpt.has_value()) return;
+
+    auto result = analyzer_.analyze(*docOpt);
+    publishDiagnostics(uri, result.diagnostics);
+    analyzer_.updateCache(uri, std::move(result));
 }
 
 JsonRpcResponse LspServer::handleHover(const JsonRpcRequest& req) {
