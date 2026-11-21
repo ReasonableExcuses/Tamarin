@@ -252,6 +252,9 @@ int Driver::build() {
     } else {
         codegen.setCrtLinkage(backend::CrtLinkage::Dynamic);
     }
+    codegen.setLinkLibraries(options_.linkLibs);
+    codegen.setLinkDirectories(options_.linkDirs);
+    codegen.setLinkerFlags(options_.linkerFlags);
 
     auto llPath = inputPath;
     llPath.replace_extension(".ll");

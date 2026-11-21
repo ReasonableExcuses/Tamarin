@@ -36,6 +36,9 @@ struct DriverOptions {
     bool emitMemoryReport = false;
     bool verbose  = false;
     std::vector<std::string> includeDirs;
+    std::vector<std::string> linkLibs;
+    std::vector<std::string> linkDirs;
+    std::vector<std::string> linkerFlags;
 };
 
 class Driver {

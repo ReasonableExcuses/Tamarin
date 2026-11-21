@@ -29,6 +29,9 @@ static void printHelp() {
               << "Options:\n"
               << "  -o <path>             Specify output executable path\n"
               << "  -I <path>             Add directory to module search path\n"
+              << "  -l <lib>, --link <lib>  Link against native static/dynamic library\n"
+              << "  -L <dir>, --lib-dir <dir> Add directory to native library search path\n"
+              << "  -Wl,<arg>, -Xlinker <arg> Pass argument directly to the linker\n"
               << "  -O0, -O1, -O2, -O3    Optimization levels (-O0: debug, -O2: release)\n"
               << "  --fast-math           Enable aggressive floating-point reassociation and SIMD vectorization\n"
               << "  --emit-tir, --emit-ir Dump Tamarin Intermediate Representation (TIR)\n"
@@ -143,6 +146,27 @@ int main(int argc, char* argv[]) {
             opts.includeDirs.push_back(argv[++i]);
         } else if (arg.starts_with("-I") && arg.size() > 2) {
             opts.includeDirs.push_back(std::string(arg.substr(2)));
+        } else if (arg == "-l" && i + 1 < argc) {
+            opts.linkLibs.push_back(argv[++i]);
+        } else if (arg.starts_with("-l") && arg.size() > 2) {
+            opts.linkLibs.push_back(std::string(arg.substr(2)));
+        } else if (arg == "--link" && i + 1 < argc) {
+            opts.linkLibs.push_back(argv[++i]);
+        } else if (arg.starts_with("--link=") && arg.size() > 7) {
+            opts.linkLibs.push_back(std::string(arg.substr(7)));
+        } else if (arg == "-L" && i + 1 < argc) {
+            opts.linkDirs.push_back(argv[++i]);
+        } else if (arg.starts_with("-L") && arg.size() > 2) {
+            opts.linkDirs.push_back(std::string(arg.substr(2)));
+        } else if (arg == "--lib-dir" && i + 1 < argc) {
+            opts.linkDirs.push_back(argv[++i]);
+        } else if (arg.starts_with("--lib-dir=") && arg.size() > 10) {
+            opts.linkDirs.push_back(std::string(arg.substr(10)));
+        } else if (arg == "-Xlinker" && i + 1 < argc) {
+            opts.linkerFlags.push_back("-Xlinker");
+            opts.linkerFlags.push_back(argv[++i]);
+        } else if (arg.starts_with("-Wl,")) {
+            opts.linkerFlags.push_back(std::string(arg));
         } else if (arg == "--clang" && i + 1 < argc) {
             opts.clangPath = argv[++i];
         } else if (arg == "check") {

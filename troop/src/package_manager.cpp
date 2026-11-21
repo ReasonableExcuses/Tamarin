@@ -10,6 +10,9 @@
 #include <fstream>
 #include <cstdlib>
 #include <sstream>
+#include <vector>
+#include <string>
+#include <unordered_set>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -259,6 +262,49 @@ int PackageManager::buildPackage(const std::filesystem::path& manifestPath, bool
     // Pass all resolved include paths (-I)
     for (const auto& inc : res.includePaths) {
         cmd << " -I \"" << inc.string() << "\"";
+    }
+
+    // Pass native library search directories (-L) and native libraries (-l)
+    // Gather from dependencies in build order first, then from root package
+    std::vector<std::string> allLibDirs;
+    std::vector<std::string> allLinks;
+
+    for (const auto& dep : res.buildOrder) {
+        for (const auto& d : dep.manifest.package.libDirs) {
+            std::filesystem::path resolved = d;
+            if (resolved.is_relative()) {
+                resolved = dep.rootDir / resolved;
+            }
+            allLibDirs.push_back(resolved.string());
+        }
+        for (const auto& l : dep.manifest.package.links) {
+            allLinks.push_back(l);
+        }
+    }
+
+    for (const auto& d : manifest->package.libDirs) {
+        std::filesystem::path resolved = d;
+        if (resolved.is_relative()) {
+            resolved = rootDir / resolved;
+        }
+        allLibDirs.push_back(resolved.string());
+    }
+    for (const auto& l : manifest->package.links) {
+        allLinks.push_back(l);
+    }
+
+    std::unordered_set<std::string> seenDirs;
+    for (const auto& d : allLibDirs) {
+        if (seenDirs.insert(d).second) {
+            cmd << " -L \"" << d << "\"";
+        }
+    }
+
+    std::unordered_set<std::string> seenLinks;
+    for (const auto& l : allLinks) {
+        if (seenLinks.insert(l).second) {
+            cmd << " -l \"" << l << "\"";
+        }
     }
 
     for (const auto& extra : extraArgs) {

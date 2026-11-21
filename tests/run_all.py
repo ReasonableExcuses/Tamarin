@@ -454,10 +454,10 @@ class TestHarness:
         self.execute_probes("Async Coroutines", probes)
 
     # -------------------------------------------------------------------------
-    # Suite 9: Troop Package Manager E2E (10 tests)
+    # Suite 9: Troop Package Manager E2E (11 tests)
     # -------------------------------------------------------------------------
     def run_troop_e2e(self):
-        self.banner("9. TROOP PACKAGE MANAGER E2E SUITE (10 TESTS)")
+        self.banner("9. TROOP PACKAGE MANAGER E2E SUITE (11 TESTS)")
         if not self.troop_bin or not self.troop_bin.exists():
             self.record("Troop E2E", "Troop binary check", False, f"Binary not found: {self.troop_bin}")
             return
@@ -533,6 +533,17 @@ int main() {
             p11 = subprocess.run([str(self.troop_bin), "clean"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=app_dir)
             clean_ok = (p11.returncode == 0) and not (app_dir / "bin").exists()
             self.record("Troop E2E", "troop clean removes bin directory", clean_ok)
+
+            # 12. Troop manifest with native links and lib-dirs
+            native_lib_dir = app_dir / "lib" / "native"
+            native_lib_dir.mkdir(parents=True, exist_ok=True)
+            native_lib_name = "kernel32" if IS_WINDOWS else "m"
+            app_toml = (app_dir / "troop.toml").read_text(encoding="utf-8")
+            app_toml += f'\nlinks = ["{native_lib_name}"]\nlib-dirs = ["lib/native"]\n'
+            (app_dir / "troop.toml").write_text(app_toml, encoding="utf-8")
+            p12 = subprocess.run([str(self.troop_bin), "build"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=app_dir)
+            links_ok = (p12.returncode == 0) and (app_dir / "bin" / "debug" / f"calc_app{EXE_EXT}").exists()
+            self.record("Troop E2E", "troop build with native links and lib-dirs succeeds", links_ok)
 
     # -------------------------------------------------------------------------
     # Suite 10: @cfg(...) & Multi-Target Cross-Compilation (5 tests)

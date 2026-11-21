@@ -6642,6 +6642,34 @@ TAMARIN_TEST(CodeGen, IterativeDeepBinaryAdditionChain) {
     return true;
 }
 
+TAMARIN_TEST(CodeGen, NativeLinkerFlagsFormatting) {
+    SourceManager sm;
+    DiagnosticEngine diag(sm);
+    ir::IRModule module;
+    backend::LLVMCodeGen codegen(module, diag);
+
+    codegen.setTargetTriple("x86_64-pc-windows-msvc");
+    codegen.setLinkDirectories({"C:/libs/raylib", "vendor/lib"});
+    codegen.setLinkLibraries({"raylib", "custom.lib", "-luser32"});
+    codegen.setLinkerFlags({"-Xlinker", "/NODEFAULTLIB:libcmt.lib"});
+
+    std::string flags = codegen.formatNativeLinkFlags();
+    EXPECT_TRUE(flags.find("-L\"C:/libs/raylib\"") != std::string::npos);
+    EXPECT_TRUE(flags.find("-L\"vendor/lib\"") != std::string::npos);
+    EXPECT_TRUE(flags.find("-lraylib") != std::string::npos);
+    EXPECT_TRUE(flags.find("\"custom.lib\"") != std::string::npos);
+    EXPECT_TRUE(flags.find("-luser32") != std::string::npos);
+    EXPECT_TRUE(flags.find("-Xlinker /NODEFAULTLIB:libcmt.lib") != std::string::npos);
+
+    // Test non-Windows rpath insertion
+    codegen.setTargetTriple("x86_64-unknown-linux-gnu");
+    std::string linuxFlags = codegen.formatNativeLinkFlags();
+    EXPECT_TRUE(linuxFlags.find("-Wl,-rpath,\"C:/libs/raylib\"") != std::string::npos);
+    EXPECT_TRUE(linuxFlags.find("-Wl,-rpath,\"vendor/lib\"") != std::string::npos);
+
+    return true;
+}
+
 
 
 

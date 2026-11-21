@@ -123,6 +123,38 @@ crt = "static"
     return true;
 }
 
+TAMARIN_TEST(Troop, NativeLinksAndLibDirsParsingAndSerialization) {
+    std::string tomlContent = R"(
+[package]
+name = "game_app"
+version = "0.1.0"
+links = ["raylib", "m", "dl"]
+lib-dirs = ["lib/native", "vendor/raylib"]
+)";
+
+    std::string err;
+    auto manifest = Manifest::parseString(tomlContent, "fake_dir/troop.toml", err);
+    EXPECT_TRUE(manifest.has_value());
+    EXPECT_EQ(manifest->package.name, "game_app");
+    EXPECT_EQ(manifest->package.links.size(), 3u);
+    EXPECT_EQ(manifest->package.links[0], "raylib");
+    EXPECT_EQ(manifest->package.links[1], "m");
+    EXPECT_EQ(manifest->package.links[2], "dl");
+    EXPECT_EQ(manifest->package.libDirs.size(), 2u);
+    EXPECT_EQ(manifest->package.libDirs[0], "lib/native");
+    EXPECT_EQ(manifest->package.libDirs[1], "vendor/raylib");
+
+    // Test round-trip
+    std::string serialized = manifest->toToml();
+    auto manifest2 = Manifest::parseString(serialized, "fake_dir/troop.toml", err);
+    EXPECT_TRUE(manifest2.has_value());
+    EXPECT_EQ(manifest2->package.links.size(), 3u);
+    EXPECT_EQ(manifest2->package.links[0], "raylib");
+    EXPECT_EQ(manifest2->package.libDirs.size(), 2u);
+    EXPECT_EQ(manifest2->package.libDirs[0], "lib/native");
+    return true;
+}
+
 TAMARIN_TEST(Troop, LockfileSerializationAndChecksum) {
     Lockfile lock;
     lock.version = 1;

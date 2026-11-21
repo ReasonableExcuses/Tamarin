@@ -22,6 +22,8 @@ struct PackageInfo {
     std::string license;
     std::string kind = "bin"; // "bin" or "lib"
     std::string entryPoint;   // defaults to "src/main.tam" or "src/lib.tam"
+    std::vector<std::string> links;   // Native libraries to link against, e.g. ["raylib"]
+    std::vector<std::string> libDirs; // Native library search paths, e.g. ["lib/native"]
 };
 
 enum class DependencySourceKind {

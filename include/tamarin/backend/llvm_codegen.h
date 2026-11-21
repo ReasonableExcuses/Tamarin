@@ -97,6 +97,18 @@ public:
     CrtLinkage getCrtLinkage() const { return crtLinkage_; }
     bool isStaticLinkage() const { return crtLinkage_ == CrtLinkage::Static; }
 
+    void setLinkLibraries(std::vector<std::string> libs) { linkLibs_ = std::move(libs); }
+    const std::vector<std::string>& getLinkLibraries() const { return linkLibs_; }
+
+    void setLinkDirectories(std::vector<std::string> dirs) { linkDirs_ = std::move(dirs); }
+    const std::vector<std::string>& getLinkDirectories() const { return linkDirs_; }
+
+    void setLinkerFlags(std::vector<std::string> flags) { linkerFlags_ = std::move(flags); }
+    const std::vector<std::string>& getLinkerFlags() const { return linkerFlags_; }
+
+    /// Formats native library directories, library names, and linker flags for the compiler/linker command.
+    std::string formatNativeLinkFlags() const;
+
 private:
     void emitHeader(std::ostream& os);
     void emitRuntimeHelpers(std::ostream& os);
@@ -126,6 +138,9 @@ private:
     CrtLinkage crtLinkage_{CrtLinkage::Dynamic};
     target::TargetTriple targetTriple_ = target::TargetTriple::getHost();
     std::string targetCPU_;
+    std::vector<std::string> linkLibs_;
+    std::vector<std::string> linkDirs_;
+    std::vector<std::string> linkerFlags_;
     std::unordered_set<int32_t> loopUnrollsUsed_;
     std::map<LoopMetaKey, int32_t> loopMetadataMap_;
 };

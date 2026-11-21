@@ -231,6 +231,10 @@ std::optional<Manifest> Manifest::parseString(std::string_view content, const st
                 m.package.kind = stripQuotes(rawVal);
             } else if (key == "entry") {
                 m.package.entryPoint = stripQuotes(rawVal);
+            } else if (key == "links") {
+                m.package.links = parseStringArray(rawVal);
+            } else if (key == "lib-dirs" || key == "lib_dirs") {
+                m.package.libDirs = parseStringArray(rawVal);
             }
         } else if (section == "dependencies" || section == "dev-dependencies") {
             DependencySpec spec;
@@ -349,6 +353,22 @@ std::string Manifest::toToml() const {
         ss << "kind = \"" << package.kind << "\"\n";
         if (!package.entryPoint.empty()) {
             ss << "entry = \"" << package.entryPoint << "\"\n";
+        }
+        if (!package.links.empty()) {
+            ss << "links = [";
+            for (size_t i = 0; i < package.links.size(); ++i) {
+                if (i > 0) ss << ", ";
+                ss << "\"" << package.links[i] << "\"";
+            }
+            ss << "]\n";
+        }
+        if (!package.libDirs.empty()) {
+            ss << "lib-dirs = [";
+            for (size_t i = 0; i < package.libDirs.size(); ++i) {
+                if (i > 0) ss << ", ";
+                ss << "\"" << package.libDirs[i] << "\"";
+            }
+            ss << "]\n";
         }
         ss << "\n";
     }

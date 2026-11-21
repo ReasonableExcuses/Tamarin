@@ -3699,6 +3699,34 @@ bool LLVMCodeGen::compileToAssembly(const std::filesystem::path& llPath,
     return true;
 }
 
+std::string LLVMCodeGen::formatNativeLinkFlags() const {
+    std::string nativeLinkFlags;
+    for (const auto& dir : linkDirs_) {
+        nativeLinkFlags += " -L\"" + dir + "\"";
+        if (!targetTriple_.isWindows()) {
+            nativeLinkFlags += " -Wl,-rpath,\"" + dir + "\"";
+        }
+    }
+    for (const auto& lib : linkLibs_) {
+        if (lib.empty()) continue;
+        if (lib.starts_with("-l") || lib.starts_with("-framework")) {
+            nativeLinkFlags += " " + lib;
+        } else if (lib.ends_with(".lib") || lib.ends_with(".a") || lib.ends_with(".so") ||
+                   lib.ends_with(".dylib") || lib.ends_with(".dll") ||
+                   lib.find('/') != std::string::npos || lib.find('\\') != std::string::npos) {
+            nativeLinkFlags += " \"" + lib + "\"";
+        } else {
+            nativeLinkFlags += " -l" + lib;
+        }
+    }
+    for (const auto& flag : linkerFlags_) {
+        if (!flag.empty()) {
+            nativeLinkFlags += " " + flag;
+        }
+    }
+    return nativeLinkFlags;
+}
+
 bool LLVMCodeGen::compileToExecutable(const std::filesystem::path& llPath,
                                      const std::filesystem::path& exePath,
                                      int optLevel) {
@@ -3726,9 +3754,10 @@ bool LLVMCodeGen::compileToExecutable(const std::filesystem::path& llPath,
         std::string cxxLibs = targetTriple_.cxxStdLibLinkFlags();
         rtFlag = (!rtLib.empty() ? (" \"" + rtLib + "\" ") : "") + cxxLibs;
     }
+    std::string nativeFlags = formatNativeLinkFlags();
     std::string cmd = "\"" + clangPath_ + "\" " + optFlag + archFlag + extraOpt + crtFlag +
                       " --target=" + targetTriple_.str() + " -Wno-override-module -o \"" +
-                      exePath.string() + "\" \"" + llPath.string() + "\"" + rtFlag;
+                      exePath.string() + "\" \"" + llPath.string() + "\"" + rtFlag + nativeFlags;
 
     int ret = runSystemCommand(cmd);
     if (ret != 0) {
@@ -3777,9 +3806,10 @@ bool LLVMCodeGen::compileToSharedLibrary(const std::filesystem::path& llPath,
         rtFlag = (!rtLib.empty() ? (" \"" + rtLib + "\" ") : "") + cxxLibs;
     }
     std::string fpic = targetTriple_.isWindows() ? "" : " -fPIC";
+    std::string nativeFlags = formatNativeLinkFlags();
     std::string cmd = "\"" + clangPath_ + "\" " + optFlag + archFlag + extraOpt + crtFlag + fpic +
                       " -shared --target=" + targetTriple_.str() + " -Wno-override-module -o \"" +
-                      dylibPath.string() + "\" \"" + llPath.string() + "\"" + rtFlag;
+                      dylibPath.string() + "\" \"" + llPath.string() + "\"" + rtFlag + nativeFlags;
 
     int ret = runSystemCommand(cmd);
     if (ret != 0) {
