@@ -264,11 +264,18 @@ void init_scene() {
     float closest_so_far = t_max;
     int closest_idx = -1;
 
+    float ro_x = r.origin.x;
+    float ro_y = r.origin.y;
+    float ro_z = r.origin.z;
+    float rd_x = r.dir.x;
+    float rd_y = r.dir.y;
+    float rd_z = r.dir.z;
+
     for (int i = 0; i < 124; i++) {
-        float oc_x = r.origin.x - g_cx[i];
-        float oc_y = r.origin.y - g_cy[i];
-        float oc_z = r.origin.z - g_cz[i];
-        float half_b = oc_x * r.dir.x + oc_y * r.dir.y + oc_z * r.dir.z;
+        float oc_x = ro_x - g_cx[i];
+        float oc_y = ro_y - g_cy[i];
+        float oc_z = ro_z - g_cz[i];
+        float half_b = oc_x * rd_x + oc_y * rd_y + oc_z * rd_z;
         float c = oc_x * oc_x + oc_y * oc_y + oc_z * oc_z - g_radius[i] * g_radius[i];
         float discriminant = half_b * half_b - c;
 

@@ -104,9 +104,11 @@ def measure_compilation(lang: str) -> tuple[float, pathlib.Path]:
     elif lang == "Rust":
         # Cargo clean for accurate clean release build time
         subprocess.run(["cargo", "clean"], cwd=RUST_DIR, capture_output=True)
+        rust_env = os.environ.copy()
+        rust_env["RUSTFLAGS"] = "-C target-cpu=native"
         cmd = ["cargo", "build", "--release"]
         t0 = time.perf_counter()
-        res = subprocess.run(cmd, cwd=RUST_DIR, capture_output=True, text=True)
+        res = subprocess.run(cmd, cwd=RUST_DIR, capture_output=True, text=True, env=rust_env)
         t1 = time.perf_counter()
         if res.returncode != 0:
             print("Rust compilation failed:", res.stderr)
@@ -298,9 +300,9 @@ Across 1280×720 framebuffer rendering with 16 samples per pixel (14.75 million 
 - **Operating System:** Microsoft Windows 11 Home x86_64
 - **Graphics & Presentation:** SDL3 v3.2.0 (`SDL_TEXTUREACCESS_STREAMING`, `SDL_PIXELFORMAT_RGBA32`)
 - **Compilers & Flags:**
-  - **Tamarin:** `troop build --release` (`-O3`, SIMD auto-vectorization enabled, zero unsafe blocks)
+  - **Tamarin:** `troop build --release` (`-O3`, `-march=native`, SIMD auto-vectorization enabled, zero unsafe blocks)
   - **Clang C++20:** `clang++ -std=c++20 -O3 -march=native -ffp-contract=off` (OpenMP / `std::jthread` scanline pool)
-  - **Rust:** `cargo build --release` (`rustc -C opt-level=3`, Rayon `par_chunks_exact_mut`)
+  - **Rust:** `cargo build --release` with `RUSTFLAGS="-C target-cpu=native"` (configured via `.cargo/config.toml`, `rustc -C opt-level=3`, Rayon `par_chunks_exact_mut`)
 
 ---
 
@@ -323,8 +325,8 @@ Across 1280×720 framebuffer rendering with 16 samples per pixel (14.75 million 
 - Clang C++ with default optimization settings enables FMA (fused multiply-add contraction via `-ffp-contract=on`), which evaluates `a * b + c` without intermediate IEEE-754 rounding. Rust explicitly disallows FMA contraction without explicit intrinsic calls (RFC 2686), and Tamarin lowers floating-point operations cleanly to standard LLVM IR non-fused operations. Passing `-ffp-contract=off` to Clang aligned C++, Rust, and Tamarin to the exact same IEEE-754 single-precision bits across all 921,600 pixels.
 
 ### 2. Concurrency & Memory Safety Architecture
-- **Tamarin:** Parallelized scanlines `parallel for (int y = 0; y < 720; y++)` directly write into 2D global array `g_framebuffer[720][1280]`. Tamarin's affine index injectivity checker statically verifies that loop index `[y]` partitions writes into disjoint scanlines with **zero data races** and **zero `unsafe` blocks**.
-- **Rust:** Requires `unsafe` blocks for FFI calls (`SDL_Init`, `SDL_CreateWindowAndRenderer`, `SDL_CreateTexture`, `SDL_LockTexture`, `SDL_UnlockTexture`, `SDL_RenderTexture`, `SDL_RenderPresent`), totaling **{r_soa['unsafe_blocks']} unsafe operations**.
+- **Tamarin:** Parallelized scanlines `parallel for (int y = 0; y < 720; y++)` directly write into the 2D global array `g_framebuffer[720][1280]`. Tamarin's affine index injectivity checker statically verifies that loop index `[y]` partitions writes into disjoint scanlines with **zero data races** and **zero `unsafe` blocks** across the entire application—including all `extern "C"` SDL3 streaming texture locking (`SDL_LockTexture`), unlocking (`SDL_UnlockTexture`), and present calls.
+- **Rust:** While Rayon's safe disjoint slice iterators (`fb.par_chunks_exact_mut(WIDTH)`) safely execute the raytracing loops themselves, Rust strictly requires an `unsafe` block wrapping all raw C ABI SDL3 initialization and streaming texture presentation (`SDL_Init`, `SDL_CreateWindowAndRenderer`, `SDL_CreateTexture`, `SDL_LockTexture`, `SDL_UnlockTexture`, `SDL_RenderTexture`, `SDL_RenderPresent`), totaling **{r_soa['unsafe_blocks']} unsafe block**.
 - **C++20:** Entirely unchecked manual pointer arithmetic and thread dispatch via `std::jthread`.
 
 ### 3. Structure-of-Arrays (SoA) vs Array-of-Structures (AoS)

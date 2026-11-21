@@ -330,11 +330,18 @@ fn hit_scene_soa(r: &Ray, t_min: f32, t_max: f32, rec: &mut HitRecord, s: &Spher
     let mut closest_so_far = t_max;
     let mut closest_idx = 0;
 
+    let ro_x = r.origin.x;
+    let ro_y = r.origin.y;
+    let ro_z = r.origin.z;
+    let rd_x = r.dir.x;
+    let rd_y = r.dir.y;
+    let rd_z = r.dir.z;
+
     for i in 0..NUM_SPHERES {
-        let oc_x = r.origin.x - s.cx[i];
-        let oc_y = r.origin.y - s.cy[i];
-        let oc_z = r.origin.z - s.cz[i];
-        let half_b = oc_x * r.dir.x + oc_y * r.dir.y + oc_z * r.dir.z;
+        let oc_x = ro_x - s.cx[i];
+        let oc_y = ro_y - s.cy[i];
+        let oc_z = ro_z - s.cz[i];
+        let half_b = oc_x * rd_x + oc_y * rd_y + oc_z * rd_z;
         let c = oc_x * oc_x + oc_y * oc_y + oc_z * oc_z - s.radius[i] * s.radius[i];
         let discriminant = half_b * half_b - c;
 

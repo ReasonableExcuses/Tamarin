@@ -222,11 +222,18 @@ static inline bool hit_scene_soa(const Ray& r, float t_min, float t_max, HitReco
     float closest_so_far = t_max;
     int closest_idx = -1;
 
+    float ro_x = r.origin.x;
+    float ro_y = r.origin.y;
+    float ro_z = r.origin.z;
+    float rd_x = r.dir.x;
+    float rd_y = r.dir.y;
+    float rd_z = r.dir.z;
+
     for (int i = 0; i < NUM_SPHERES; i++) {
-        float oc_x = r.origin.x - s->cx[i];
-        float oc_y = r.origin.y - s->cy[i];
-        float oc_z = r.origin.z - s->cz[i];
-        float half_b = oc_x * r.dir.x + oc_y * r.dir.y + oc_z * r.dir.z;
+        float oc_x = ro_x - s->cx[i];
+        float oc_y = ro_y - s->cy[i];
+        float oc_z = ro_z - s->cz[i];
+        float half_b = oc_x * rd_x + oc_y * rd_y + oc_z * rd_z;
         float c = oc_x * oc_x + oc_y * oc_y + oc_z * oc_z - s->radius[i] * s->radius[i];
         float discriminant = half_b * half_b - c;
 
