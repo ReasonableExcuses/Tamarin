@@ -2096,6 +2096,15 @@ void LLVMCodeGen::emitFunction(const ir::IRFunction& fn, std::ostream& os) {
     isPointerValue_.clear();
 
     if (fn.isExtern || fn.blocks.empty()) {
+        static const std::unordered_set<std::string> preludeBuiltins = {
+            "fopen", "fclose", "fread", "fwrite", "fflush", "remove", "malloc", "realloc", "free", "exit",
+            "_write", "write", "getchar", "snprintf", "QueryPerformanceCounter", "QueryPerformanceFrequency",
+            "clock_gettime"
+        };
+        if (preludeBuiltins.count(fn.name)) {
+            return;
+        }
+
         os << "declare " << llvmType(fn.returnType) << " @" << fn.name << "(";
         for (size_t i = 0; i < fn.params.size(); ++i) {
             if (i > 0) os << ", ";
@@ -2795,6 +2804,7 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
 
         case ir::Opcode::BoundsCheck: {
             auto arrTy = getValueType(inst.op2);
+            if (arrTy && arrTy->isReference()) arrTy = arrTy->elementType;
             if (arrTy && !arrTy->isArrayView() && arrTy->arraySize < 0) {
                 break;
             }
@@ -3729,7 +3739,7 @@ static std::string resolveArchFlag(const std::string& targetCPU) {
     if (envCpu && *envCpu && isSafeArchString(envCpu)) {
         return " -march=" + std::string(envCpu);
     }
-    return "";
+    return " -march=native";
 }
 
 bool LLVMCodeGen::optimizeLLVMIR(const std::filesystem::path& inputLL,

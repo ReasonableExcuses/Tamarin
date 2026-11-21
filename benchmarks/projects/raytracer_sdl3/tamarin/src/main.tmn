@@ -1,0 +1,768 @@
+// ============================================================================
+// Tamarin v0.18.5+ Multi-threaded CPU Raytracer Benchmark (SDL3 Streaming)
+// ============================================================================
+struct SDL_Event {
+    u32 type;
+    u8 padding[128];
+};
+
+extern "C" {
+    *const u8 GetCommandLineA();
+    *const u8 strstr(*const u8 haystack, *const u8 needle);
+    int atoi(*const u8 str);
+    float sqrtf(float x);
+    float sinf(float x);
+    float cosf(float x);
+    float tanf(float x);
+    *void memcpy(*void dst, *void src, u64 len);
+    *void fopen(*const u8 filename, *const u8 mode);
+    u64 fwrite(*void ptr, u64 size, u64 count, *void stream);
+    int fclose(*void stream);
+
+    // SDL3 C FFI
+    bool SDL_Init(u32 flags);
+    void SDL_Quit();
+    *const u8 SDL_GetError();
+    bool SDL_CreateWindowAndRenderer(*const u8 title, int width, int height, u64 window_flags, *void window, *void renderer);
+    void SDL_DestroyWindow(*void window);
+    void SDL_DestroyRenderer(*void renderer);
+    *void SDL_CreateTexture(*void renderer, int format, int access, int w, int h);
+    void SDL_DestroyTexture(*void texture);
+    bool SDL_LockTexture(*void texture, *void rect, *void pixels, *int pitch);
+    void SDL_UnlockTexture(*void texture);
+    bool SDL_RenderTexture(*void renderer, *void texture, *void srcrect, *void dstrect);
+    bool SDL_RenderPresent(*void renderer);
+    bool SDL_SetRenderVSync(*void renderer, int vsync);
+    bool SDL_PollEvent(SDL_Event& event);
+
+    u64 SDL_GetPerformanceCounter();
+    u64 SDL_GetPerformanceFrequency();
+}
+
+const int WIDTH = 1280;
+const int HEIGHT = 720;
+const int SAMPLES_PER_PIXEL = 16;
+const int MAX_DEPTH = 8;
+const int NUM_SPHERES = 124;
+
+const u32 SDL_INIT_VIDEO = 32u32;
+const int SDL_PIXELFORMAT_RGBA32 = 376840196;
+const int SDL_TEXTUREACCESS_STREAMING = 1;
+const u32 SDL_EVENT_QUIT = 256u32;
+const u32 SDL_EVENT_KEY_DOWN = 768u32;
+
+// ── Deterministic PRNG & Math ───────────────────────────────────────────────
+@inline u32 xorshift32(u32& state) {
+    u32 x = state;
+    x = x ^ (x << 13u32);
+    x = x ^ (x >> 17u32);
+    x = x ^ (x << 5u32);
+    state = x;
+    return x;
+}
+
+@inline float rand_float(u32& state) {
+    u32 u = xorshift32(state);
+    return (float)(u & 16777215u32) * (1.0f / 16777216.0f);
+}
+
+struct Vec3 {
+    float x;
+    float y;
+    float z;
+};
+
+@inline Vec3 v3(float x, float y, float z) {
+    Vec3 v;
+    v.x = x; v.y = y; v.z = z;
+    return v;
+}
+
+@inline Vec3 v3_add(Vec3 a, Vec3 b) { return v3(a.x + b.x, a.y + b.y, a.z + b.z); }
+@inline Vec3 v3_sub(Vec3 a, Vec3 b) { return v3(a.x - b.x, a.y - b.y, a.z - b.z); }
+@inline Vec3 v3_mul(Vec3 a, Vec3 b) { return v3(a.x * b.x, a.y * b.y, a.z * b.z); }
+@inline Vec3 v3_scale(Vec3 a, float s) { return v3(a.x * s, a.y * s, a.z * s); }
+@inline Vec3 v3_neg(Vec3 a) { return v3(0.0f - a.x, 0.0f - a.y, 0.0f - a.z); }
+@inline float v3_dot(Vec3 a, Vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+
+@inline Vec3 v3_cross(Vec3 a, Vec3 b) {
+    return v3(
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    );
+}
+
+@inline Vec3 v3_normalize(Vec3 v) {
+    float len = sqrtf(v3_dot(v, v));
+    if (len > 0.0f) {
+        return v3_scale(v, 1.0f / len);
+    }
+    return v3(0.0f, 0.0f, 0.0f);
+}
+
+@inline Vec3 random_unit_vector(u32& rng) {
+    float u1 = rand_float(rng);
+    float u2 = rand_float(rng);
+    float z = 1.0f - 2.0f * u1;
+    float r2 = 1.0f - z * z;
+    if (r2 < 0.0f) { r2 = 0.0f; }
+    float r = sqrtf(r2);
+    float phi = 6.283185307179586f * u2;
+    return v3(r * cosf(phi), r * sinf(phi), z);
+}
+
+@inline Vec3 reflect(Vec3 v, Vec3 n) {
+    return v3_sub(v, v3_scale(n, 2.0f * v3_dot(v, n)));
+}
+
+@inline float abs_f32(float x) {
+    if (x < 0.0f) {
+        return 0.0f - x;
+    }
+    return x;
+}
+
+@inline Vec3 refract(Vec3 uv, Vec3 n, float etai_over_etat) {
+    float cos_theta = v3_dot(v3_neg(uv), n);
+    if (cos_theta > 1.0f) { cos_theta = 1.0f; }
+    Vec3 r_out_perp = v3_scale(v3_add(uv, v3_scale(n, cos_theta)), etai_over_etat);
+    float k = abs_f32(1.0f - v3_dot(r_out_perp, r_out_perp));
+    Vec3 r_out_parallel = v3_scale(n, 0.0f - sqrtf(k));
+    return v3_add(r_out_perp, r_out_parallel);
+}
+
+struct Ray {
+    Vec3 origin;
+    Vec3 dir;
+};
+
+struct HitRecord {
+    Vec3 p;
+    Vec3 normal;
+    float t;
+    bool front_face;
+    int mat_type;
+    Vec3 albedo;
+    float fuzz;
+    float ior;
+};
+
+HitRecord create_empty_hit() {
+    HitRecord rec;
+    rec.p = v3(0.0f, 0.0f, 0.0f);
+    rec.normal = v3(0.0f, 0.0f, 0.0f);
+    rec.t = 0.0f;
+    rec.front_face = true;
+    rec.mat_type = 0;
+    rec.albedo = v3(0.0f, 0.0f, 0.0f);
+    rec.fuzz = 0.0f;
+    rec.ior = 1.0f;
+    return rec;
+}
+
+// ── Structure-of-Arrays (SoA) Contiguous Scene ─────────────────────────────
+float g_cx[124];
+float g_cy[124];
+float g_cz[124];
+float g_radius[124];
+float g_inv_radius[124];
+float g_albedo_r[124];
+float g_albedo_g[124];
+float g_albedo_b[124];
+float g_fuzz[124];
+float g_ior[124];
+int g_mat_type[124];
+
+u32 g_framebuffer[720][1280];
+
+void init_scene() {
+    // 0: Ground
+    g_cx[0] = 0.0f; g_cy[0] = -1000.0f; g_cz[0] = 0.0f;
+    g_radius[0] = 1000.0f; g_inv_radius[0] = 0.001f;
+    g_mat_type[0] = 0;
+    g_albedo_r[0] = 0.5f; g_albedo_g[0] = 0.5f; g_albedo_b[0] = 0.5f;
+    g_fuzz[0] = 0.0f; g_ior[0] = 1.0f;
+
+    // 1: Hero Glass
+    g_cx[1] = 0.0f; g_cy[1] = 1.0f; g_cz[1] = 0.0f;
+    g_radius[1] = 1.0f; g_inv_radius[1] = 1.0f;
+    g_mat_type[1] = 2;
+    g_albedo_r[1] = 1.0f; g_albedo_g[1] = 1.0f; g_albedo_b[1] = 1.0f;
+    g_fuzz[1] = 0.0f; g_ior[1] = 1.5f;
+
+    // 2: Hero Diffuse
+    g_cx[2] = -4.0f; g_cy[2] = 1.0f; g_cz[2] = 0.0f;
+    g_radius[2] = 1.0f; g_inv_radius[2] = 1.0f;
+    g_mat_type[2] = 0;
+    g_albedo_r[2] = 0.4f; g_albedo_g[2] = 0.2f; g_albedo_b[2] = 0.1f;
+    g_fuzz[2] = 0.0f; g_ior[2] = 1.0f;
+
+    // 3: Hero Metal
+    g_cx[3] = 4.0f; g_cy[3] = 1.0f; g_cz[3] = 0.0f;
+    g_radius[3] = 1.0f; g_inv_radius[3] = 1.0f;
+    g_mat_type[3] = 1;
+    g_albedo_r[3] = 0.7f; g_albedo_g[3] = 0.6f; g_albedo_b[3] = 0.5f;
+    g_fuzz[3] = 0.0f; g_ior[3] = 1.0f;
+
+    // 4..123: 120 Procedural spheres on 15x8 grid
+    int idx = 4;
+    for (int a = -7; a <= 7; a++) {
+        for (int b = -4; b <= 3; b++) {
+            u32 rng_state = (u32)((a + 10) * 100 + (b + 10));
+            float rx = rand_float(rng_state);
+            float rz = rand_float(rng_state);
+            float center_x = (float)a * 1.6f + 0.9f * rx;
+            float center_z = (float)b * 1.6f + 0.9f * rz;
+            float center_y = 0.2f;
+            float rad = 0.2f;
+
+            float d1 = center_x * center_x + center_z * center_z;
+            float d2 = (center_x + 4.0f) * (center_x + 4.0f) + center_z * center_z;
+            float d3 = (center_x - 4.0f) * (center_x - 4.0f) + center_z * center_z;
+            if (d1 < 1.44f || d2 < 1.44f || d3 < 1.44f) {
+                center_z = center_z + 1.5f;
+            }
+
+            g_cx[idx] = center_x;
+            g_cy[idx] = center_y;
+            g_cz[idx] = center_z;
+            g_radius[idx] = rad;
+            g_inv_radius[idx] = 1.0f / rad;
+
+            float choose_mat = rand_float(rng_state);
+            if (choose_mat < 0.70f) {
+                g_mat_type[idx] = 0;
+                g_albedo_r[idx] = rand_float(rng_state) * rand_float(rng_state);
+                g_albedo_g[idx] = rand_float(rng_state) * rand_float(rng_state);
+                g_albedo_b[idx] = rand_float(rng_state) * rand_float(rng_state);
+                g_fuzz[idx] = 0.0f;
+                g_ior[idx] = 1.0f;
+            } else if (choose_mat < 0.90f) {
+                g_mat_type[idx] = 1;
+                g_albedo_r[idx] = 0.5f * (1.0f + rand_float(rng_state));
+                g_albedo_g[idx] = 0.5f * (1.0f + rand_float(rng_state));
+                g_albedo_b[idx] = 0.5f * (1.0f + rand_float(rng_state));
+                g_fuzz[idx] = 0.5f * rand_float(rng_state);
+                g_ior[idx] = 1.0f;
+            } else {
+                g_mat_type[idx] = 2;
+                g_albedo_r[idx] = 1.0f;
+                g_albedo_g[idx] = 1.0f;
+                g_albedo_b[idx] = 1.0f;
+                g_fuzz[idx] = 0.0f;
+                g_ior[idx] = 1.5f;
+            }
+            idx = idx + 1;
+        }
+    }
+}
+
+// ── SoA Intersection Kernel (SIMD auto-vectorized sweep) ────────────────────
+@inline bool hit_scene_soa(Ray& r, float t_min, float t_max, HitRecord& rec) {
+    bool hit_anything = false;
+    float closest_so_far = t_max;
+    int closest_idx = -1;
+
+    for (int i = 0; i < 124; i++) {
+        float oc_x = r.origin.x - g_cx[i];
+        float oc_y = r.origin.y - g_cy[i];
+        float oc_z = r.origin.z - g_cz[i];
+        float half_b = oc_x * r.dir.x + oc_y * r.dir.y + oc_z * r.dir.z;
+        float c = oc_x * oc_x + oc_y * oc_y + oc_z * oc_z - g_radius[i] * g_radius[i];
+        float discriminant = half_b * half_b - c;
+
+        if (discriminant > 0.0f) {
+            float sqrtd = sqrtf(discriminant);
+            float root = 0.0f - half_b - sqrtd;
+            if (root <= t_min || closest_so_far <= root) {
+                root = 0.0f - half_b + sqrtd;
+            }
+            if (root > t_min && root < closest_so_far) {
+                closest_so_far = root;
+                closest_idx = i;
+                hit_anything = true;
+            }
+        }
+    }
+
+    if (hit_anything) {
+        rec.t = closest_so_far;
+        rec.p = v3_add(r.origin, v3_scale(r.dir, closest_so_far));
+        Vec3 outward_normal = v3_scale(v3_sub(rec.p, v3(g_cx[closest_idx], g_cy[closest_idx], g_cz[closest_idx])), g_inv_radius[closest_idx]);
+        rec.front_face = v3_dot(r.dir, outward_normal) < 0.0f;
+        rec.normal = rec.front_face ? outward_normal : v3_neg(outward_normal);
+        rec.mat_type = g_mat_type[closest_idx];
+        rec.albedo = v3(g_albedo_r[closest_idx], g_albedo_g[closest_idx], g_albedo_b[closest_idx]);
+        rec.fuzz = g_fuzz[closest_idx];
+        rec.ior = g_ior[closest_idx];
+    }
+    return hit_anything;
+}
+
+// ── Camera ──────────────────────────────────────────────────────────────────
+struct Camera {
+    Vec3 origin;
+    Vec3 lower_left_corner;
+    Vec3 horizontal;
+    Vec3 vertical;
+};
+
+Camera init_camera() {
+    Camera cam;
+    cam.origin = v3(13.0f, 2.0f, 3.0f);
+    Vec3 lookat = v3(0.0f, 0.0f, 0.0f);
+    Vec3 vup = v3(0.0f, 1.0f, 0.0f);
+    float vfov = 20.0f;
+    float aspect_ratio = (float)WIDTH / (float)HEIGHT;
+
+    float theta = vfov * (3.141592653589793f / 180.0f);
+    float h = tanf(theta / 2.0f);
+    float viewport_height = 2.0f * h;
+    float viewport_width = aspect_ratio * viewport_height;
+
+    Vec3 w = v3_normalize(v3_sub(cam.origin, lookat));
+    Vec3 u = v3_normalize(v3_cross(vup, w));
+    Vec3 v = v3_cross(w, u);
+
+    cam.horizontal = v3_scale(u, viewport_width);
+    cam.vertical = v3_scale(v, viewport_height);
+    cam.lower_left_corner = v3_sub(v3_sub(v3_sub(cam.origin, v3_scale(cam.horizontal, 0.5f)), v3_scale(cam.vertical, 0.5f)), w);
+    return cam;
+}
+
+// ── Ray Color Kernel ────────────────────────────────────────────────────────
+@inline Vec3 ray_color(Ray r_in, u32& rng) {
+    Vec3 cur_attenuation = v3(1.0f, 1.0f, 1.0f);
+    Ray cur_ray = r_in;
+    Vec3 final_color = v3(0.0f, 0.0f, 0.0f);
+
+    for (int depth = 0; depth < 8; depth++) {
+        HitRecord rec = create_empty_hit();
+        bool hit = hit_scene_soa(cur_ray, 0.001f, 1e20f, rec);
+        if (hit) {
+            if (rec.mat_type == 0) {
+                // Lambertian Diffuse
+                Vec3 scatter_dir = v3_add(rec.normal, random_unit_vector(rng));
+                if (abs_f32(scatter_dir.x) < 1e-6f && abs_f32(scatter_dir.y) < 1e-6f && abs_f32(scatter_dir.z) < 1e-6f) {
+                    scatter_dir = rec.normal;
+                }
+                cur_ray.origin = rec.p;
+                cur_ray.dir = v3_normalize(scatter_dir);
+                cur_attenuation = v3_mul(cur_attenuation, rec.albedo);
+            } else if (rec.mat_type == 1) {
+                // Metal Reflection
+                Vec3 reflected = reflect(v3_normalize(cur_ray.dir), rec.normal);
+                Vec3 scatter_dir = v3_add(reflected, v3_scale(random_unit_vector(rng), rec.fuzz));
+                cur_ray.origin = rec.p;
+                cur_ray.dir = v3_normalize(scatter_dir);
+                cur_attenuation = v3_mul(cur_attenuation, rec.albedo);
+                if (v3_dot(cur_ray.dir, rec.normal) <= 0.0f) {
+                    cur_attenuation = v3(0.0f, 0.0f, 0.0f);
+                    break;
+                }
+            } else {
+                // Dielectric (Glass)
+                float refraction_ratio = rec.front_face ? (1.0f / rec.ior) : rec.ior;
+                Vec3 unit_dir = v3_normalize(cur_ray.dir);
+                float cos_theta = v3_dot(v3_neg(unit_dir), rec.normal);
+                if (cos_theta > 1.0f) { cos_theta = 1.0f; }
+                float sin2 = 1.0f - cos_theta * cos_theta;
+                if (sin2 < 0.0f) { sin2 = 0.0f; }
+                float sin_theta = sqrtf(sin2);
+                bool cannot_refract = (refraction_ratio * sin_theta) > 1.0f;
+
+                float r0 = (1.0f - refraction_ratio) / (1.0f + refraction_ratio);
+                r0 = r0 * r0;
+                float p5 = 1.0f - cos_theta;
+                float reflectance = r0 + (1.0f - r0) * (p5 * p5 * p5 * p5 * p5);
+
+                Vec3 direction;
+                if (cannot_refract || reflectance > rand_float(rng)) {
+                    direction = reflect(unit_dir, rec.normal);
+                } else {
+                    direction = refract(unit_dir, rec.normal, refraction_ratio);
+                }
+                cur_ray.origin = rec.p;
+                cur_ray.dir = v3_normalize(direction);
+            }
+        } else {
+            // Background Sky Gradient
+            Vec3 unit_dir = v3_normalize(cur_ray.dir);
+            float t = 0.5f * (unit_dir.y + 1.0f);
+            Vec3 sky = v3_add(v3_scale(v3(1.0f, 1.0f, 1.0f), 1.0f - t), v3_scale(v3(0.5f, 0.7f, 1.0f), t));
+            final_color = v3_mul(cur_attenuation, sky);
+            break;
+        }
+    }
+    return final_color;
+}
+
+// ── Scanline Renderer ───────────────────────────────────────────────────────
+@inline void render_scanline(int y, int frame_idx, Camera cam) {
+    int j = 720 - 1 - y;
+    for (int x = 0; x < 1280; x++) {
+        u32 pixel_seed = ((u32)y * 1280u32 + (u32)x) * 1973u32 + (u32)frame_idx * 9277u32 + 1u32;
+        xorshift32(pixel_seed);
+        xorshift32(pixel_seed);
+
+        float tot_r = 0.0f;
+        float tot_g = 0.0f;
+        float tot_b = 0.0f;
+
+        for (int s = 0; s < 16; s++) {
+            float u_jitter = rand_float(pixel_seed);
+            float v_jitter = rand_float(pixel_seed);
+            float u_coord = ((float)x + u_jitter) * (1.0f / 1280.0f);
+            float v_coord = ((float)j + v_jitter) * (1.0f / 720.0f);
+
+            Vec3 ray_dir = v3_sub(v3_add(v3_add(cam.lower_left_corner, v3_scale(cam.horizontal, u_coord)), v3_scale(cam.vertical, v_coord)), cam.origin);
+            Ray r;
+            r.origin = cam.origin;
+            r.dir = v3_normalize(ray_dir);
+
+            Vec3 c = ray_color(r, pixel_seed);
+            tot_r = tot_r + c.x;
+            tot_g = tot_g + c.y;
+            tot_b = tot_b + c.z;
+        }
+
+        float scale = 1.0f / 16.0f;
+        float r = tot_r * scale;
+        float g = tot_g * scale;
+        float b = tot_b * scale;
+
+        if (r < 0.0f) { r = 0.0f; } else if (r > 1.0f) { r = 1.0f; }
+        if (g < 0.0f) { g = 0.0f; } else if (g > 1.0f) { g = 1.0f; }
+        if (b < 0.0f) { b = 0.0f; } else if (b > 1.0f) { b = 1.0f; }
+
+        r = sqrtf(r);
+        g = sqrtf(g);
+        b = sqrtf(b);
+
+        u32 ir = (u32)(255.999f * r);
+        u32 ig = (u32)(255.999f * g);
+        u32 ib = (u32)(255.999f * b);
+        u32 ia = 255u32;
+
+        // RGBA32 packed format
+        g_framebuffer[y][x] = ir | (ig << 8u32) | (ib << 16u32) | (ia << 24u32);
+    }
+}
+
+// ── Multi-Threaded Frame Dispatch ───────────────────────────────────────────
+double render_frame(int frame_idx, Camera cam) {
+    u64 t0 = SDL_GetPerformanceCounter();
+
+    // Parallel scanline sweep verified race-free by Tamarin's affine injectivity checker
+    parallel(1) for (int y = 0; y < 720; y++) {
+        render_scanline(y, frame_idx, cam);
+    }
+
+    u64 t1 = SDL_GetPerformanceCounter();
+    u64 freq = SDL_GetPerformanceFrequency();
+    return (double)(t1 - t0) * 1000.0 / (double)freq;
+}
+
+// ── Checksum Computation ────────────────────────────────────────────────────
+u64 compute_checksum() {
+    u64 hash = 14695981039346656037u64;
+    for (int y = 0; y < 720; y++) {
+        for (int x = 0; x < 1280; x++) {
+            u32 p = g_framebuffer[y][x];
+            u64 b0 = (u64)(p & 255u32);
+            u64 b1 = (u64)((p >> 8u32) & 255u32);
+            u64 b2 = (u64)((p >> 16u32) & 255u32);
+            u64 b3 = (u64)((p >> 24u32) & 255u32);
+
+            hash = (hash ^ b0) * 1099511628211u64;
+            hash = (hash ^ b1) * 1099511628211u64;
+            hash = (hash ^ b2) * 1099511628211u64;
+            hash = (hash ^ b3) * 1099511628211u64;
+        }
+    }
+    return hash;
+}
+
+// ── Helper to print 64-bit Hex ──────────────────────────────────────────────
+void print_hex64(u64 val) {
+    print("0x");
+    u8 hex_chars[16];
+    for (int i = 15; i >= 0; i--) {
+        u32 digit = (u32)((val >> (u64)(i * 4)) & 15u64);
+        if (digit < 10u32) {
+            hex_chars[15 - i] = (u8)(48u32 + digit);
+        } else {
+            hex_chars[15 - i] = (u8)(65u32 + (digit - 10u32));
+        }
+    }
+    for (int i = 0; i < 16; i++) {
+        u8 ch = hex_chars[i];
+        if (ch == 48u8) print("0");
+        else if (ch == 49u8) print("1");
+        else if (ch == 50u8) print("2");
+        else if (ch == 51u8) print("3");
+        else if (ch == 52u8) print("4");
+        else if (ch == 53u8) print("5");
+        else if (ch == 54u8) print("6");
+        else if (ch == 55u8) print("7");
+        else if (ch == 56u8) print("8");
+        else if (ch == 57u8) print("9");
+        else if (ch == 65u8) print("A");
+        else if (ch == 66u8) print("B");
+        else if (ch == 67u8) print("C");
+        else if (ch == 68u8) print("D");
+        else if (ch == 69u8) print("E");
+        else if (ch == 70u8) print("F");
+    }
+}
+
+u8 g_row_bgr[3840];
+
+bool save_bmp(*const u8 filename) {
+    *void fp = fopen(filename, "wb");
+    if (fp == null) {
+        return false;
+    }
+
+    u8 header[54];
+    for (int i = 0; i < 54; i++) {
+        header[i] = 0u8;
+    }
+
+    // BMP File Header (14 bytes)
+    header[0] = 66u8; // 'B'
+    header[1] = 77u8; // 'M'
+    // File size: 54 + 1280 * 720 * 3 = 2764854 (0x002A3036)
+    header[2] = 54u8;  // 0x36
+    header[3] = 48u8;  // 0x30
+    header[4] = 42u8;  // 0x2A
+    header[5] = 0u8;   // 0x00
+    // Offset to pixel data: 54 (0x00000036)
+    header[10] = 54u8;
+
+    // DIB Header (BITMAPINFOHEADER, 40 bytes)
+    header[14] = 40u8; // size = 40
+    // Width = 1280 (0x00000500)
+    header[18] = 0u8;
+    header[19] = 5u8;
+    // Height = -720 (0xFFFFFD30, top-down)
+    header[22] = 48u8;  // 0x30
+    header[23] = 253u8; // 0xFD
+    header[24] = 255u8; // 0xFF
+    header[25] = 255u8; // 0xFF
+    // Planes = 1
+    header[26] = 1u8;
+    // Bits per pixel = 24
+    header[28] = 24u8;
+    // Compression = 0 (BI_RGB)
+    // Image size = 1280 * 720 * 3 = 2764800 (0x002A3000)
+    header[34] = 0u8;
+    header[35] = 48u8;  // 0x30
+    header[36] = 42u8;  // 0x2A
+    // X pixels per meter = 2835 (0x00000B13)
+    header[38] = 19u8;  // 0x13
+    header[39] = 11u8;  // 0x0B
+    // Y pixels per meter = 2835 (0x00000B13)
+    header[42] = 19u8;  // 0x13
+    header[43] = 11u8;  // 0x0B
+
+    fwrite(&header[0], 1u64, 54u64, fp);
+
+    for (int y = 0; y < 720; y++) {
+        for (int x = 0; x < 1280; x++) {
+            u32 px = g_framebuffer[y][x];
+            int idx = x * 3;
+            g_row_bgr[idx + 0] = (u8)((px >> 16u32) & 255u32); // Blue
+            g_row_bgr[idx + 1] = (u8)((px >> 8u32) & 255u32);  // Green
+            g_row_bgr[idx + 2] = (u8)(px & 255u32);            // Red
+        }
+        fwrite(&g_row_bgr[0], 1u64, 3840u64, fp);
+    }
+
+    fclose(fp);
+    return true;
+}
+
+// ── Application Entry Point ─────────────────────────────────────────────────
+int main() {
+    *const u8 cmd = GetCommandLineA();
+    bool headless = false;
+    int headless_frames = 1;
+    bool take_screenshot = false;
+    int gui_max_frames = 300;
+
+    *const u8 hl_match = strstr(cmd, "--headless");
+    if (hl_match != null) {
+        headless = true;
+        *const u8 p = hl_match + 10;
+        while (*p == 32u8) { p = p + 1; }
+        if (*p >= 48u8 && *p <= 57u8) {
+            headless_frames = atoi(p);
+            if (headless_frames <= 0) { headless_frames = 1; }
+        }
+    }
+
+    *const u8 gf_match = strstr(cmd, "--gui-frames");
+    if (gf_match != null) {
+        *const u8 p = gf_match + 12;
+        while (*p == 32u8) { p = p + 1; }
+        if (*p >= 48u8 && *p <= 57u8) {
+            gui_max_frames = atoi(p);
+            if (gui_max_frames <= 0) { gui_max_frames = 1; }
+        }
+    }
+
+    *const u8 ss_match = strstr(cmd, "--screenshot");
+    if (ss_match != null) {
+        take_screenshot = true;
+    }
+
+    init_scene();
+    Camera cam = init_camera();
+
+    if (headless) {
+        print("Running in HEADLESS mode (");
+        print(headless_frames);
+        print(" frames, layout=SoA)...\n");
+
+        double total_ms = 0.0;
+        u64 last_checksum = 0u64;
+
+        for (int f = 0; f < headless_frames; f++) {
+            double frame_ms = render_frame(f, cam);
+            total_ms = total_ms + frame_ms;
+            last_checksum = compute_checksum();
+            double mrays = ((double)1280 * (double)720 * (double)16) / (frame_ms * 1000.0);
+
+            if (f == 0 && take_screenshot) {
+                save_bmp("benchmarks/results/raytracer_tamarin.bmp");
+                print("SCREENSHOT_SAVED: benchmarks/results/raytracer_tamarin.bmp\n");
+            }
+
+            print("FRAME ");
+            print(f);
+            print(": TIME_MS=");
+            print((int)frame_ms);
+            print(".");
+            int frac = (int)((frame_ms - (double)(int)frame_ms) * 100.0);
+            if (frac < 10) print("0");
+            print(frac);
+            print(" MRAYS_PER_SEC=");
+            print((int)mrays);
+            print(".");
+            int mfrac = (int)((mrays - (double)(int)mrays) * 100.0);
+            if (mfrac < 10) print("0");
+            print(mfrac);
+            print(" CHECKSUM=");
+            print_hex64(last_checksum);
+            print("\n");
+        }
+
+        double avg_ms = total_ms / (double)headless_frames;
+        double avg_mrays = ((double)1280 * (double)720 * (double)16) / (avg_ms * 1000.0);
+        print("BENCHMARK_COMPLETE: AVG_TIME_MS=");
+        print((int)avg_ms);
+        print(".");
+        int afrac = (int)((avg_ms - (double)(int)avg_ms) * 100.0);
+        if (afrac < 10) print("0");
+        print(afrac);
+        print(" AVG_MRAYS_PER_SEC=");
+        print((int)avg_mrays);
+        print(".");
+        int amfrac = (int)((avg_mrays - (double)(int)avg_mrays) * 100.0);
+        if (amfrac < 10) print("0");
+        print(amfrac);
+        print(" FINAL_CHECKSUM=");
+        print_hex64(last_checksum);
+        print("\n");
+        return 0;
+    }
+
+    // Interactive SDL3 Live Presentation Mode
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        print("Failed to initialize SDL3: ");
+        print(SDL_GetError());
+        print("\n");
+        return 1;
+    }
+
+    *void window = null;
+    *void renderer = null;
+    if (!SDL_CreateWindowAndRenderer("Tamarin vs C++ vs Rust Raytracer (SDL3)", 1280, 720, 0u64, &window, &renderer)) {
+        print("Failed to create SDL3 window/renderer: ");
+        print(SDL_GetError());
+        print("\n");
+        SDL_Quit();
+        return 1;
+    }
+
+    *void texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, 1280, 720);
+    if (texture == null) {
+        print("Failed to create SDL3 streaming texture\n");
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
+    SDL_SetRenderVSync(renderer, 0);
+
+    print("Running in INTERACTIVE SDL3 mode (Esc or close window to quit, 'S' for screenshot)...\n");
+    int frame = 0;
+    bool running = true;
+    SDL_Event event;
+    event.type = 0u32;
+
+    while (running) {
+        while (SDL_PollEvent(event)) {
+            if (event.type == SDL_EVENT_QUIT) {
+                running = false;
+            } else if (event.type == SDL_EVENT_KEY_DOWN) {
+                running = false;
+            }
+        }
+        if (!running) { break; }
+
+        double frame_ms = render_frame(frame, cam);
+        double mrays = ((double)1280 * (double)720 * (double)16) / (frame_ms * 1000.0);
+
+        if (frame == 0) {
+            save_bmp("benchmarks/results/raytracer_tamarin.bmp");
+            print("Saved screenshot to benchmarks/results/raytracer_tamarin.bmp\n");
+        }
+
+        *u8 locked_pixels = null;
+        int pitch = 0;
+        if (SDL_LockTexture(texture, null, &locked_pixels, &pitch)) {
+            for (int y = 0; y < 720; y++) {
+                *u8 dst_row = locked_pixels + (y * pitch);
+                memcpy(dst_row, &g_framebuffer[y][0], (u64)(1280 * 4));
+            }
+            SDL_UnlockTexture(texture);
+        }
+
+        SDL_RenderTexture(renderer, texture, null, null);
+        SDL_RenderPresent(renderer);
+
+        frame = frame + 1;
+        if (frame % 30 == 0) {
+            print("Frame ");
+            print(frame);
+            print(": ");
+            print((int)frame_ms);
+            print(" ms (");
+            print((int)mrays);
+            print(" Mrays/s)\n");
+        }
+        if (frame >= gui_max_frames) {
+            running = false;
+        }
+    }
+
+    SDL_DestroyTexture(texture);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return 0;
+}

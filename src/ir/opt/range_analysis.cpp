@@ -346,6 +346,7 @@ bool RangeAnalysis::isProvenWithinBounds(const BasicBlock* block,
                                          ValueId idxVal,
                                          ValueId arrVal,
                                          const sema::Type* arrTy) const {
+    if (arrTy && arrTy->isReference()) arrTy = arrTy->elementType;
     idxVal = unwrapCast(idxVal);
 
     // 1. Check if idxVal is a known constant and array has fixed size

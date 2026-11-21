@@ -1,7 +1,7 @@
 # ── Build Directories ────────────────────────────────────────────────────────
 build/
-/bin/
-/target/
+bin/
+target/
 out/
 cmake-build-*/
 x64/
@@ -96,6 +96,8 @@ benchmarks/**/*.exe
 benchmarks/**/*.obj
 benchmarks/**/*.pdb
 benchmarks/**/*.ll
+benchmarks/**/*.bmp
+*.bmp
 Tamarin_Audit_Report_Updated.md
 Tamarin_Comprehensive_Bug_Report.md
 Tamarin_Reproducers/

@@ -4567,7 +4567,7 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                         auto& id = static_cast<IdentifierExpr&>(*un.operand);
                         auto* b = lookupBinding(id.name);
                         if (b) {
-                            if (b->type && b->type->isReference()) {
+                            if (b->type && b->type->isRef()) {
                                 Instruction load;
                                 load.opcode = Opcode::Load;
                                 load.result = nextValueId();

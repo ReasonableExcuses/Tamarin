@@ -36,6 +36,9 @@ bool BoundsCheckEliminationPass::runOnFunction(IRFunction& fn, const sema::TypeC
                 auto it = valueTypes.find(arrVal);
                 if (it != valueTypes.end()) {
                     arrTy = it->second;
+                    if (arrTy && arrTy->isReference()) {
+                        arrTy = arrTy->elementType;
+                    }
                 }
 
                 if (ra.isProvenWithinBounds(blk.get(), idxVal, arrVal, arrTy)) {

@@ -1,0 +1,34 @@
+[package]
+name = "raytracer_tamarin"
+version = "0.1.0"
+edition = "2026"
+kind = "bin"
+entry = "src/main.tmn"
+links = ["SDL3"]
+
+[dependencies]
+sdl3 = { path = "../../../../lib/sdl3" }
+
+[profile.dev]
+opt_level = 0
+fast_math = false
+crt = "dynamic"
+lto = false
+
+[profile.release]
+opt_level = 3
+fast_math = false
+crt = "dynamic"
+lto = false
+
+[target.windows]
+links = ["winmm", "gdi32", "user32", "shell32"]
+lib-dirs = ["../../../../lib/sdl3/native"]
+
+[target.linux]
+links = ["m", "pthread", "dl"]
+lib-dirs = ["/usr/local/lib"]
+
+[target.macos]
+links = ["-framework Cocoa", "-framework IOKit", "-framework CoreVideo"]
+lib-dirs = ["/opt/homebrew/lib", "/usr/local/lib"]

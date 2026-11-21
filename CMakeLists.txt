@@ -13,7 +13,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # ── Compiler Options ──────────────────────────────────────────────────
 if(MSVC)
-    add_compile_options(/W4 /utf-8 /Zc:__cplusplus /EHsc /permissive-)
+    add_compile_options(/W4 /utf-8 /Zc:__cplusplus /EHsc /permissive- /FS)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX)
 else()
     add_compile_options(-Wall -Wextra)
