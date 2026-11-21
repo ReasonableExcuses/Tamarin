@@ -159,6 +159,7 @@ int Driver::check() {
 
     sema::Sema sema(diag_);
     sema.setTargetTriple(triple);
+    sema.setLibraryMode(options_.outputKind != DriverOptions::OutputKind::Exe);
     if (!sema.analyzeModules(graph.getTopologicalOrder())) {
         std::cerr << "TAMARIN compilation failed.\n";
         return 1;
@@ -186,6 +187,7 @@ int Driver::build() {
 
     sema::Sema sema(diag_);
     sema.setTargetTriple(triple);
+    sema.setLibraryMode(options_.outputKind != DriverOptions::OutputKind::Exe);
     if (!sema.analyzeModules(graph.getTopologicalOrder())) {
         std::cerr << "TAMARIN compilation failed.\n";
         return 1;

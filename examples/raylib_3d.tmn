@@ -1,0 +1,51 @@
+import raylib as rl;
+
+int main() {
+    print("Initializing Raylib 3D demo...\n");
+    rl::SetConfigFlags(rl::FLAG_WINDOW_HIDDEN);
+    rl::InitWindow(640, 480, "Tamarin Raylib 3D Demo");
+
+    if (!rl::IsWindowReady()) {
+        return 1;
+    }
+
+    rl::SetTargetFPS(60);
+
+    // Setup 3D camera
+    rl::Vector3 camPos = { 0.0f, 10.0f, 10.0f };
+    rl::Vector3 camTgt = { 0.0f, 0.0f, 0.0f };
+    rl::Vector3 camUp = { 0.0f, 1.0f, 0.0f };
+
+    rl::Camera3D camera;
+    camera.position = camPos;
+    camera.target = camTgt;
+    camera.up = camUp;
+    camera.fovy = 45.0f;
+    camera.projection = rl::CAMERA_PERSPECTIVE;
+
+    rl::Color bgColor = { 245u8, 245u8, 245u8, 255u8 };
+    rl::Color cubeColor = { 255u8, 0u8, 0u8, 255u8 };
+    rl::Color wireColor = { 0u8, 0u8, 0u8, 255u8 };
+
+    rl::Vector3 cubePos = { 0.0f, 0.0f, 0.0f };
+
+    int frame = 0;
+    while (frame < 3) {
+        rl::BeginDrawing();
+        rl::ClearBackground(bgColor);
+
+        rl::BeginMode3D(camera);
+        rl::DrawCube(cubePos, 2.0f, 2.0f, 2.0f, cubeColor);
+        rl::DrawCubeWires(cubePos, 2.0f, 2.0f, 2.0f, wireColor);
+        rl::DrawGrid(10, 1.0f);
+        rl::EndMode3D();
+
+        rl::EndDrawing();
+        frame += 1;
+    }
+
+    print("Rendered 3D frames successfully!\n");
+    rl::CloseWindow();
+    print("Raylib 3D demo complete!\n");
+    return 0;
+}

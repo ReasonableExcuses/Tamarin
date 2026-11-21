@@ -2101,6 +2101,10 @@ void LLVMCodeGen::emitFunction(const ir::IRFunction& fn, std::ostream& os) {
             auto pTy = fn.params[i].type;
             if (pTy && pTy->isReference()) {
                 os << "ptr";
+            } else if (fn.linkage == "C" && isStructPassedByPointerInCABI(pTy)) {
+                os << "ptr";
+            } else if (fn.linkage == "C" && !getCABISmallStructIntType(pTy).empty()) {
+                os << getCABISmallStructIntType(pTy);
             } else {
                 os << llvmType(pTy);
             }
@@ -2626,21 +2630,61 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
                 }
                 os << ")\n";
             } else {
+                const ir::IRFunction* targetFn = nullptr;
+                auto it = functionMap_.find(inst.strImm);
+                if (it != functionMap_.end()) {
+                    targetFn = it->second;
+                }
+                bool isCABI = targetFn && (targetFn->isExtern || targetFn->blocks.empty()) && targetFn->linkage == "C";
+
+                std::vector<std::string> argTokens;
+                for (size_t i = 0; i < inst.callArgs.size(); ++i) {
+                    const sema::Type* expectedParamTy = (targetFn && i < targetFn->params.size()) ? targetFn->params[i].type : nullptr;
+                    auto argTy = getValueType(inst.callArgs[i]);
+                    if (!argTy && expectedParamTy) argTy = expectedParamTy;
+
+                    const sema::Type* effTy = expectedParamTy ? expectedParamTy : argTy;
+                    if (isCABI && isStructPassedByPointerInCABI(effTy)) {
+                        if (isPointerValue_.count(inst.callArgs[i])) {
+                            argTokens.push_back("ptr %v" + std::to_string(inst.callArgs[i]));
+                        } else {
+                            uint32_t tmpId = callOpId_++;
+                            std::string stType = llvmType(argTy ? argTy : effTy);
+                            os << "  %cabi_arg_" << tmpId << " = alloca " << stType << ", align 8\n";
+                            os << "  store " << stType << " " << formatOperand(inst.callArgs[i], argTy) << ", ptr %cabi_arg_" << tmpId << ", align 8\n";
+                            argTokens.push_back("ptr %cabi_arg_" + std::to_string(tmpId));
+                        }
+                    } else if (isCABI && !getCABISmallStructIntType(effTy).empty()) {
+                        std::string intTy = getCABISmallStructIntType(effTy);
+                        uint32_t tmpId = callOpId_++;
+                        std::string stType = llvmType(argTy ? argTy : effTy);
+                        if (isPointerValue_.count(inst.callArgs[i])) {
+                            os << "  %cabi_cast_" << tmpId << " = load " << intTy << ", ptr %v" << inst.callArgs[i] << ", align 1\n";
+                        } else {
+                            os << "  %cabi_arg_" << tmpId << " = alloca " << stType << ", align 8\n";
+                            os << "  store " << stType << " " << formatOperand(inst.callArgs[i], argTy) << ", ptr %cabi_arg_" << tmpId << ", align 8\n";
+                            os << "  %cabi_cast_" << tmpId << " = load " << intTy << ", ptr %cabi_arg_" << tmpId << ", align 1\n";
+                        }
+                        argTokens.push_back(intTy + " %cabi_cast_" + std::to_string(tmpId));
+                    } else {
+                        std::string tyStr = "i32";
+                        if (isPointerValue_.count(inst.callArgs[i]) || (argTy && argTy->isReference())) {
+                            tyStr = "ptr";
+                        } else if (argTy) {
+                            tyStr = llvmType(argTy);
+                        }
+                        argTokens.push_back(tyStr + " " + formatOperand(inst.callArgs[i], argTy));
+                    }
+                }
+
                 os << "  ";
                 if (inst.result != ir::InvalidValue) {
                     os << "%v" << inst.result << " = ";
                 }
                 os << "call " << llvmType(inst.type) << " @" << inst.strImm << "(";
-                for (size_t i = 0; i < inst.callArgs.size(); ++i) {
+                for (size_t i = 0; i < argTokens.size(); ++i) {
                     if (i > 0) os << ", ";
-                    auto argTy = getValueType(inst.callArgs[i]);
-                    std::string tyStr = "i32";
-                    if (isPointerValue_.count(inst.callArgs[i]) || (argTy && argTy->isReference())) {
-                        tyStr = "ptr";
-                    } else if (argTy) {
-                        tyStr = llvmType(argTy);
-                    }
-                    os << tyStr << " " << formatOperand(inst.callArgs[i], argTy);
+                    os << argTokens[i];
                 }
                 os << ")\n";
             }
@@ -3597,6 +3641,10 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
 bool LLVMCodeGen::emitLLVMIR(std::ostream& os) {
     loopUnrollsUsed_.clear();
     loopMetadataMap_.clear();
+    functionMap_.clear();
+    for (const auto& fn : module_.functions) {
+        functionMap_[fn->name] = fn.get();
+    }
     emitHeader(os);
     emitRuntimeHelpers(os);
     for (auto& fn : module_.functions) {
@@ -3697,6 +3745,43 @@ bool LLVMCodeGen::compileToAssembly(const std::filesystem::path& llPath,
         return false;
     }
     return true;
+}
+
+bool LLVMCodeGen::isStructPassedByPointerInCABI(const sema::Type* ty) const {
+    if (!ty) return false;
+    if (ty->isReference() && ty->elementType) {
+        ty = ty->elementType;
+    }
+    if (!ty->isRecord() && !ty->isStruct()) {
+        return false;
+    }
+    size_t sz = ty->size();
+    if (targetTriple_.isWindows()) {
+        // In MSVC x64 ABI, structs of size 1, 2, 4, or 8 bytes are passed as integers.
+        // All other structs are passed by invisible pointer.
+        return (sz != 1 && sz != 2 && sz != 4 && sz != 8);
+    } else {
+        // System V AMD64 / AAPCS64: structs > 16 bytes are passed by pointer/memory.
+        return sz > 16;
+    }
+}
+
+std::string LLVMCodeGen::getCABISmallStructIntType(const sema::Type* ty) const {
+    if (!ty) return "";
+    if (ty->isReference() && ty->elementType) {
+        ty = ty->elementType;
+    }
+    if (!ty->isRecord() && !ty->isStruct()) {
+        return "";
+    }
+    if (targetTriple_.isWindows()) {
+        size_t sz = ty->size();
+        if (sz == 1) return "i8";
+        if (sz == 2) return "i16";
+        if (sz == 4) return "i32";
+        if (sz == 8) return "i64";
+    }
+    return "";
 }
 
 std::string LLVMCodeGen::formatNativeLinkFlags() const {

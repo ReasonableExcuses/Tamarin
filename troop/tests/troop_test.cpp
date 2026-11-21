@@ -130,6 +130,10 @@ name = "game_app"
 version = "0.1.0"
 links = ["raylib", "m", "dl"]
 lib-dirs = ["lib/native", "vendor/raylib"]
+
+[target.windows]
+links = ["winmm", "gdi32"]
+lib-dirs = ["win_lib"]
 )";
 
     std::string err;
@@ -143,6 +147,10 @@ lib-dirs = ["lib/native", "vendor/raylib"]
     EXPECT_EQ(manifest->package.libDirs.size(), 2u);
     EXPECT_EQ(manifest->package.libDirs[0], "lib/native");
     EXPECT_EQ(manifest->package.libDirs[1], "vendor/raylib");
+    EXPECT_EQ(manifest->targetConfigs["windows"].links.size(), 2u);
+    EXPECT_EQ(manifest->targetConfigs["windows"].links[0], "winmm");
+    EXPECT_EQ(manifest->targetConfigs["windows"].libDirs.size(), 1u);
+    EXPECT_EQ(manifest->targetConfigs["windows"].libDirs[0], "win_lib");
 
     // Test round-trip
     std::string serialized = manifest->toToml();
@@ -152,6 +160,8 @@ lib-dirs = ["lib/native", "vendor/raylib"]
     EXPECT_EQ(manifest2->package.links[0], "raylib");
     EXPECT_EQ(manifest2->package.libDirs.size(), 2u);
     EXPECT_EQ(manifest2->package.libDirs[0], "lib/native");
+    EXPECT_EQ(manifest2->targetConfigs["windows"].links.size(), 2u);
+    EXPECT_EQ(manifest2->targetConfigs["windows"].links[0], "winmm");
     return true;
 }
 

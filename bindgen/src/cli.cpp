@@ -24,6 +24,7 @@ static void printHelp() {
               << "  --module <name>          Emit 'module <name>;' declaration\n"
               << "  --prefix <prefix>        Only bind symbols starting with <prefix>\n"
               << "  --strip-prefix <prefix>  Strip <prefix> from generated symbol names\n"
+              << "  --public                 Emit 'public' visibility modifier on all declarations\n"
               << "  --all-headers            Include declarations from all headers, not just target\n"
               << "  -v, --version            Display version information\n"
               << "  -h, --help               Display this help message\n";
@@ -72,6 +73,8 @@ int cliMain(int argc, char* argv[]) {
             emitOpts.stripPrefix = argv[++i];
         } else if (arg.starts_with("--strip-prefix=") && arg.size() > 15) {
             emitOpts.stripPrefix = std::string(arg.substr(15));
+        } else if (arg == "--public") {
+            emitOpts.emitPublic = true;
         } else if (arg == "--all-headers") {
             parseOpts.includeSystemHeaders = true;
         } else if (!arg.starts_with("-")) {

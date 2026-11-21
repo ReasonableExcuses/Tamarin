@@ -109,6 +109,12 @@ public:
     /// Formats native library directories, library names, and linker flags for the compiler/linker command.
     std::string formatNativeLinkFlags() const;
 
+    /// Checks if a struct parameter should be lowered to an invisible pointer under target C ABI.
+    bool isStructPassedByPointerInCABI(const sema::Type* ty) const;
+
+    /// Checks if a small struct parameter should be coerced to an integer type under target C ABI (e.g. MSVC x64).
+    std::string getCABISmallStructIntType(const sema::Type* ty) const;
+
 private:
     void emitHeader(std::ostream& os);
     void emitRuntimeHelpers(std::ostream& os);
@@ -141,6 +147,7 @@ private:
     std::vector<std::string> linkLibs_;
     std::vector<std::string> linkDirs_;
     std::vector<std::string> linkerFlags_;
+    std::unordered_map<std::string, const ir::IRFunction*> functionMap_;
     std::unordered_set<int32_t> loopUnrollsUsed_;
     std::map<LoopMetaKey, int32_t> loopMetadataMap_;
 };

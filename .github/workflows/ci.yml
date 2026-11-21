@@ -42,7 +42,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
-            ninja-build clang llvm-dev libclang-dev
+            ninja-build clang llvm-dev libclang-dev libraylib-dev xvfb
           LLVM_DIR=$(llvm-config --cmakedir 2>/dev/null || llvm-config-18 --cmakedir 2>/dev/null || llvm-config-19 --cmakedir 2>/dev/null)
           echo "LLVM_DIR=$LLVM_DIR" >> "$GITHUB_ENV"
           echo "CC=clang" >> "$GITHUB_ENV"
@@ -52,7 +52,7 @@ jobs:
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install llvm ninja
+          brew install llvm ninja raylib
           LLVM_PREFIX="$(brew --prefix llvm)"
           echo "LLVM_DIR=$LLVM_PREFIX/lib/cmake/llvm" >> "$GITHUB_ENV"
           echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"

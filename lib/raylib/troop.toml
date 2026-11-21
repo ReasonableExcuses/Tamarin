@@ -1,0 +1,17 @@
+[package]
+name = "raylib"
+version = "5.5.0"
+edition = "2026"
+description = "Raylib 5.5 graphics and game development bindings for Tamarin"
+kind = "lib"
+links = ["raylib"]
+
+[target.windows]
+links = ["winmm", "gdi32", "user32", "shell32", "opengl32"]
+lib-dirs = ["native"]
+
+[target.linux]
+links = ["m", "pthread", "dl", "GL", "rt", "X11"]
+
+[target.macos]
+links = ["-framework OpenGL", "-framework Cocoa", "-framework IOKit", "-framework CoreVideo"]

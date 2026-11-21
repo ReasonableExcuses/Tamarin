@@ -26,6 +26,11 @@ struct PackageInfo {
     std::vector<std::string> libDirs; // Native library search paths, e.g. ["lib/native"]
 };
 
+struct TargetConfig {
+    std::vector<std::string> links;
+    std::vector<std::string> libDirs;
+};
+
 enum class DependencySourceKind {
     Registry,
     Path,
@@ -68,6 +73,7 @@ public:
     BuildProfile profileDev{0, false, "dynamic", false};
     BuildProfile profileRelease{3, false, "dynamic", false};
     WorkspaceConfig workspace;
+    std::map<std::string, TargetConfig> targetConfigs;
     std::filesystem::path manifestPath;
 
     static std::optional<Manifest> loadFromFile(const std::filesystem::path& path, std::string& errorMsg);

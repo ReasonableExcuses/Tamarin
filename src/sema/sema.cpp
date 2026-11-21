@@ -616,7 +616,7 @@ bool Sema::analyzeModules(const std::vector<std::shared_ptr<driver::Module>>& mo
 
                 auto fnTy = tc_.getFunction(retTy, std::move(paramTypes), std::move(defaultArgs));
                 origName = fn.name;
-                std::string mangledName = (modScope->isMainModule || fn.name == "main")
+                std::string mangledName = (modScope->isMainModule || fn.name == "main" || fn.isExtern)
                     ? origName
                     : (modScope->mangledPrefix + origName);
                 fn.name = mangledName;
@@ -633,7 +633,7 @@ bool Sema::analyzeModules(const std::vector<std::shared_ptr<driver::Module>>& mo
                     .loc = fn.loc,
                 };
                 modScope->symbols[origName] = sym;
-                if (fn.isPublic) {
+                if (fn.isPublic || fn.isExtern) {
                     modScope->exportedSymbols[origName] = sym;
                 }
                 FunctionBorrowSummary summary;

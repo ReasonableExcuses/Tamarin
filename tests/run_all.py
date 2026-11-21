@@ -15,6 +15,7 @@ Executes the entire Tamarin test gauntlet across Windows, Linux, and macOS:
   10. @cfg(...) & Multi-Target Cross-Compilation
   11. tamarin-bindgen 120 Hard Instances Gauntlet (test_hard_instances.py)
   12. tamarin-lsp Protocol & Lifecycle E2E Suite (test_lsp_server.py)
+  13. Graphics & Native Ecosystem E2E (Raylib 5.5)
 
 Standard library only: subprocess, pathlib, tempfile, sys, re, shutil, os, platform.
 """
@@ -700,6 +701,74 @@ int main() { return add(20, 22); }
             self.record("LSP Protocol E2E", "LSP Protocol & Lifecycle E2E Suite", False, str(e))
 
     # -------------------------------------------------------------------------
+    # Suite 13: Graphics & Native Ecosystem E2E (Raylib 5.5)
+    # -------------------------------------------------------------------------
+    def run_graphics_e2e(self):
+        self.banner("13. GRAPHICS & NATIVE ECOSYSTEM E2E (Raylib 5.5)")
+        suite_name = "Graphics & Native Ecosystem"
+
+        # 1. Check Raylib module headers / semantic check
+        raylib_lib = REPO_ROOT / "lib" / "raylib" / "src" / "lib.tmn"
+        if not raylib_lib.exists():
+            self.skip(suite_name, "Raylib Bindings", "lib/raylib/src/lib.tmn not found")
+            return
+
+        check_res = subprocess.run([str(self.tamarin_bin), "check", "--lib", str(raylib_lib)],
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=REPO_ROOT)
+        self.record(suite_name, "Raylib Bindings Semantic Check", check_res.returncode == 0,
+                    check_res.stdout.strip() if check_res.returncode != 0 else "")
+
+        # 2. Check if native raylib library is available
+        native_dir = REPO_ROOT / "lib" / "raylib" / "native"
+        has_native = False
+        link_args = []
+        if IS_WINDOWS:
+            win_lib = native_dir / "raylib.lib"
+            if win_lib.exists():
+                has_native = True
+                link_args = ["-L", str(native_dir), "-l", "raylib", "-l", "winmm", "-l", "gdi32", "-l", "user32", "-l", "shell32", "-l", "opengl32"]
+        elif IS_LINUX:
+            has_native = True
+            link_args = ["-l", "raylib", "-l", "m", "-l", "pthread", "-l", "dl", "-l", "GL", "-l", "rt", "-l", "X11"]
+        elif IS_DARWIN:
+            has_native = True
+            link_args = ["-l", "raylib", "-framework", "OpenGL", "-framework", "Cocoa", "-framework", "IOKit", "-framework", "CoreVideo"]
+
+        if not has_native:
+            self.skip(suite_name, "Raylib Headless Demos", "Raylib native libraries not found")
+            return
+
+        def run_proc(cmd_args):
+            final_cmd = cmd_args
+            if IS_LINUX and not os.environ.get("DISPLAY") and shutil.which("xvfb-run"):
+                final_cmd = ["xvfb-run", "-a"] + final_cmd
+            return subprocess.run(final_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=30, cwd=REPO_ROOT)
+
+        # 3. Raylib 2D Headless Demo
+        demo_2d = REPO_ROOT / "examples" / "raylib_demo.tmn"
+        if demo_2d.exists():
+            cmd = [str(self.tamarin_bin), "run", str(demo_2d)] + link_args
+            try:
+                res = run_proc(cmd)
+                ok = (res.returncode == 0) and ("Raylib closed cleanly!" in res.stdout)
+                self.record(suite_name, "Raylib 2D Headless Render & Windowing", ok,
+                            res.stdout.strip() if not ok else "Exit code 0, 3 frames rendered")
+            except Exception as e:
+                self.record(suite_name, "Raylib 2D Headless Render & Windowing", False, str(e))
+
+        # 4. Raylib 3D Headless Demo (tests C ABI struct-by-value lowering)
+        demo_3d = REPO_ROOT / "examples" / "raylib_3d.tmn"
+        if demo_3d.exists():
+            cmd = [str(self.tamarin_bin), "run", str(demo_3d)] + link_args
+            try:
+                res = run_proc(cmd)
+                ok = (res.returncode == 0) and ("Raylib 3D demo complete!" in res.stdout)
+                self.record(suite_name, "Raylib 3D C ABI Struct Passing & Depth Buffer", ok,
+                            res.stdout.strip() if not ok else "Exit code 0, 3D cubes & grid rendered")
+            except Exception as e:
+                self.record(suite_name, "Raylib 3D C ABI Struct Passing & Depth Buffer", False, str(e))
+
+    # -------------------------------------------------------------------------
     # Final Scorecard
     # -------------------------------------------------------------------------
     def print_scorecard(self):
@@ -822,6 +891,8 @@ def main():
         harness.run_bindgen_hard_instances()
     if should_run("lsp"):
         harness.run_lsp_e2e()
+    if should_run("graphics"):
+        harness.run_graphics_e2e()
 
     elapsed = time.time() - start_time
     harness.print_scorecard()

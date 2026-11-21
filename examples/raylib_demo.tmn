@@ -1,0 +1,34 @@
+import raylib as rl;
+
+int main() {
+    print("Initializing Raylib in headless/hidden mode...\n");
+    rl::SetConfigFlags(rl::FLAG_WINDOW_HIDDEN);
+    rl::InitWindow(640, 480, "Tamarin Raylib Headless Demo");
+
+    bool ready = rl::IsWindowReady();
+    if (!ready) {
+        print("Error: Window failed to initialize!\n");
+        return 1;
+    }
+
+    rl::SetTargetFPS(60);
+
+    // Setup color
+    rl::Color bgColor = { 245u8, 245u8, 245u8, 255u8 };
+    rl::Color boxColor = { 230u8, 41u8, 55u8, 255u8 }; // Raylib red
+
+    // Render 3 simulated frames
+    int frame = 0;
+    while (frame < 3) {
+        rl::BeginDrawing();
+        rl::ClearBackground(bgColor);
+        rl::DrawRectangle(50, 50, 200, 100, boxColor);
+        rl::EndDrawing();
+        frame += 1;
+    }
+
+    print("Successfully rendered 3 frames!\n");
+    rl::CloseWindow();
+    print("Raylib closed cleanly!\n");
+    return 0;
+}

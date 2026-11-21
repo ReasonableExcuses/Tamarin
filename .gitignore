@@ -36,6 +36,13 @@ Testing/
 *.idb
 *.suo
 
+# Allow bundled native dependencies
+!lib/**/native/*.lib
+!lib/**/native/*.dll
+!lib/**/native/*.a
+!lib/**/native/*.so
+!lib/**/native/*.dylib
+
 # ── LLVM IR / Assembly ───────────────────────────────────────────────────────
 *.ll
 *.bc

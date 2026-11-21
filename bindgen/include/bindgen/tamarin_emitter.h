@@ -14,6 +14,7 @@ struct EmitterOptions {
     std::string moduleName;
     std::string stripPrefix;
     bool emitComments = true;
+    bool emitPublic = false;
 };
 
 class TamarinEmitter {

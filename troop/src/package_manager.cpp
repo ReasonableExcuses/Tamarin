@@ -269,6 +269,11 @@ int PackageManager::buildPackage(const std::filesystem::path& manifestPath, bool
     std::vector<std::string> allLibDirs;
     std::vector<std::string> allLinks;
 
+    std::string osName;
+    if (triple.isWindows()) osName = "windows";
+    else if (triple.isMacOS()) osName = "macos";
+    else if (triple.isLinux()) osName = "linux";
+
     for (const auto& dep : res.buildOrder) {
         for (const auto& d : dep.manifest.package.libDirs) {
             std::filesystem::path resolved = d;
@@ -277,8 +282,23 @@ int PackageManager::buildPackage(const std::filesystem::path& manifestPath, bool
             }
             allLibDirs.push_back(resolved.string());
         }
+        auto itTarget = dep.manifest.targetConfigs.find(osName);
+        if (itTarget != dep.manifest.targetConfigs.end()) {
+            for (const auto& d : itTarget->second.libDirs) {
+                std::filesystem::path resolved = d;
+                if (resolved.is_relative()) {
+                    resolved = dep.rootDir / resolved;
+                }
+                allLibDirs.push_back(resolved.string());
+            }
+        }
         for (const auto& l : dep.manifest.package.links) {
             allLinks.push_back(l);
+        }
+        if (itTarget != dep.manifest.targetConfigs.end()) {
+            for (const auto& l : itTarget->second.links) {
+                allLinks.push_back(l);
+            }
         }
     }
 
@@ -289,8 +309,23 @@ int PackageManager::buildPackage(const std::filesystem::path& manifestPath, bool
         }
         allLibDirs.push_back(resolved.string());
     }
+    auto itRootTarget = manifest->targetConfigs.find(osName);
+    if (itRootTarget != manifest->targetConfigs.end()) {
+        for (const auto& d : itRootTarget->second.libDirs) {
+            std::filesystem::path resolved = d;
+            if (resolved.is_relative()) {
+                resolved = rootDir / resolved;
+            }
+            allLibDirs.push_back(resolved.string());
+        }
+    }
     for (const auto& l : manifest->package.links) {
         allLinks.push_back(l);
+    }
+    if (itRootTarget != manifest->targetConfigs.end()) {
+        for (const auto& l : itRootTarget->second.links) {
+            allLinks.push_back(l);
+        }
     }
 
     std::unordered_set<std::string> seenDirs;

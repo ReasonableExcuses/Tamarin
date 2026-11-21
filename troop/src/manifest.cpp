@@ -299,6 +299,13 @@ std::optional<Manifest> Manifest::parseString(std::string_view content, const st
             if (key == "members") {
                 m.workspace.members = parseStringArray(rawVal);
             }
+        } else if (section.starts_with("target.")) {
+            std::string tgt = section.substr(7);
+            if (key == "links") {
+                m.targetConfigs[tgt].links = parseStringArray(rawVal);
+            } else if (key == "lib-dirs" || key == "lib_dirs") {
+                m.targetConfigs[tgt].libDirs = parseStringArray(rawVal);
+            }
         }
     }
 
@@ -398,6 +405,28 @@ std::string Manifest::toToml() const {
     ss << "fast_math = " << (profileRelease.fastMath ? "true" : "false") << "\n";
     ss << "crt = \"" << profileRelease.crt << "\"\n";
     ss << "lto = " << (profileRelease.lto ? "true" : "false") << "\n";
+
+    for (const auto& [tgt, cfg] : targetConfigs) {
+        if (!cfg.links.empty() || !cfg.libDirs.empty()) {
+            ss << "\n[target." << tgt << "]\n";
+            if (!cfg.links.empty()) {
+                ss << "links = [";
+                for (size_t i = 0; i < cfg.links.size(); ++i) {
+                    if (i > 0) ss << ", ";
+                    ss << "\"" << cfg.links[i] << "\"";
+                }
+                ss << "]\n";
+            }
+            if (!cfg.libDirs.empty()) {
+                ss << "lib-dirs = [";
+                for (size_t i = 0; i < cfg.libDirs.size(); ++i) {
+                    if (i > 0) ss << ", ";
+                    ss << "\"" << cfg.libDirs[i] << "\"";
+                }
+                ss << "]\n";
+            }
+        }
+    }
 
     return ss.str();
 }

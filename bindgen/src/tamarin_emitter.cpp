@@ -39,19 +39,22 @@ void TamarinEmitter::emit(const CHeaderModel& model, std::ostream& out) const {
         out << "// Module: " << options_.moduleName << "\n\n";
     }
 
+    bool isPub = options_.emitPublic || !options_.moduleName.empty();
+    std::string pub = isPub ? "public " : "";
+
     // 1. Constants & Macros
     if (!model.constants.empty()) {
         out << "// ── Constants & Preprocessor Macros ────────────────────────────────────────\n";
         for (const auto& c : model.constants) {
             std::string tName = transformName(c.name);
             if (c.type == "string") {
-                out << "const u8[] " << tName << " = " << c.value << ";\n";
+                out << pub << "const u8[] " << tName << " = " << c.value << ";\n";
             } else if (c.type == "float") {
-                out << "const float " << tName << " = " << c.value << ";\n";
+                out << pub << "const float " << tName << " = " << c.value << ";\n";
             } else if (c.type == "char") {
-                out << "const u8 " << tName << " = " << c.value << ";\n";
+                out << pub << "const u8 " << tName << " = " << c.value << ";\n";
             } else {
-                out << "const int " << tName << " = " << c.value << ";\n";
+                out << pub << "const int " << tName << " = " << c.value << ";\n";
             }
         }
         out << "\n";
@@ -70,7 +73,7 @@ void TamarinEmitter::emit(const CHeaderModel& model, std::ostream& out) const {
                 }
             }
             if (isSequential) {
-                out << "enum " << eName << " {\n";
+                out << pub << "enum " << eName << " {\n";
                 for (size_t i = 0; i < en.constants.size(); ++i) {
                     out << "    " << transformName(en.constants[i].name);
                     if (i + 1 < en.constants.size()) out << ",";
@@ -81,7 +84,7 @@ void TamarinEmitter::emit(const CHeaderModel& model, std::ostream& out) const {
                 out << "// enum " << eName << "\n";
             }
             for (const auto& c : en.constants) {
-                out << "const int " << transformName(c.name) << " = " << c.value << ";\n";
+                out << pub << "const int " << transformName(c.name) << " = " << c.value << ";\n";
             }
             out << "\n";
         }
@@ -95,7 +98,7 @@ void TamarinEmitter::emit(const CHeaderModel& model, std::ostream& out) const {
             if (st.isUnion) {
                 out << "// C union: " << st.name << " (size: " << st.sizeInBytes << " bytes)\n";
                 out << "@c_layout\n";
-                out << "struct " << sName << " {\n";
+                out << pub << "struct " << sName << " {\n";
                 int64_t sz = st.sizeInBytes > 0 ? st.sizeInBytes : 8;
                 out << "    u8[" << sz << "] _raw;\n";
                 out << "};\n\n";
@@ -103,7 +106,7 @@ void TamarinEmitter::emit(const CHeaderModel& model, std::ostream& out) const {
             }
 
             out << "@c_layout\n";
-            out << "struct " << sName << " {\n";
+            out << pub << "struct " << sName << " {\n";
             if (st.fields.empty()) {
                 int64_t sz = st.sizeInBytes > 0 ? st.sizeInBytes : 1;
                 out << "    u8[" << sz << "] _opaque;\n";
@@ -127,7 +130,7 @@ void TamarinEmitter::emit(const CHeaderModel& model, std::ostream& out) const {
         for (const auto& fn : model.functions) {
             std::string fName = fn.name; // Keep C linkage name intact for symbol resolution
             std::string retType = transformType(fn.returnType.tamarinType);
-            out << "    " << retType << " " << fName << "(";
+            out << "    " << pub << retType << " " << fName << "(";
             if (fn.params.empty()) {
                 // In Tamarin, f() is empty parameter list
             } else {
