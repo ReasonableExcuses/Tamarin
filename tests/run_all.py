@@ -744,6 +744,18 @@ int main() { return add(20, 22); }
                 final_cmd = ["xvfb-run", "-a"] + final_cmd
             return subprocess.run(final_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=30, cwd=REPO_ROOT)
 
+        def is_headless_vm_gl_error(output: str) -> bool:
+            return any(phrase in output for phrase in [
+                "The driver does not appear to support OpenGL",
+                "WGL: The driver does not appear to support OpenGL",
+                "Error: 65542",
+                "NSGL: Failed to find a suitable pixel format",
+                "Error: 65545",
+                "Failed to find a suitable pixel format",
+                "Failed to initialize Window",
+                "Failed to initialize platform",
+            ])
+
         # 3. Raylib 2D Headless Demo
         demo_2d = REPO_ROOT / "examples" / "raylib_demo.tmn"
         if demo_2d.exists():
@@ -752,8 +764,8 @@ int main() { return add(20, 22); }
                 res = run_proc(cmd)
                 if (res.returncode == 0) and ("Raylib closed cleanly!" in res.stdout):
                     self.record(suite_name, "Raylib 2D Headless Render & Windowing", True, "Exit code 0, 3 frames rendered")
-                elif "The driver does not appear to support OpenGL" in res.stdout or "WGL: The driver does not appear to support OpenGL" in res.stdout or "Error: 65542" in res.stdout:
-                    self.skip(suite_name, "Raylib 2D Headless Render & Windowing", "Host lacks OpenGL driver in cloud VM (GLFW 65542)")
+                elif is_headless_vm_gl_error(res.stdout):
+                    self.skip(suite_name, "Raylib 2D Headless Render & Windowing", "Host lacks OpenGL display in cloud VM (GLFW 65542/65545)")
                 else:
                     self.record(suite_name, "Raylib 2D Headless Render & Windowing", False, res.stdout.strip())
             except Exception as e:
@@ -767,8 +779,8 @@ int main() { return add(20, 22); }
                 res = run_proc(cmd)
                 if (res.returncode == 0) and ("Raylib 3D demo complete!" in res.stdout):
                     self.record(suite_name, "Raylib 3D C ABI Struct Passing & Depth Buffer", True, "Exit code 0, 3D cubes & grid rendered")
-                elif "The driver does not appear to support OpenGL" in res.stdout or "WGL: The driver does not appear to support OpenGL" in res.stdout or "Error: 65542" in res.stdout:
-                    self.skip(suite_name, "Raylib 3D C ABI Struct Passing & Depth Buffer", "Host lacks OpenGL driver in cloud VM (GLFW 65542)")
+                elif is_headless_vm_gl_error(res.stdout):
+                    self.skip(suite_name, "Raylib 3D C ABI Struct Passing & Depth Buffer", "Host lacks OpenGL display in cloud VM (GLFW 65542/65545)")
                 else:
                     self.record(suite_name, "Raylib 3D C ABI Struct Passing & Depth Buffer", False, res.stdout.strip())
             except Exception as e:
