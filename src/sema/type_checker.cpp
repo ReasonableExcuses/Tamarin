@@ -3865,7 +3865,8 @@ const Type* TypeChecker::checkCall(CallExpr& expr) {
             }
         }
         bool isRawPointerParam = (i < fnTy->paramTypes.size() && fnTy->paramTypes[i] && fnTy->paramTypes[i]->isPointer());
-        if (isExternal && isStackArg && !isRawPointerParam) {
+        bool isStackArray = (argTy && argTy->isArray() && isStackArg);
+        if (isExternal && (isStackArray || (isStackArg && !isRawPointerParam))) {
             diag_.report(expr.args[i]->loc, Severity::Error,
                          "cannot pass safe stack pointer, reference, or array to unknown external function '" +
                          expr.callee + "' without verified no-escape contract");

@@ -3730,7 +3730,7 @@ static bool isSafeArchString(const std::string& s) {
     return true;
 }
 
-static std::string resolveArchFlag(const std::string& targetCPU) {
+static std::string resolveArchFlag(const std::string& targetCPU, const target::TargetTriple& triple) {
     if (!targetCPU.empty() && isSafeArchString(targetCPU)) {
         return " -march=" + targetCPU;
     }
@@ -3739,14 +3739,18 @@ static std::string resolveArchFlag(const std::string& targetCPU) {
     if (envCpu && *envCpu && isSafeArchString(envCpu)) {
         return " -march=" + std::string(envCpu);
     }
-    return " -march=native";
+    if (triple.arch() == target::TargetTriple::getHost().arch() &&
+        triple.os() == target::TargetTriple::getHost().os()) {
+        return " -march=native";
+    }
+    return "";
 }
 
 bool LLVMCodeGen::optimizeLLVMIR(const std::filesystem::path& inputLL,
                                 const std::filesystem::path& outputLL,
                                 int optLevel) {
     std::string optFlag = "-O" + std::to_string(optLevel);
-    std::string archFlag = resolveArchFlag(targetCPU_);
+    std::string archFlag = resolveArchFlag(targetCPU_, targetTriple_);
     std::string fastMath = fastMath_ ? " -ffast-math" : "";
     std::string extraOpt = ((optLevel >= 3) ? " -mllvm -inline-threshold=2500 -mllvm -unroll-threshold=800 -mllvm -vectorize-loops=true -mllvm -vectorize-slp=true" : ((optLevel >= 2) ? " -mllvm -inline-threshold=1000 -mllvm -vectorize-loops=true" : "")) + fastMath;
     std::string cmd = "\"" + clangPath_ + "\" -x ir " + optFlag + archFlag + extraOpt +
@@ -3765,7 +3769,7 @@ bool LLVMCodeGen::compileToAssembly(const std::filesystem::path& llPath,
                                    const std::filesystem::path& asmPath,
                                    int optLevel) {
     std::string optFlag = "-O" + std::to_string(optLevel);
-    std::string archFlag = resolveArchFlag(targetCPU_);
+    std::string archFlag = resolveArchFlag(targetCPU_, targetTriple_);
     std::string fastMath = fastMath_ ? " -ffast-math" : "";
     std::string extraOpt = ((optLevel >= 3) ? " -mllvm -inline-threshold=2500 -mllvm -unroll-threshold=800 -mllvm -vectorize-loops=true -mllvm -vectorize-slp=true" : ((optLevel >= 2) ? " -mllvm -inline-threshold=1000 -mllvm -vectorize-loops=true" : "")) + fastMath;
     std::string cmd = "\"" + clangPath_ + "\" -x ir " + optFlag + archFlag + extraOpt +
@@ -3843,7 +3847,7 @@ bool LLVMCodeGen::compileToExecutable(const std::filesystem::path& llPath,
                                      const std::filesystem::path& exePath,
                                      int optLevel) {
     std::string optFlag = "-O" + std::to_string(optLevel);
-    std::string archFlag = resolveArchFlag(targetCPU_);
+    std::string archFlag = resolveArchFlag(targetCPU_, targetTriple_);
     std::string fastMath = fastMath_ ? " -ffast-math" : "";
     std::string extraOpt = ((optLevel >= 3) ? " -mllvm -inline-threshold=2500 -mllvm -unroll-threshold=800 -mllvm -vectorize-loops=true -mllvm -vectorize-slp=true" : ((optLevel >= 2) ? " -mllvm -inline-threshold=1000 -mllvm -vectorize-loops=true" : "")) + fastMath;
     std::string crtFlag;
@@ -3883,7 +3887,7 @@ bool LLVMCodeGen::compileToObject(const std::filesystem::path& llPath,
                                  const std::filesystem::path& objPath,
                                  int optLevel) {
     std::string optFlag = "-O" + std::to_string(optLevel);
-    std::string archFlag = resolveArchFlag(targetCPU_);
+    std::string archFlag = resolveArchFlag(targetCPU_, targetTriple_);
     std::string fastMath = fastMath_ ? " -ffast-math" : "";
     std::string extraOpt = ((optLevel >= 3) ? " -mllvm -inline-threshold=2500 -mllvm -unroll-threshold=800 -mllvm -vectorize-loops=true -mllvm -vectorize-slp=true" : ((optLevel >= 2) ? " -mllvm -inline-threshold=1000 -mllvm -vectorize-loops=true" : "")) + fastMath;
     std::string cmd = "\"" + clangPath_ + "\" -x ir " + optFlag + archFlag + extraOpt +
@@ -3902,7 +3906,7 @@ bool LLVMCodeGen::compileToSharedLibrary(const std::filesystem::path& llPath,
                                         const std::filesystem::path& dylibPath,
                                         int optLevel) {
     std::string optFlag = "-O" + std::to_string(optLevel);
-    std::string archFlag = resolveArchFlag(targetCPU_);
+    std::string archFlag = resolveArchFlag(targetCPU_, targetTriple_);
     std::string fastMath = fastMath_ ? " -ffast-math" : "";
     std::string extraOpt = ((optLevel >= 3) ? " -mllvm -inline-threshold=2500 -mllvm -unroll-threshold=800 -mllvm -vectorize-loops=true -mllvm -vectorize-slp=true" : ((optLevel >= 2) ? " -mllvm -inline-threshold=1000 -mllvm -vectorize-loops=true" : "")) + fastMath;
     std::string crtFlag;
