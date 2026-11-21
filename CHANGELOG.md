@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.18.5] - 2026-11-21
+
+### Added & Hardened — Milestone v0.18.5: Tamarin Graphics & Native Ecosystem (Raylib 5.5, SDL3 Platform & Modern Multi-Backend `SDL_GPU`)
+- **Compiler Linker Directives (`src/main.cpp`)**:
+  - Implemented `-l`, `--link`, `-L`, `--lib-dir`, `-Wl,`, and `-Xlinker` CLI flags.
+  - Transparently maps linker directives to host toolchains (MSVC `link.exe` on Windows, `clang`/`lld` on POSIX).
+- **Raylib 5.5 Ecosystem (`lib/raylib/`, `examples/raylib_demo.tmn`, `examples/raylib_3d.tmn`)**:
+  - Implemented C ABI struct-by-value lowering across MSVC x64 and System V AMD64 for small composite structs (`Vector2`, `Vector3`, `Color`, `Camera3D`).
+  - Zero-glue bindings for `raylib`, `raymath`, and `rlgl` with 100% semantic verification via `tamarin check --lib`.
+  - Verified 2D immediate mode rendering and 3D depth-buffered perspective camera demos.
+- **SDL3 Platform & Modern Multi-Backend `SDL_GPU` (`lib/sdl3/`, `examples/sdl3_window.tmn`, `examples/sdl_gpu_triangle.tmn`)**:
+  - Enhanced `tamarin-bindgen` C parser to translate `CXType_Enum` to architecture-appropriate integer types, resolving 96 enums, 170 structs, 1,256 functions, and 1,022 constants.
+  - Low-overhead GPU pipeline abstractions over **Vulkan**, **Direct3D 12**, **Metal**, and **OpenGL** via command buffers and render passes.
+  - Relaxed C ABI escape contract and mutable borrow registration for raw pointer function parameters (`*T`) in semantic type checker.
+  - Allowed `null` literal conversions across all raw pointer parameter call sites in Sema and IR builder.
+  - Corrected integer bitcast lowering in LLVM codegen to emit `zext`/`sext`/`trunc` across mismatched integer bit widths.
+- **Troop Package Manager Project Templates (`troop/src/cli.cpp`, `troop/src/package_manager.cpp`)**:
+  - Added `-t, --template <name>` flags to `troop new` and `troop init` supporting `raylib-game` and `sdl3-app`.
+  - Scaffolds target-aware `troop.toml` manifests, source trees (`src/main.tmn`), and automated platform linking configurations.
+- **Documentation & Verification**:
+  - Published comprehensive graphics guide in `docs/graphics.md`.
+  - Extended unified verification harness with Suite 13 (Graphics & Native Ecosystem E2E) across Windows, Linux, and macOS.
+
+---
+
 ## [0.18.0] - 2026-11-21
 
 ### Added & Hardened — Milestone v0.18.0: Developer Tooling (`tamarin-lsp`), Automatic C Binding Generator (`tamarin-bindgen`), and Official Editor Packaging

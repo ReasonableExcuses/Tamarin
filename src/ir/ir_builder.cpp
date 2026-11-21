@@ -274,7 +274,7 @@ std::unique_ptr<IRModule> IRBuilder::buildModule(Program& prog, const std::strin
             auto sym = checker_.findSymbol(cd.name, cd.loc);
             IRGlobal g;
             g.name = cd.name;
-            g.type = sym ? sym->type : nullptr;
+            g.type = sym ? sym->type : (cd.type ? checker_.resolveType(*cd.type) : nullptr);
             g.isConst = true;
             if (cd.value) {
                 auto res = checker_.evalIntConstExpr(*cd.value);
@@ -385,7 +385,7 @@ std::unique_ptr<IRModule> IRBuilder::buildProgram(
                 auto sym = checker_.findSymbol(cd.name, cd.loc);
                 IRGlobal g;
                 g.name = cd.name;
-                g.type = sym ? sym->type : nullptr;
+                g.type = sym ? sym->type : (cd.type ? checker_.resolveType(*cd.type) : nullptr);
                 g.isConst = true;
                 if (cd.value) {
                     auto res = checker_.evalIntConstExpr(*cd.value);
@@ -6009,6 +6009,16 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                             gep.type   = (argTy->elementType) ? argTy->elementType : checker_.context().getU8();
                             emit(gep);
                             argVal = gep.result;
+                        } else if (argTy && argTy->isPointer()) {
+                            argVal = lowerExpr(*call.args[i]);
+                        } else if (call.args[i]->kind == ExprKind::IntLiteral && static_cast<const IntLiteralExpr*>(call.args[i].get())->value == 0) {
+                            Instruction nullConst;
+                            nullConst.opcode = Opcode::IConst;
+                            nullConst.result = nextValueId();
+                            nullConst.intImm = 0;
+                            nullConst.type   = checker_.context().getReference(checker_.context().getVoid(), false, /*isPointer=*/true);
+                            emit(nullConst);
+                            argVal = nullConst.result;
                         } else {
                             argVal = getStructPointer(*call.args[i]);
                         }
@@ -6083,6 +6093,16 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                             gep.type   = (argTy->elementType) ? argTy->elementType : checker_.context().getU8();
                             emit(gep);
                             argVal = gep.result;
+                        } else if (argTy && argTy->isPointer()) {
+                            argVal = lowerExpr(*call.args[i]);
+                        } else if (call.args[i]->kind == ExprKind::IntLiteral && static_cast<const IntLiteralExpr*>(call.args[i].get())->value == 0) {
+                            Instruction nullConst;
+                            nullConst.opcode = Opcode::IConst;
+                            nullConst.result = nextValueId();
+                            nullConst.intImm = 0;
+                            nullConst.type   = checker_.context().getReference(checker_.context().getVoid(), false, /*isPointer=*/true);
+                            emit(nullConst);
+                            argVal = nullConst.result;
                         } else {
                             argVal = getStructPointer(*call.args[i]);
                         }
@@ -6778,7 +6798,20 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                 const sema::Type* expectedParamTy = (m && i < m->paramTypes.size()) ? m->paramTypes[i] : nullptr;
                 ValueId argVal = InvalidValue;
                 if (expectedParamTy && expectedParamTy->isReference()) {
-                    argVal = getStructPointer(*mc.args[i]);
+                    auto argTy = checker_.getExprType(mc.args[i].get());
+                    if (argTy && argTy->isPointer()) {
+                        argVal = lowerExpr(*mc.args[i]);
+                    } else if (mc.args[i]->kind == ExprKind::IntLiteral && static_cast<const IntLiteralExpr*>(mc.args[i].get())->value == 0) {
+                        Instruction nullConst;
+                        nullConst.opcode = Opcode::IConst;
+                        nullConst.result = nextValueId();
+                        nullConst.intImm = 0;
+                        nullConst.type   = checker_.context().getReference(checker_.context().getVoid(), false, /*isPointer=*/true);
+                        emit(nullConst);
+                        argVal = nullConst.result;
+                    } else {
+                        argVal = getStructPointer(*mc.args[i]);
+                    }
                 } else {
                     argVal = lowerExpr(*mc.args[i]);
                     auto argTy = checker_.getExprType(mc.args[i].get());

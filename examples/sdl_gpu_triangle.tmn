@@ -1,0 +1,99 @@
+import sdl3 as sdl;
+
+int main() {
+    print("Initializing SDL3 video subsystem...\n");
+    bool initOk = sdl::SDL_Init((u32)sdl::SDL_INIT_VIDEO);
+    if (!initOk) {
+        print("Failed to initialize SDL3: ");
+        print(sdl::SDL_GetError());
+        print("\n");
+        return 1;
+    }
+
+    print("Creating hidden window for GPU presentation...\n");
+    *sdl::SDL_Window window = sdl::SDL_CreateWindow("Tamarin SDL_GPU Clear Demo", 640, 480, (u64)sdl::SDL_WINDOW_HIDDEN);
+    if (window == null) {
+        print("Failed to create SDL3 window: ");
+        print(sdl::SDL_GetError());
+        print("\n");
+        sdl::SDL_Quit();
+        return 1;
+    }
+
+    print("Creating modern multi-backend SDL_GPU device...\n");
+    u32 shaderFormats = (u32)(sdl::SDL_GPU_SHADERFORMAT_SPIRV | sdl::SDL_GPU_SHADERFORMAT_DXBC | sdl::SDL_GPU_SHADERFORMAT_DXIL | sdl::SDL_GPU_SHADERFORMAT_MSL);
+    *sdl::SDL_GPUDevice device = sdl::SDL_CreateGPUDevice(shaderFormats, false, null);
+
+    if (device == null) {
+        print("Warning: GPU device could not be created (likely headless environment without Vulkan/D3D12/Metal driver): ");
+        print(sdl::SDL_GetError());
+        print("\nSkipping GPU render pass gracefully.\n");
+        sdl::SDL_DestroyWindow(window);
+        sdl::SDL_Quit();
+        return 0;
+    }
+
+    print("GPU Device created successfully! Backend driver: ");
+    *const u8 driverName = sdl::SDL_GetGPUDeviceDriver(device);
+    if (driverName != null) {
+        print(driverName);
+    } else {
+        print("unknown");
+    }
+    print("\n");
+
+    print("Claiming window for GPU device...\n");
+    bool claimed = sdl::SDL_ClaimWindowForGPUDevice(device, window);
+    if (!claimed) {
+        print("Warning: Failed to claim window for GPU: ");
+        print(sdl::SDL_GetError());
+        print("\n");
+    } else {
+        print("Acquiring command buffer...\n");
+        *sdl::SDL_GPUCommandBuffer cmd = sdl::SDL_AcquireGPUCommandBuffer(device);
+        if (cmd != null) {
+            *sdl::SDL_GPUTexture swapchainTex = null;
+            u32 w = 0u32;
+            u32 h = 0u32;
+            bool acquired = sdl::SDL_AcquireGPUSwapchainTexture(cmd, window, &swapchainTex, &w, &h);
+            if (acquired && swapchainTex != null) {
+                print("Swapchain texture acquired! Setting up cornflower blue clear target...\n");
+                sdl::SDL_FColor cornflowerBlue = { 0.392f, 0.584f, 0.929f, 1.0f };
+                sdl::SDL_GPUColorTargetInfo colorTarget;
+                colorTarget.texture = swapchainTex;
+                colorTarget.mip_level = 0u32;
+                colorTarget.layer_or_depth_plane = 0u32;
+                colorTarget.clear_color = cornflowerBlue;
+                colorTarget.load_op = sdl::SDL_GPU_LOADOP_CLEAR;
+                colorTarget.store_op = sdl::SDL_GPU_STOREOP_STORE;
+                colorTarget.resolve_texture = null;
+                colorTarget.resolve_mip_level = 0u32;
+                colorTarget.resolve_layer = 0u32;
+                colorTarget.cycle = false;
+                colorTarget.cycle_resolve_texture = false;
+                colorTarget.padding1 = 0u8;
+                colorTarget.padding2 = 0u8;
+
+                *sdl::SDL_GPURenderPass pass = sdl::SDL_BeginGPURenderPass(cmd, &colorTarget, 1u32, null);
+                if (pass != null) {
+                    print("Executing GPU render pass...\n");
+                    sdl::SDL_EndGPURenderPass(pass);
+                }
+
+                print("Submitting command buffer to GPU queue...\n");
+                sdl::SDL_SubmitGPUCommandBuffer(cmd);
+            } else {
+                print("Note: Swapchain texture not yet available on hidden window; submitting empty buffer\n");
+                sdl::SDL_SubmitGPUCommandBuffer(cmd);
+            }
+        }
+        sdl::SDL_ReleaseWindowFromGPUDevice(device, window);
+    }
+
+    print("Destroying GPU device and window...\n");
+    sdl::SDL_DestroyGPUDevice(device);
+    sdl::SDL_DestroyWindow(window);
+    sdl::SDL_Quit();
+    print("SDL_GPU demo completed successfully!\n");
+    return 0;
+}

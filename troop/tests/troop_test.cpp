@@ -267,3 +267,61 @@ TAMARIN_TEST(Troop, DependencyResolutionAndCycleDetection) {
     std::filesystem::remove_all(tempBase, ec);
     return true;
 }
+
+TAMARIN_TEST(Troop, TemplateRaylibGame) {
+    std::error_code ec;
+    auto tempBase = std::filesystem::temp_directory_path() / "troop_test_raylib_tpl";
+    std::filesystem::remove_all(tempBase, ec);
+    std::filesystem::create_directories(tempBase);
+
+    PackageManager pm;
+    std::string err;
+    auto gameDir = tempBase / "test_game";
+    EXPECT_TRUE(pm.newPackage(gameDir, "test_game", false, err, "raylib-game"));
+
+    EXPECT_TRUE(std::filesystem::exists(gameDir / "troop.toml"));
+    EXPECT_TRUE(std::filesystem::exists(gameDir / "src" / "main.tmn"));
+
+    auto manifest = Manifest::loadFromFile(gameDir / "troop.toml", err);
+    EXPECT_TRUE(manifest.has_value());
+    EXPECT_EQ(manifest->package.name, "test_game");
+    EXPECT_EQ(manifest->package.entryPoint, "src/main.tmn");
+    EXPECT_TRUE(std::find(manifest->package.links.begin(), manifest->package.links.end(), "raylib") != manifest->package.links.end());
+
+    std::ifstream srcFile(gameDir / "src" / "main.tmn");
+    std::string content((std::istreambuf_iterator<char>(srcFile)), std::istreambuf_iterator<char>());
+    EXPECT_TRUE(content.find("import raylib as rl;") != std::string::npos);
+    EXPECT_TRUE(content.find("rl::InitWindow") != std::string::npos);
+
+    std::filesystem::remove_all(tempBase, ec);
+    return true;
+}
+
+TAMARIN_TEST(Troop, TemplateSDL3App) {
+    std::error_code ec;
+    auto tempBase = std::filesystem::temp_directory_path() / "troop_test_sdl3_tpl";
+    std::filesystem::remove_all(tempBase, ec);
+    std::filesystem::create_directories(tempBase);
+
+    PackageManager pm;
+    std::string err;
+    auto appDir = tempBase / "test_app";
+    EXPECT_TRUE(pm.newPackage(appDir, "test_app", false, err, "sdl3-app"));
+
+    EXPECT_TRUE(std::filesystem::exists(appDir / "troop.toml"));
+    EXPECT_TRUE(std::filesystem::exists(appDir / "src" / "main.tmn"));
+
+    auto manifest = Manifest::loadFromFile(appDir / "troop.toml", err);
+    EXPECT_TRUE(manifest.has_value());
+    EXPECT_EQ(manifest->package.name, "test_app");
+    EXPECT_EQ(manifest->package.entryPoint, "src/main.tmn");
+    EXPECT_TRUE(std::find(manifest->package.links.begin(), manifest->package.links.end(), "SDL3") != manifest->package.links.end());
+
+    std::ifstream srcFile(appDir / "src" / "main.tmn");
+    std::string content((std::istreambuf_iterator<char>(srcFile)), std::istreambuf_iterator<char>());
+    EXPECT_TRUE(content.find("import sdl3 as sdl;") != std::string::npos);
+    EXPECT_TRUE(content.find("sdl::SDL_Init") != std::string::npos);
+
+    std::filesystem::remove_all(tempBase, ec);
+    return true;
+}

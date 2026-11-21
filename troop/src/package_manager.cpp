@@ -99,7 +99,77 @@ std::optional<std::filesystem::path> PackageManager::findManifest(const std::fil
     return std::nullopt;
 }
 
-bool PackageManager::newPackage(const std::filesystem::path& targetDir, const std::string& name, bool isLib, std::string& errorMsg) {
+static void applyTemplate(Manifest& m, const std::string& templateName, const std::filesystem::path& targetDir, const std::string& name) {
+    if (templateName == "raylib-game" || templateName == "raylib") {
+        m.package.entryPoint = "src/main.tmn";
+        m.package.links = {"raylib"};
+        m.targetConfigs["windows"].links = {"winmm", "gdi32", "user32", "shell32", "opengl32"};
+        m.targetConfigs["windows"].libDirs = {"native"};
+        m.targetConfigs["linux"].links = {"m", "pthread", "dl", "GL", "rt", "X11"};
+        m.targetConfigs["macos"].links = {"-framework OpenGL", "-framework Cocoa", "-framework IOKit", "-framework CoreVideo"};
+        m.targetConfigs["macos"].libDirs = {"/opt/homebrew/lib", "/usr/local/lib"};
+
+        std::ofstream binSrc(targetDir / "src" / "main.tmn");
+        if (binSrc.is_open()) {
+            binSrc << "// " << name << " - Raylib 5.5 Game in Tamarin\n"
+                   << "import raylib as rl;\n\n"
+                   << "int main() {\n"
+                   << "    rl::InitWindow(800, 450, \"Tamarin Raylib Game\");\n"
+                   << "    rl::SetTargetFPS(60);\n\n"
+                   << "    rl::Color bgColor = { 245u8, 245u8, 245u8, 255u8 };\n"
+                   << "    rl::Color textColor = { 230u8, 41u8, 55u8, 255u8 };\n\n"
+                   << "    while (!rl::WindowShouldClose()) {\n"
+                   << "        rl::BeginDrawing();\n"
+                   << "        rl::ClearBackground(bgColor);\n"
+                   << "        rl::DrawText(\"Welcome to Tamarin + Raylib!\", 190, 200, 20, textColor);\n"
+                   << "        rl::EndDrawing();\n"
+                   << "    }\n\n"
+                   << "    rl::CloseWindow();\n"
+                   << "    return 0;\n"
+                   << "}\n";
+        }
+    } else if (templateName == "sdl3-app" || templateName == "sdl3") {
+        m.package.entryPoint = "src/main.tmn";
+        m.package.links = {"SDL3"};
+        m.targetConfigs["windows"].libDirs = {"native"};
+        m.targetConfigs["linux"].libDirs = {"/usr/local/lib"};
+        m.targetConfigs["macos"].libDirs = {"/opt/homebrew/lib", "/usr/local/lib"};
+
+        std::ofstream binSrc(targetDir / "src" / "main.tmn");
+        if (binSrc.is_open()) {
+            binSrc << "// " << name << " - SDL3 Application in Tamarin\n"
+                   << "import sdl3 as sdl;\n\n"
+                   << "int main() {\n"
+                   << "    bool initOk = sdl::SDL_Init((u32)sdl::SDL_INIT_VIDEO);\n"
+                   << "    if (!initOk) {\n"
+                   << "        print(\"Failed to initialize SDL3: \");\n"
+                   << "        print(sdl::SDL_GetError());\n"
+                   << "        print(\"\\n\");\n"
+                   << "        return 1;\n"
+                   << "    }\n\n"
+                   << "    *sdl::SDL_Window window = sdl::SDL_CreateWindow(\"Tamarin SDL3 App\", 800, 600, 0u64);\n"
+                   << "    if (window == null) {\n"
+                   << "        print(\"Failed to create SDL3 window\\n\");\n"
+                   << "        sdl::SDL_Quit();\n"
+                   << "        return 1;\n"
+                   << "    }\n\n"
+                   << "    bool running = true;\n"
+                   << "    sdl::SDL_Event event;\n"
+                   << "    while (running) {\n"
+                   << "        while (sdl::SDL_PollEvent(&event)) {\n"
+                   << "            // Process window/input events\n"
+                   << "        }\n"
+                   << "        running = false;\n"
+                   << "    }\n\n"
+                   << "    sdl::SDL_DestroyWindow(window);\n"
+                   << "    sdl::SDL_Quit();\n"
+                   << "    return 0;\n"
+                   << "}\n";
+        }
+    }
+}
+
+bool PackageManager::newPackage(const std::filesystem::path& targetDir, const std::string& name, bool isLib, std::string& errorMsg, const std::string& templateName) {
     if (std::filesystem::exists(targetDir) && !std::filesystem::is_empty(targetDir)) {
         errorMsg = "target directory already exists and is not empty: " + targetDir.string();
         return false;
@@ -109,6 +179,9 @@ bool PackageManager::newPackage(const std::filesystem::path& targetDir, const st
     std::filesystem::create_directories(targetDir / "tests");
 
     Manifest m = Manifest::createDefault(name, isLib);
+    if (!templateName.empty()) {
+        applyTemplate(m, templateName, targetDir, name);
+    }
     auto manifestPath = targetDir / "troop.toml";
     if (!m.saveToFile(manifestPath, errorMsg)) {
         return false;
@@ -122,23 +195,25 @@ bool PackageManager::newPackage(const std::filesystem::path& targetDir, const st
         }
     }
 
-    // Write source file
-    if (isLib) {
-        std::ofstream libSrc(targetDir / "src" / "lib.tam");
-        if (libSrc.is_open()) {
-            libSrc << "// " << name << " - Tamarin Library\n\n"
-                   << "public int add(int a, int b) {\n"
-                   << "    return a + b;\n"
-                   << "}\n";
-        }
-    } else {
-        std::ofstream binSrc(targetDir / "src" / "main.tam");
-        if (binSrc.is_open()) {
-            binSrc << "// " << name << " - Tamarin Application\n\n"
-                   << "int main() {\n"
-                   << "    println(\"Hello from " << name << "!\");\n"
-                   << "    return 0;\n"
-                   << "}\n";
+    // Write default source file if not created by template
+    if (templateName.empty()) {
+        if (isLib) {
+            std::ofstream libSrc(targetDir / "src" / "lib.tam");
+            if (libSrc.is_open()) {
+                libSrc << "// " << name << " - Tamarin Library\n\n"
+                       << "public int add(int a, int b) {\n"
+                       << "    return a + b;\n"
+                       << "}\n";
+            }
+        } else {
+            std::ofstream binSrc(targetDir / "src" / "main.tam");
+            if (binSrc.is_open()) {
+                binSrc << "// " << name << " - Tamarin Application\n\n"
+                       << "int main() {\n"
+                       << "    println(\"Hello from " << name << "!\");\n"
+                       << "    return 0;\n"
+                       << "}\n";
+            }
         }
     }
 
@@ -157,7 +232,7 @@ bool PackageManager::newPackage(const std::filesystem::path& targetDir, const st
     return true;
 }
 
-bool PackageManager::initPackage(const std::filesystem::path& targetDir, bool isLib, std::string& errorMsg) {
+bool PackageManager::initPackage(const std::filesystem::path& targetDir, bool isLib, std::string& errorMsg, const std::string& templateName) {
     auto manifestPath = targetDir / "troop.toml";
     if (std::filesystem::exists(manifestPath)) {
         errorMsg = "troop.toml already exists in: " + targetDir.string();
@@ -170,20 +245,25 @@ bool PackageManager::initPackage(const std::filesystem::path& targetDir, bool is
     }
 
     Manifest m = Manifest::createDefault(name, isLib);
+    std::filesystem::create_directories(targetDir / "src");
+    std::filesystem::create_directories(targetDir / "tests");
+
+    if (!templateName.empty()) {
+        applyTemplate(m, templateName, targetDir, name);
+    }
     if (!m.saveToFile(manifestPath, errorMsg)) {
         return false;
     }
 
-    std::filesystem::create_directories(targetDir / "src");
-    std::filesystem::create_directories(targetDir / "tests");
-
-    auto entryFile = targetDir / (isLib ? "src/lib.tam" : "src/main.tam");
-    if (!std::filesystem::exists(entryFile)) {
-        std::ofstream src(entryFile);
-        if (isLib) {
-            src << "public int add(int a, int b) {\n    return a + b;\n}\n";
-        } else {
-            src << "int main() {\n    println(\"Hello from " << name << "!\");\n    return 0;\n}\n";
+    if (templateName.empty()) {
+        auto entryFile = targetDir / (isLib ? "src/lib.tam" : "src/main.tam");
+        if (!std::filesystem::exists(entryFile)) {
+            std::ofstream src(entryFile);
+            if (isLib) {
+                src << "public int add(int a, int b) {\n    return a + b;\n}\n";
+            } else {
+                src << "int main() {\n    println(\"Hello from " << name << "!\");\n    return 0;\n}\n";
+            }
         }
     }
 

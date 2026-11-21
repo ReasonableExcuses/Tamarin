@@ -6,6 +6,7 @@
 #include <iostream>
 #include <filesystem>
 #include <algorithm>
+#include <regex>
 
 namespace tamarin::bindgen {
 
@@ -291,7 +292,7 @@ CType CParser::convertType(CXType type, CXCursor cursor) {
             if (canon.kind == CXType_Pointer && clang_getPointeeType(canon).kind == CXType_FunctionProto) {
                 return convertType(canon);
             }
-            if (canon.kind != CXType_Record && canon.kind != CXType_Enum &&
+            if (canon.kind != CXType_Record &&
                 canon.kind != CXType_Invalid && canon.kind != CXType_Unexposed) {
                 return convertType(canon);
             }
@@ -311,11 +312,16 @@ CType CParser::convertType(CXType type, CXCursor cursor) {
 
         case CXType_Enum: {
             std::string sName = normalizeTypeName(toStdString(clang_getTypeSpelling(type)));
-            if (sName.empty() || sName.find("unnamed") != std::string::npos) {
-                res.tamarinType = "int";
-            } else {
+            if (!sName.empty() && sName.find("unnamed") == std::string::npos &&
+                visitedEnums_.find(sName) != visitedEnums_.end()) {
                 res.tamarinType = sName;
+                return res;
             }
+            long long sz = clang_Type_getSizeOf(type);
+            if (sz == 8) res.tamarinType = "i64";
+            else if (sz == 2) res.tamarinType = "i16";
+            else if (sz == 1) res.tamarinType = "u8";
+            else res.tamarinType = "int";
             return res;
         }
 
@@ -642,6 +648,76 @@ void CParser::processTypedef(CXCursor cursor, CHeaderModel& model) {
     model.typedefs.push_back(std::move(td));
 }
 
+static bool isValidMacroValue(const std::string& val) {
+    if (val.empty()) return false;
+    static const std::vector<std::string> blacklist = {
+        "__attribute__", "__declspec", "__has_", "__asm__",
+        "WINAPI", "APIENTRY", "WINGDIAPI", "restrict",
+        "__cdecl", "__stdcall", "__fastcall", "__forceinline", "__inline",
+        "_Printf_", "_Scanf_", "_In_", "_Out_", "_Success_", "_Null_",
+        "memcpy", "memmove", "memset", "malloc", "free", "alloca"
+    };
+    for (const auto& b : blacklist) {
+        if (val.find(b) != std::string::npos) return false;
+    }
+
+    if (val.starts_with("\"") && val.ends_with("\"")) {
+        for (size_t i = 1; i + 1 < val.size(); ++i) {
+            if (val[i] == '"' && val[i - 1] != '\\') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    if (!val.starts_with("\"") && !val.starts_with("'") && !val.starts_with("(") && !val.starts_with("~")) {
+        char first = val.front();
+        if (!isdigit(static_cast<unsigned char>(first)) && first != '+' && first != '-') {
+            if (!val.starts_with("SDL_") && val != "true" && val != "false") {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+static std::string sanitizeMacroValue(std::string val) {
+    if (val.empty()) return "";
+    if (val.find("__attribute__") != std::string::npos ||
+        val.find("__declspec") != std::string::npos ||
+        val.find("__has_") != std::string::npos ||
+        val.find("__asm__") != std::string::npos ||
+        val.find("WINAPI_FAMILY") != std::string::npos) {
+        return "";
+    }
+
+    // Strip SDL_SINT64_C(x) / SDL_UINT64_C(x) / INT64_C(x)
+    static const std::regex cMacroRegex(R"([A-Za-z0-9_]+_C\s*\(\s*([^)]+)\s*\))");
+    val = std::regex_replace(val, cMacroRegex, "$1");
+
+    // Strip C-style cast patterns: ((Type)val) or (Type)val
+    static const std::regex doubleParenCast(R"(\(\s*\(\s*[A-Za-z0-9_]+\s*\*?\s*\)\s*([^)]+)\s*\))");
+    val = std::regex_replace(val, doubleParenCast, "$1");
+    static const std::regex singleParenCast(R"(\(\s*[A-Za-z0-9_]+\s*\*?\s*\)\s*([A-Za-z0-9_~]+))");
+    val = std::regex_replace(val, singleParenCast, "$1");
+    val = std::regex_replace(val, doubleParenCast, "$1");
+
+    // Strip C integer suffixes (u, U, l, L, ll, LL, ul, UL, ull, ULL)
+    static const std::regex hexSuffixRegex(R"((0x[0-9a-fA-F]+)[uUlL]+)");
+    val = std::regex_replace(val, hexSuffixRegex, "$1");
+    static const std::regex decSuffixRegex(R"((\b[0-9]+)[uUlL]+)");
+    val = std::regex_replace(val, decSuffixRegex, "$1");
+
+    // Trim whitespace
+    while (!val.empty() && isspace(static_cast<unsigned char>(val.front()))) val.erase(val.begin());
+    while (!val.empty() && isspace(static_cast<unsigned char>(val.back()))) val.pop_back();
+
+    if (!isValidMacroValue(val)) return "";
+
+    return val;
+}
+
 void CParser::processMacro(CXCursor cursor, CHeaderModel& model) {
     if (clang_Cursor_isMacroFunctionLike(cursor)) return;
 
@@ -671,6 +747,8 @@ void CParser::processMacro(CXCursor cursor, CHeaderModel& model) {
             valStr += t;
         }
 
+        valStr = sanitizeMacroValue(valStr);
+
         if (!valStr.empty() && valStr.find('{') == std::string::npos) {
             CConstant c;
             c.name = name;
@@ -684,6 +762,10 @@ void CParser::processMacro(CXCursor cursor, CHeaderModel& model) {
                 c.type = "float";
             } else if (valStr.starts_with("'")) {
                 c.type = "char";
+            } else if ((valStr.starts_with("0x") || valStr.starts_with("0X")) && valStr.size() > 10) {
+                c.type = "i64";
+            } else if (valStr.size() > 10 && isdigit(static_cast<unsigned char>(valStr[0]))) {
+                c.type = "i64";
             } else {
                 c.type = "int";
             }

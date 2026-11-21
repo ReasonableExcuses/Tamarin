@@ -53,6 +53,8 @@ void TamarinEmitter::emit(const CHeaderModel& model, std::ostream& out) const {
                 out << pub << "const float " << tName << " = " << c.value << ";\n";
             } else if (c.type == "char") {
                 out << pub << "const u8 " << tName << " = " << c.value << ";\n";
+            } else if (c.type == "i64") {
+                out << pub << "const i64 " << tName << " = " << c.value << ";\n";
             } else {
                 out << pub << "const int " << tName << " = " << c.value << ";\n";
             }

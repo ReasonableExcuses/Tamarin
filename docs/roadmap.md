@@ -1,6 +1,6 @@
 # Tamarin Technical Roadmap: Towards Version 1.0 GA
 
-**Current Version:** 0.18.0  
+**Current Version:** 0.18.5  
 **Target Milestone:** 1.0.0 General Availability  
 **Document Classification:** Systems Engineering & Compiler Architecture Plan  
 
@@ -17,8 +17,9 @@ Tamarin has established a verified, zero-compromise foundation:
 - **Tier 1 Cross-Platform Portability**: First-class native support across Windows MSVC (`x86_64`), Linux GNU (`x86_64`, `aarch64`), and Apple Silicon macOS Darwin (`aarch64`), with `@cfg(...)` conditional compilation directives and multi-OS GitHub Actions CI.
 - **High-Performance Standard Library**: Abseil-style Swiss Table `HashMap<K, V>` with 16-way SIMD group probing, zero-allocation streaming `std.json`, and hardware bit-twiddling intrinsics (`std.bits`).
 - **Developer Tooling & Interoperability**: Production-grade `tamarin-lsp` (LSP 3.17 server with real-time squiggles, hover, definition, references, outline, completion, signature help) and `tamarin-bindgen` (automated C header binding generator).
+- **Graphics & Native Ecosystem**: Raylib 5.5 (`tamarin-raylib`), SDL3 platform, and modern multi-backend `SDL_GPU` (Vulkan, Direct3D 12, Metal, OpenGL) with project scaffolding templates (`troop new --template=...`).
 
-The path to **Version 1.0 GA** focuses on developer ecosystem maturity, graphics/GUI bindings, and self-hosting.
+The path to **Version 1.0 GA** focuses on self-hosting and compiler maturation.
 
 ---
 
@@ -34,10 +35,10 @@ The path to **Version 1.0 GA** focuses on developer ecosystem maturity, graphics
   [ v0.18.0 ] ──────────► Tooling & Ecosystem: tamarin-lsp, tamarin-bindgen, VS Code Extension (637/637 Passed)
           │
           ▼
-  [ v0.18.5 Current ] ──► Graphics Ecosystem: tamarin-raylib & tamarin-sdl3 (Modern Multi-Backend GPU)
+  [ v0.18.5 ] ──────────► Graphics Ecosystem: tamarin-raylib & tamarin-sdl3 (Modern Multi-Backend GPU)
           │
           ▼
-  [ v0.19.0 ] ──────────► Self-Hosting Compiler Prototype (Tamarin Frontend in Tamarin)
+  [ v0.19.0 Current ] ──► Self-Hosting Compiler Prototype (Tamarin Frontend in Tamarin)
           │
           ▼
   [ v1.0.0 GA ] ────────► Stable ABI Freeze, Complete Self-Hosting, Enterprise Package Ecosystem
@@ -116,25 +117,25 @@ The path to **Version 1.0 GA** focuses on developer ecosystem maturity, graphics
 
 ---
 
-### Milestone v0.18.5: Graphics Ecosystem (`tamarin-raylib` & `tamarin-sdl3`) [IN PROGRESS]
-*Target Date:* Q1 2027
+### Milestone v0.18.5: Graphics Ecosystem (`tamarin-raylib` & `tamarin-sdl3`) [COMPLETED]
+*Completed:* November 2026
 
-- **Phase 1: Compiler Native Linker Directives**:
-  - Implement `-l<lib>` and `-L<dir>` flags in `tamarin build` and `[package] links = [...]` in `troop.toml`.
-  - Automatically forward link arguments and library paths to Clang across Windows MSVC, Linux GNU, and macOS Darwin.
-- **Phase 2: `tamarin-raylib` (Raylib 5.5 Integration)**:
-  - Generate idiomatic bindings via `tamarin-bindgen` for `raylib.h`, `raymath.h`, and `rlgl.h`.
-  - Safe wrappers for `Color`, `Vector2`, `Vector3`, `Texture2D`, `Shader`, and window lifecycle.
+- **Compiler Linker Directives**:
+  - Implemented `-l`, `--link`, `-L`, `--lib-dir`, `-Wl,`, and `-Xlinker` CLI flags in Tamarin compiler driver (`src/main.cpp`).
+  - Automatically forward link arguments and library paths to Clang and MSVC `link.exe` across Windows, Linux, and macOS.
+- **`tamarin-raylib` (Raylib 5.5 Integration)**:
+  - C ABI struct-by-value lowering on MSVC x64 and System V AMD64 for composite structs (`Vector2`, `Vector3`, `Color`, `Camera3D`).
+  - Zero-glue bindings for `raylib`, `raymath`, and `rlgl` with 100% semantic verification via `tamarin check --lib`.
   - Interactive 2D/3D physics & geometry demos with automated headless CI verification.
-- **Phase 3: `tamarin-sdl3` Core (Platform, Windowing, Events, Input)**:
-  - Generate bindings for `SDL3/SDL.h`.
+- **`tamarin-sdl3` Core (Platform, Windowing, Events, Input)**:
+  - Enhanced `tamarin-bindgen` C parser to translate `CXType_Enum` to integer types, handling 96 enums and 1022 constants.
   - High-DPI window lifecycle, event loop dispatch, keyboard/mouse/gamepad input handling.
-- **Phase 4: `tamarin-sdl3` GPU (Modern `SDL_GPU`, Vulkan & OpenGL)**:
+- **`tamarin-sdl3` GPU (Modern `SDL_GPU`, Vulkan, Direct3D 12, Metal, OpenGL)**:
   - Multi-backend GPU rendering via `SDL3/SDL_gpu.h` targeting **Direct3D 12** on Windows, **Vulkan** on Linux, and **Metal** on macOS.
-  - Raw `SDL_Vulkan_CreateSurface` and `SDL_GL_CreateContext` hooks for engine architects.
-- **Phase 5: Troop CLI Project Templates & Documentation**:
-  - `tamarin init --template=raylib-game` and `tamarin init --template=sdl3-app`.
-  - Comprehensive guide in `docs/graphics.md`.
+  - Relaxed C ABI escape contract and borrow tracking for raw pointers; full `null` literal support.
+- **Troop CLI Project Templates & Documentation**:
+  - `troop new --template=raylib-game` and `troop new --template=sdl3-app`.
+  - Comprehensive guide published in `docs/graphics.md`.
 
 ---
 

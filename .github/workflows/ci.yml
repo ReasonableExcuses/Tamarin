@@ -42,8 +42,12 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
-            ninja-build clang llvm-dev libclang-dev libx11-dev libgl1-mesa-dev xvfb
+            ninja-build clang llvm-dev libclang-dev libx11-dev libgl1-mesa-dev xvfb libasound2-dev libpulse-dev libwayland-dev libxkbcommon-dev
           curl -sSL https://github.com/raysan5/raylib/releases/download/5.5/raylib-5.5_linux_amd64.tar.gz | sudo tar -xz -C /usr/local --strip-components=1
+          git clone --depth 1 https://github.com/libsdl-org/SDL.git /tmp/sdl3
+          cmake -S /tmp/sdl3 -B /tmp/sdl3/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
+          cmake --build /tmp/sdl3/build
+          sudo cmake --install /tmp/sdl3/build
           sudo ldconfig
           LLVM_DIR=$(llvm-config --cmakedir 2>/dev/null || llvm-config-18 --cmakedir 2>/dev/null || llvm-config-19 --cmakedir 2>/dev/null)
           echo "LLVM_DIR=$LLVM_DIR" >> "$GITHUB_ENV"
@@ -54,7 +58,7 @@ jobs:
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install llvm ninja raylib
+          brew install llvm ninja raylib sdl3
           LLVM_PREFIX="$(brew --prefix llvm)"
           echo "LLVM_DIR=$LLVM_PREFIX/lib/cmake/llvm" >> "$GITHUB_ENV"
           echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"

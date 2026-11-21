@@ -21,10 +21,10 @@ public:
     static std::optional<std::filesystem::path> findManifest(const std::filesystem::path& startDir = std::filesystem::current_path());
 
     /// Scaffolds a new package in targetDir
-    bool newPackage(const std::filesystem::path& targetDir, const std::string& name, bool isLib, std::string& errorMsg);
+    bool newPackage(const std::filesystem::path& targetDir, const std::string& name, bool isLib, std::string& errorMsg, const std::string& templateName = "");
 
     /// Initializes package in existing targetDir
-    bool initPackage(const std::filesystem::path& targetDir, bool isLib, std::string& errorMsg);
+    bool initPackage(const std::filesystem::path& targetDir, bool isLib, std::string& errorMsg, const std::string& templateName = "");
 
     /// Builds the package (resolves dependencies, invokes compiler, writes bin/ and troop.lock)
     int buildPackage(const std::filesystem::path& manifestPath, bool isRelease, const std::string& targetTriple = "", const std::vector<std::string>& extraArgs = {});

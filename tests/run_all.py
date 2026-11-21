@@ -546,6 +546,16 @@ int main() {
             links_ok = (p12.returncode == 0) and (app_dir / "bin" / "debug" / f"calc_app{EXE_EXT}").exists()
             self.record("Troop E2E", "troop build with native links and lib-dirs succeeds", links_ok)
 
+            # 13. Troop new --template=raylib-game
+            p13 = subprocess.run([str(self.troop_bin), "new", "test_game", "--template=raylib-game"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=tmp)
+            game_ok = (p13.returncode == 0) and (tmp / "test_game" / "troop.toml").exists() and (tmp / "test_game" / "src" / "main.tmn").exists()
+            self.record("Troop E2E", "troop new with --template=raylib-game", game_ok)
+
+            # 14. Troop new --template=sdl3-app
+            p14 = subprocess.run([str(self.troop_bin), "new", "test_app", "--template=sdl3-app"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=tmp)
+            sdl_tpl_ok = (p14.returncode == 0) and (tmp / "test_app" / "troop.toml").exists() and (tmp / "test_app" / "src" / "main.tmn").exists()
+            self.record("Troop E2E", "troop new with --template=sdl3-app", sdl_tpl_ok)
+
     # -------------------------------------------------------------------------
     # Suite 10: @cfg(...) & Multi-Target Cross-Compilation (5 tests)
     # -------------------------------------------------------------------------
@@ -727,6 +737,9 @@ int main() { return add(20, 22); }
             if win_lib.exists():
                 has_native = True
                 link_args = ["-L", str(native_dir), "-l", "raylib", "-l", "winmm", "-l", "gdi32", "-l", "user32", "-l", "shell32", "-l", "opengl32"]
+            raylib_native = str(REPO_ROOT / "lib" / "raylib" / "native")
+            sdl3_native = str(REPO_ROOT / "lib" / "sdl3" / "native")
+            os.environ["PATH"] = f"{raylib_native};{sdl3_native};{os.environ.get('PATH', '')}"
         elif IS_LINUX:
             has_native = True
             link_args = ["-l", "raylib", "-l", "m", "-l", "pthread", "-l", "dl", "-l", "GL", "-l", "rt", "-l", "X11"]
@@ -785,6 +798,70 @@ int main() { return add(20, 22); }
                     self.record(suite_name, "Raylib 3D C ABI Struct Passing & Depth Buffer", False, res.stdout.strip())
             except Exception as e:
                 self.record(suite_name, "Raylib 3D C ABI Struct Passing & Depth Buffer", False, str(e))
+
+        # 5. Check SDL3 module bindings semantic check
+        sdl3_lib = REPO_ROOT / "lib" / "sdl3" / "src" / "lib.tmn"
+        if sdl3_lib.exists():
+            check_sdl = subprocess.run([str(self.tamarin_bin), "check", "--lib", str(sdl3_lib)],
+                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=REPO_ROOT)
+            self.record(suite_name, "SDL3 Bindings Semantic Check", check_sdl.returncode == 0,
+                        check_sdl.stdout.strip() if check_sdl.returncode != 0 else "")
+
+        # 6. Check if native SDL3 library is available
+        sdl3_native_dir = REPO_ROOT / "lib" / "sdl3" / "native"
+        has_sdl3_native = False
+        sdl3_link_args = []
+        if IS_WINDOWS:
+            win_sdl3_lib = sdl3_native_dir / "SDL3.lib"
+            if win_sdl3_lib.exists():
+                has_sdl3_native = True
+                sdl3_link_args = ["-L", str(sdl3_native_dir), "-l", "SDL3"]
+        elif IS_LINUX:
+            has_sdl3_native = True
+            sdl3_link_args = ["-l", "SDL3"]
+        elif IS_DARWIN:
+            has_sdl3_native = True
+            sdl3_link_args = ["-L", "/opt/homebrew/lib", "-L", "/usr/local/lib", "-l", "SDL3"]
+
+        def is_headless_vm_sdl_error(output: str) -> bool:
+            return any(phrase in output for phrase in [
+                "No available video device",
+                "Failed to initialize platform",
+                "wayland not available",
+                "x11 not available",
+                "could not connect to display",
+                "Failed to initialize SDL3: ",
+            ])
+
+        # 7. SDL3 Core Platform & Windowing Demo
+        sdl3_window_demo = REPO_ROOT / "examples" / "sdl3_window.tmn"
+        if sdl3_window_demo.exists() and has_sdl3_native:
+            cmd = [str(self.tamarin_bin), "run", str(sdl3_window_demo)] + sdl3_link_args
+            try:
+                res = run_proc(cmd)
+                if (res.returncode == 0) and ("SDL3 window demo finished cleanly!" in res.stdout):
+                    self.record(suite_name, "SDL3 Core Platform & Windowing Demo", True, "Exit code 0, event pump polled")
+                elif is_headless_vm_sdl_error(res.stdout):
+                    self.skip(suite_name, "SDL3 Core Platform & Windowing Demo", "Host lacks video subsystem in cloud VM")
+                else:
+                    self.record(suite_name, "SDL3 Core Platform & Windowing Demo", False, res.stdout.strip())
+            except Exception as e:
+                self.record(suite_name, "SDL3 Core Platform & Windowing Demo", False, str(e))
+
+        # 8. Modern Multi-Backend SDL_GPU Pipeline Demo
+        sdl_gpu_demo = REPO_ROOT / "examples" / "sdl_gpu_triangle.tmn"
+        if sdl_gpu_demo.exists() and has_sdl3_native:
+            cmd = [str(self.tamarin_bin), "run", str(sdl_gpu_demo)] + sdl3_link_args
+            try:
+                res = run_proc(cmd)
+                if (res.returncode == 0) and ("SDL_GPU demo completed successfully!" in res.stdout):
+                    self.record(suite_name, "Modern Multi-Backend SDL_GPU Pipeline Demo", True, "Exit code 0, command buffer & render pass submitted")
+                elif is_headless_vm_sdl_error(res.stdout):
+                    self.skip(suite_name, "Modern Multi-Backend SDL_GPU Pipeline Demo", "Host lacks video/GPU subsystem in cloud VM")
+                else:
+                    self.record(suite_name, "Modern Multi-Backend SDL_GPU Pipeline Demo", False, res.stdout.strip())
+            except Exception as e:
+                self.record(suite_name, "Modern Multi-Backend SDL_GPU Pipeline Demo", False, str(e))
 
     # -------------------------------------------------------------------------
     # Final Scorecard

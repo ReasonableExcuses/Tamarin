@@ -1,0 +1,16 @@
+[package]
+name = "sdl3"
+version = "3.4.20"
+edition = "2026"
+description = "SDL3 platform, windowing, and GPU bindings for Tamarin"
+kind = "lib"
+links = ["SDL3"]
+
+[target.windows]
+lib-dirs = ["native"]
+
+[target.linux]
+lib-dirs = ["/usr/local/lib"]
+
+[target.macos]
+lib-dirs = ["/opt/homebrew/lib", "/usr/local/lib"]

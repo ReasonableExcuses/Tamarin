@@ -670,6 +670,7 @@ bool Sema::analyzeModules(const std::vector<std::shared_ptr<driver::Module>>& mo
                     .loc = cd.loc,
                 };
                 modScope->symbols[origName] = sym;
+                modScope->symbols[mangledName] = sym;
                 if (cd.isPublic) {
                     modScope->exportedSymbols[origName] = sym;
                 }

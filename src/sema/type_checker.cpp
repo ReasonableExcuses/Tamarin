@@ -2742,7 +2742,9 @@ const Type* TypeChecker::checkCall(CallExpr& expr) {
             for (size_t i = 0; i < expr.args.size(); ++i) {
                 auto argTy = checkExpr(*expr.args[i]);
                 auto paramTy = calleeTy->paramTypes[i];
-                if (argTy && paramTy && !argTy->isImplicitlyConvertibleTo(*paramTy)) {
+                bool isNullToPtr = (paramTy && paramTy->isPointer() && expr.args[i]->kind == ExprKind::IntLiteral &&
+                                    static_cast<const IntLiteralExpr*>(expr.args[i].get())->value == 0);
+                if (argTy && paramTy && !argTy->isImplicitlyConvertibleTo(*paramTy) && !isNullToPtr) {
                     diag_.report(expr.args[i]->loc, Severity::Error,
                                  "argument " + std::to_string(i + 1) + " type mismatch in function pointer call: expected " +
                                  paramTy->toString() + ", got " + argTy->toString());
@@ -3671,7 +3673,9 @@ const Type* TypeChecker::checkCall(CallExpr& expr) {
                                  std::string(paramTy->isClass() ? "class '" : "type '") +
                                  typeName + "' by value; use 'move(" + srcName + ")' or pass by reference");
                 }
-                if (argTy && !argTy->isImplicitlyConvertibleTo(*paramTy)) {
+                bool isNullToPtr = (paramTy && paramTy->isPointer() && expr.args[i]->kind == ExprKind::IntLiteral &&
+                                    static_cast<const IntLiteralExpr*>(expr.args[i].get())->value == 0);
+                if (argTy && !argTy->isImplicitlyConvertibleTo(*paramTy) && !isNullToPtr) {
                     diag_.report(expr.args[i]->loc, Severity::Error,
                                   "argument " + std::to_string(i + 1) + " type mismatch in call to '" +
                                   expr.callee + "': expected " + paramTy->toString() + ", got " + argTy->toString());
@@ -3741,7 +3745,9 @@ const Type* TypeChecker::checkCall(CallExpr& expr) {
             for (size_t i = 0; i < expr.args.size(); ++i) {
                 auto argTy = checkExpr(*expr.args[i]);
                 auto paramTy = fnTy->paramTypes[i];
-                if (argTy && paramTy && !argTy->isImplicitlyConvertibleTo(*paramTy)) {
+                bool isNullToPtr = (paramTy && paramTy->isPointer() && expr.args[i]->kind == ExprKind::IntLiteral &&
+                                    static_cast<const IntLiteralExpr*>(expr.args[i].get())->value == 0);
+                if (argTy && paramTy && !argTy->isImplicitlyConvertibleTo(*paramTy) && !isNullToPtr) {
                     diag_.report(expr.args[i]->loc, Severity::Error,
                                  "argument " + std::to_string(i + 1) + " type mismatch in call to '" +
                                  expr.callee + "': expected " + paramTy->toString() + ", got " + argTy->toString());
@@ -3802,7 +3808,9 @@ const Type* TypeChecker::checkCall(CallExpr& expr) {
                          std::string(paramTy->isClass() ? "class '" : "type '") +
                          typeName + "' by value; use 'move(" + srcName + ")' or pass by reference");
         }
-        if (argTy && !argTy->isImplicitlyConvertibleTo(*paramTy)) {
+        bool isNullToPtr = (paramTy && paramTy->isPointer() && expr.args[i]->kind == ExprKind::IntLiteral &&
+                            static_cast<const IntLiteralExpr*>(expr.args[i].get())->value == 0);
+        if (argTy && !argTy->isImplicitlyConvertibleTo(*paramTy) && !isNullToPtr) {
             diag_.report(expr.args[i]->loc, Severity::Error,
                          "argument " + std::to_string(i + 1) + " type mismatch: expected " +
                          paramTy->toString() + ", got " + argTy->toString());
@@ -3831,7 +3839,7 @@ const Type* TypeChecker::checkCall(CallExpr& expr) {
 
         auto argTy = getExprType(expr.args[i].get());
         bool isStackArg = aProv.hasLocalStack();
-        if (argTy && (argTy->isArray() || argTy->isReference())) {
+        if (argTy && (argTy->isArray() || (argTy->isReference() && !argTy->isPointer()))) {
             if (expr.args[i]->kind == ExprKind::Identifier) {
                 auto name = static_cast<IdentifierExpr&>(*expr.args[i]).name;
                 auto s = syms_.lookup(name);
@@ -3846,14 +3854,15 @@ const Type* TypeChecker::checkCall(CallExpr& expr) {
                 }
             }
         }
-        if (isExternal && isStackArg) {
+        bool isRawPointerParam = (i < fnTy->paramTypes.size() && fnTy->paramTypes[i] && fnTy->paramTypes[i]->isPointer());
+        if (isExternal && isStackArg && !isRawPointerParam) {
             diag_.report(expr.args[i]->loc, Severity::Error,
                          "cannot pass safe stack pointer, reference, or array to unknown external function '" +
                          expr.callee + "' without verified no-escape contract");
             continue;
         }
 
-        if (aProv.hasNonStaticBorrowOrRegion()) {
+        if (aProv.hasNonStaticBorrowOrRegion() && !isRawPointerParam) {
             if (isExternal || (summary && summary->isParamUnknown(i))) {
                 diag_.report(expr.args[i]->loc, Severity::Error,
                              "cannot pass borrowed parameter, reference, or view to unknown external function '" +
@@ -3874,7 +3883,7 @@ const Type* TypeChecker::checkCall(CallExpr& expr) {
                 retProv.merge(getExprProvenance(expr.args[pIdx].get()));
             }
         }
-    } else if (fnTy->returnType && (fnTy->returnType->isReference() || fnTy->returnType->isArrayView() || fnTy->returnType->isRecord())) {
+    } else if (!isExternal && fnTy->returnType && (fnTy->returnType->isReference() || fnTy->returnType->isArrayView() || fnTy->returnType->isRecord())) {
         for (size_t i = 0; i < expr.args.size(); ++i) {
             retProv.merge(getExprProvenance(expr.args[i].get()));
         }

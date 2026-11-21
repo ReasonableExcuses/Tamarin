@@ -1,0 +1,39 @@
+import sdl3 as sdl;
+
+int main() {
+    print("Initializing SDL3 video subsystem...\n");
+    bool initOk = sdl::SDL_Init((u32)sdl::SDL_INIT_VIDEO);
+    if (!initOk) {
+        print("Failed to initialize SDL3: ");
+        print(sdl::SDL_GetError());
+        print("\n");
+        return 1;
+    }
+
+    print("Creating hidden window...\n");
+    *sdl::SDL_Window window = sdl::SDL_CreateWindow("Tamarin SDL3 Hidden Window", 640, 480, (u64)sdl::SDL_WINDOW_HIDDEN);
+    if (window == null) {
+        print("Failed to create SDL3 window: ");
+        print(sdl::SDL_GetError());
+        print("\n");
+        sdl::SDL_Quit();
+        return 1;
+    }
+
+    print("Window created successfully! Polling initial events...\n");
+    sdl::SDL_Event event;
+    int polls = 0;
+    while (polls < 5) {
+        bool hasEvent = sdl::SDL_PollEvent(&event);
+        if (hasEvent) {
+            print("Received event during pump\n");
+        }
+        polls += 1;
+    }
+
+    print("Destroying window and quitting SDL3...\n");
+    sdl::SDL_DestroyWindow(window);
+    sdl::SDL_Quit();
+    print("SDL3 window demo finished cleanly!\n");
+    return 0;
+}

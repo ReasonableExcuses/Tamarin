@@ -33,6 +33,7 @@ static void printHelp() {
               << "    --release        Build with release optimizations (-O3)\n"
               << "    --lib            Create or configure as a library package\n"
               << "    --bin            Create or configure as a binary package (default)\n"
+              << "    -t, --template <name> Scaffold from a project template (raylib-game, sdl3-app)\n"
               << "    --target <trip>  Target architecture triple\n"
               << "    --path <dir>     Path to local dependency (for 'troop add')\n"
               << "    -v, --version    Print version info\n"
@@ -66,16 +67,22 @@ int cliMain(int argc, char* argv[]) {
         }
         std::string targetPath = argv[2];
         bool isLib = false;
+        std::string templateName;
         for (int i = 3; i < argc; ++i) {
             std::string_view opt = argv[i];
             if (opt == "--lib") isLib = true;
             else if (opt == "--bin") isLib = false;
+            else if (opt.starts_with("--template=")) {
+                templateName = opt.substr(11);
+            } else if ((opt == "-t" || opt == "--template") && i + 1 < argc) {
+                templateName = argv[++i];
+            }
         }
 
         std::filesystem::path p(targetPath);
         std::string name = p.filename().string();
         std::string err;
-        if (!pm.newPackage(p, name, isLib, err)) {
+        if (!pm.newPackage(p, name, isLib, err, templateName)) {
             std::cerr << "troop: error: " << err << "\n";
             return 1;
         }
@@ -86,13 +93,19 @@ int cliMain(int argc, char* argv[]) {
 
     if (command == "init") {
         bool isLib = false;
+        std::string templateName;
         for (int i = 2; i < argc; ++i) {
             std::string_view opt = argv[i];
             if (opt == "--lib") isLib = true;
             else if (opt == "--bin") isLib = false;
+            else if (opt.starts_with("--template=")) {
+                templateName = opt.substr(11);
+            } else if ((opt == "-t" || opt == "--template") && i + 1 < argc) {
+                templateName = argv[++i];
+            }
         }
         std::string err;
-        if (!pm.initPackage(std::filesystem::current_path(), isLib, err)) {
+        if (!pm.initPackage(std::filesystem::current_path(), isLib, err, templateName)) {
             std::cerr << "troop: error: " << err << "\n";
             return 1;
         }

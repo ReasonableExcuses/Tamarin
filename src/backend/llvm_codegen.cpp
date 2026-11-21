@@ -2932,6 +2932,21 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
                 } else {
                     os << "  %v" << inst.result << " = fptrunc " << fromTyStr << " " << opStr << " to " << toTyStr << "\n";
                 }
+            } else if ((fromTyStr == "i8" || fromTyStr == "i16" || fromTyStr == "i32" || fromTyStr == "i64") &&
+                       (toTyStr == "i8" || toTyStr == "i16" || toTyStr == "i32" || toTyStr == "i64")) {
+                int fromBits = std::stoi(fromTyStr.substr(1));
+                int toBits = std::stoi(toTyStr.substr(1));
+                if (toBits > fromBits) {
+                    if (fromTy && fromTy->isSignedInteger()) {
+                        os << "  %v" << inst.result << " = sext " << fromTyStr << " " << opStr << " to " << toTyStr << "\n";
+                    } else {
+                        os << "  %v" << inst.result << " = zext " << fromTyStr << " " << opStr << " to " << toTyStr << "\n";
+                    }
+                } else if (toBits < fromBits) {
+                    os << "  %v" << inst.result << " = trunc " << fromTyStr << " " << opStr << " to " << toTyStr << "\n";
+                } else {
+                    os << "  %v" << inst.result << " = add " << fromTyStr << " " << opStr << ", 0\n";
+                }
             } else {
                 os << "  %v" << inst.result << " = bitcast " << fromTyStr << " " << opStr << " to " << toTyStr << "\n";
             }
@@ -3748,10 +3763,7 @@ bool LLVMCodeGen::compileToAssembly(const std::filesystem::path& llPath,
 }
 
 bool LLVMCodeGen::isStructPassedByPointerInCABI(const sema::Type* ty) const {
-    if (!ty) return false;
-    if (ty->isReference() && ty->elementType) {
-        ty = ty->elementType;
-    }
+    if (!ty || ty->isReference()) return false;
     if (!ty->isRecord() && !ty->isStruct()) {
         return false;
     }
@@ -3767,10 +3779,7 @@ bool LLVMCodeGen::isStructPassedByPointerInCABI(const sema::Type* ty) const {
 }
 
 std::string LLVMCodeGen::getCABISmallStructIntType(const sema::Type* ty) const {
-    if (!ty) return "";
-    if (ty->isReference() && ty->elementType) {
-        ty = ty->elementType;
-    }
+    if (!ty || ty->isReference()) return "";
     if (!ty->isRecord() && !ty->isStruct()) {
         return "";
     }
