@@ -57,7 +57,7 @@
       "patterns": [
         {
           "name": "entity.other.attribute-name.tamarin",
-          "match": "@(c_layout|layout|cfg|export)\\b"
+          "match": "@(c_layout|layout|cfg|export|no_escape|pure|inline|must_use|nodiscard)\\b"
         }
       ]
     },
@@ -65,19 +65,19 @@
       "patterns": [
         {
           "name": "keyword.control.tamarin",
-          "match": "\\b(if|else|while|for|parallel|reduce|spawn|sync|match|select|case|default|return|break|continue|async|await)\\b"
+          "match": "\\b(if|else|while|for|do|switch|case|default|return|break|continue|parallel|reduce|spawn|sync|match|select|async|await|defer|task_scope)\\b"
         },
         {
           "name": "keyword.declaration.tamarin",
-          "match": "\\b(struct|class|enum|trait|impl|import|interface)\\b"
+          "match": "\\b(struct|class|enum|trait|impl|import|interface|typedef|fn|operator)\\b"
         },
         {
           "name": "storage.modifier.tamarin",
-          "match": "\\b(const|public|private|protected|virtual|override)\\b"
+          "match": "\\b(const|public|private|protected|virtual|override|static|extern|auto|pub|tag|atomic|unsafe|where|cold)\\b"
         },
         {
           "name": "keyword.operator.tamarin",
-          "match": "\\b(sizeof|alignof|as)\\b"
+          "match": "\\b(sizeof|alignof|as|this|min|max|reduction)\\b"
         }
       ]
     },
@@ -85,7 +85,7 @@
       "patterns": [
         {
           "name": "entity.name.type.primitive.tamarin",
-          "match": "\\b(int|int8|int16|int32|int64|uint|uint8|uint16|uint32|uint64|float|float32|float64|bool|char|string|void|auto)\\b"
+          "match": "\\b(i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize|f32|f64|int|int8|int16|int32|int64|uint|uint8|uint16|uint32|uint64|byte|short|long|unsigned|float|double|bool|char|string|void|size_t|ptrdiff_t|float4|float8|int4|span|chan|Task|Handle|Slab)\\b"
         },
         {
           "name": "entity.name.type.tamarin",
@@ -105,11 +105,11 @@
       "patterns": [
         {
           "name": "constant.numeric.hex.tamarin",
-          "match": "\\b0[xX][0-9a-fA-F_]+(\\.[0-9a-fA-F_]+)?([pP][+-]?[0-9_]+)?\\b"
+          "match": "\\b0[xX][0-9a-fA-F_]+(\\.[0-9a-fA-F_]+)?([pP][+-]?[0-9_]+)?(u8|u16|u32|u64|i8|i16|i32|i64|u|i|l|ll|ul|ull)?\\b"
         },
         {
           "name": "constant.numeric.binary.tamarin",
-          "match": "\\b0[bB][01_]+\\b"
+          "match": "\\b0[bB][01_]+(u8|u16|u32|u64|i8|i16|i32|i64|u|i)?\\b"
         },
         {
           "name": "constant.numeric.float.tamarin",
@@ -117,7 +117,7 @@
         },
         {
           "name": "constant.numeric.integer.tamarin",
-          "match": "\\b[0-9][0-9_]*(u8|u16|u32|u64|i8|i16|i32|i64|u|i)?\\b"
+          "match": "\\b[0-9][0-9_]*(u8|u16|u32|u64|u128|i8|i16|i32|i64|i128|u|i|l|ll|ul|ull)?\\b"
         }
       ]
     },

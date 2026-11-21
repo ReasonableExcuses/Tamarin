@@ -23,9 +23,12 @@ static void printHelp() {
               << "    new <path>       Create a new Tamarin package in <path>\n"
               << "    init             Initialize a new Tamarin package in the current directory\n"
               << "    build            Compile the package and its dependencies\n"
+              << "    check            Validate syntax and types without code generation\n"
               << "    run              Build and execute the package binary\n"
               << "    test             Execute all package test suites in tests/\n"
-              << "    add <dep>        Add a dependency to troop.toml\n"
+              << "    add <dep>        Add a dependency to troop.toml (e.g. foo, foo@1.2, --path, --dev)\n"
+              << "    remove <dep>     Remove a dependency from troop.toml (alias: rm)\n"
+              << "    tree             Display dependency tree visualization\n"
               << "    clean            Remove all build artifacts (bin/, build/, .troop/)\n"
               << "    version          Print version information\n"
               << "    help             Display this help message\n\n"
@@ -36,6 +39,7 @@ static void printHelp() {
               << "    -t, --template <name> Scaffold from a project template (raylib-game, sdl3-app)\n"
               << "    --target <trip>  Target architecture triple\n"
               << "    --path <dir>     Path to local dependency (for 'troop add')\n"
+              << "    --dev            Add as development dependency (for 'troop add')\n"
               << "    -v, --version    Print version info\n"
               << "    -h, --help       Print help message\n";
 }
@@ -141,6 +145,14 @@ int cliMain(int argc, char* argv[]) {
         return pm.buildPackage(*manifestPath, isRelease, targetTriple, extraArgs);
     }
 
+    if (command == "check") {
+        return pm.checkPackage(*manifestPath);
+    }
+
+    if (command == "tree") {
+        return pm.printTree(*manifestPath);
+    }
+
     if (command == "run") {
         bool isRelease = false;
         std::vector<std::string> runArgs;
@@ -177,13 +189,33 @@ int cliMain(int argc, char* argv[]) {
             std::cerr << "troop: error: missing dependency name for 'troop add <name>'\n";
             return 1;
         }
-        std::string depName = argv[2];
+        std::string rawName = argv[2];
+        std::string depName = rawName;
+        std::string reqStr;
+        auto atPos = rawName.find('@');
+        if (atPos != std::string::npos) {
+            depName = rawName.substr(0, atPos);
+            reqStr = rawName.substr(atPos + 1);
+        }
+
         DependencySpec spec;
         spec.name = depName;
+        if (!reqStr.empty()) {
+            auto req = VersionReq::parse(reqStr);
+            if (req) {
+                spec.versionReq = *req;
+            } else {
+                std::cerr << "troop: error: invalid version requirement '" << reqStr << "'\n";
+                return 1;
+            }
+        }
 
+        bool isDev = false;
         for (int i = 3; i < argc; ++i) {
             std::string_view opt = argv[i];
-            if (opt == "--path" && i + 1 < argc) {
+            if (opt == "--dev") {
+                isDev = true;
+            } else if (opt == "--path" && i + 1 < argc) {
                 spec.sourceKind = DependencySourceKind::Path;
                 spec.path = argv[++i];
             } else if (opt == "--version" && i + 1 < argc) {
@@ -196,11 +228,26 @@ int cliMain(int argc, char* argv[]) {
         }
 
         std::string err;
-        if (!pm.addDependency(*manifestPath, depName, spec, err)) {
+        if (!pm.addDependency(*manifestPath, depName, spec, err, isDev)) {
             std::cerr << "troop: error: " << err << "\n";
             return 1;
         }
         std::cout << "      Added `" << depName << "` to `troop.toml`\n";
+        return 0;
+    }
+
+    if (command == "remove" || command == "rm") {
+        if (argc < 3) {
+            std::cerr << "troop: error: missing dependency name for 'troop remove <name>'\n";
+            return 1;
+        }
+        std::string depName = argv[2];
+        std::string err;
+        if (!pm.removeDependency(*manifestPath, depName, err)) {
+            std::cerr << "troop: error: " << err << "\n";
+            return 1;
+        }
+        std::cout << "     Removed `" << depName << "` from `troop.toml`\n";
         return 0;
     }
 

@@ -2,7 +2,7 @@
   "name": "tamarin-vscode",
   "displayName": "Tamarin Language Support",
   "description": "Rich language support for the Tamarin programming language powered by tamarin-lsp",
-  "version": "0.18.0",
+  "version": "0.18.5",
   "publisher": "tamarin-lang",
   "icon": "icons/icon.png",
   "repository": {

@@ -270,6 +270,73 @@ bool PackageManager::initPackage(const std::filesystem::path& targetDir, bool is
     return true;
 }
 
+static void gatherLibDirsAndLinks(const Manifest& manifest,
+                                  const ResolutionResult& res,
+                                  const tamarin::target::TargetTriple& triple,
+                                  std::vector<std::string>& allLibDirs,
+                                  std::vector<std::string>& allLinks) {
+    std::string osName;
+    if (triple.isWindows()) osName = "windows";
+    else if (triple.isMacOS()) osName = "macos";
+    else if (triple.isLinux()) osName = "linux";
+
+    auto rootDir = manifest.getPackageRootDir();
+
+    for (const auto& dep : res.buildOrder) {
+        for (const auto& d : dep.manifest.package.libDirs) {
+            std::filesystem::path resolved = d;
+            if (resolved.is_relative()) {
+                resolved = dep.rootDir / resolved;
+            }
+            allLibDirs.push_back(resolved.string());
+        }
+        auto itTarget = dep.manifest.targetConfigs.find(osName);
+        if (itTarget != dep.manifest.targetConfigs.end()) {
+            for (const auto& d : itTarget->second.libDirs) {
+                std::filesystem::path resolved = d;
+                if (resolved.is_relative()) {
+                    resolved = dep.rootDir / resolved;
+                }
+                allLibDirs.push_back(resolved.string());
+            }
+        }
+        for (const auto& l : dep.manifest.package.links) {
+            allLinks.push_back(l);
+        }
+        if (itTarget != dep.manifest.targetConfigs.end()) {
+            for (const auto& l : itTarget->second.links) {
+                allLinks.push_back(l);
+            }
+        }
+    }
+
+    for (const auto& d : manifest.package.libDirs) {
+        std::filesystem::path resolved = d;
+        if (resolved.is_relative()) {
+            resolved = rootDir / resolved;
+        }
+        allLibDirs.push_back(resolved.string());
+    }
+    auto itRootTarget = manifest.targetConfigs.find(osName);
+    if (itRootTarget != manifest.targetConfigs.end()) {
+        for (const auto& d : itRootTarget->second.libDirs) {
+            std::filesystem::path resolved = d;
+            if (resolved.is_relative()) {
+                resolved = rootDir / resolved;
+            }
+            allLibDirs.push_back(resolved.string());
+        }
+    }
+    for (const auto& l : manifest.package.links) {
+        allLinks.push_back(l);
+    }
+    if (itRootTarget != manifest.targetConfigs.end()) {
+        for (const auto& l : itRootTarget->second.links) {
+            allLinks.push_back(l);
+        }
+    }
+}
+
 int PackageManager::buildPackage(const std::filesystem::path& manifestPath, bool isRelease, const std::string& targetTriple, const std::vector<std::string>& extraArgs) {
     std::string loadErr;
     auto manifest = Manifest::loadFromFile(manifestPath, loadErr);
@@ -345,68 +412,9 @@ int PackageManager::buildPackage(const std::filesystem::path& manifestPath, bool
     }
 
     // Pass native library search directories (-L) and native libraries (-l)
-    // Gather from dependencies in build order first, then from root package
     std::vector<std::string> allLibDirs;
     std::vector<std::string> allLinks;
-
-    std::string osName;
-    if (triple.isWindows()) osName = "windows";
-    else if (triple.isMacOS()) osName = "macos";
-    else if (triple.isLinux()) osName = "linux";
-
-    for (const auto& dep : res.buildOrder) {
-        for (const auto& d : dep.manifest.package.libDirs) {
-            std::filesystem::path resolved = d;
-            if (resolved.is_relative()) {
-                resolved = dep.rootDir / resolved;
-            }
-            allLibDirs.push_back(resolved.string());
-        }
-        auto itTarget = dep.manifest.targetConfigs.find(osName);
-        if (itTarget != dep.manifest.targetConfigs.end()) {
-            for (const auto& d : itTarget->second.libDirs) {
-                std::filesystem::path resolved = d;
-                if (resolved.is_relative()) {
-                    resolved = dep.rootDir / resolved;
-                }
-                allLibDirs.push_back(resolved.string());
-            }
-        }
-        for (const auto& l : dep.manifest.package.links) {
-            allLinks.push_back(l);
-        }
-        if (itTarget != dep.manifest.targetConfigs.end()) {
-            for (const auto& l : itTarget->second.links) {
-                allLinks.push_back(l);
-            }
-        }
-    }
-
-    for (const auto& d : manifest->package.libDirs) {
-        std::filesystem::path resolved = d;
-        if (resolved.is_relative()) {
-            resolved = rootDir / resolved;
-        }
-        allLibDirs.push_back(resolved.string());
-    }
-    auto itRootTarget = manifest->targetConfigs.find(osName);
-    if (itRootTarget != manifest->targetConfigs.end()) {
-        for (const auto& d : itRootTarget->second.libDirs) {
-            std::filesystem::path resolved = d;
-            if (resolved.is_relative()) {
-                resolved = rootDir / resolved;
-            }
-            allLibDirs.push_back(resolved.string());
-        }
-    }
-    for (const auto& l : manifest->package.links) {
-        allLinks.push_back(l);
-    }
-    if (itRootTarget != manifest->targetConfigs.end()) {
-        for (const auto& l : itRootTarget->second.links) {
-            allLinks.push_back(l);
-        }
-    }
+    gatherLibDirsAndLinks(*manifest, res, triple, allLibDirs, allLinks);
 
     std::unordered_set<std::string> seenDirs;
     for (const auto& d : allLibDirs) {
@@ -496,6 +504,25 @@ int PackageManager::testPackage(const std::filesystem::path& manifestPath, bool 
     auto binTestsDir = rootDir / "bin" / "tests";
     std::filesystem::create_directories(binTestsDir);
 
+    auto hostTriple = tamarin::target::TargetTriple::getHost();
+    std::vector<std::string> allLibDirs;
+    std::vector<std::string> allLinks;
+    gatherLibDirsAndLinks(*manifest, res, hostTriple, allLibDirs, allLinks);
+
+    std::ostringstream linkFlags;
+    std::unordered_set<std::string> seenDirs;
+    for (const auto& d : allLibDirs) {
+        if (seenDirs.insert(d).second) {
+            linkFlags << " -L \"" << d << "\"";
+        }
+    }
+    std::unordered_set<std::string> seenLinks;
+    for (const auto& l : allLinks) {
+        if (seenLinks.insert(l).second) {
+            linkFlags << " -l \"" << l << "\"";
+        }
+    }
+
     auto compiler = getCompilerExecutable();
     int passed = 0;
     int failed = 0;
@@ -503,7 +530,6 @@ int PackageManager::testPackage(const std::filesystem::path& manifestPath, bool 
     for (const auto& entry : std::filesystem::directory_iterator(testsDir)) {
         if (entry.is_regular_file() && (entry.path().extension() == ".tmn" || entry.path().extension() == ".tam")) {
             auto testName = entry.path().stem().string();
-            auto hostTriple = tamarin::target::TargetTriple::getHost();
             auto outTestExe = binTestsDir / (testName + hostTriple.executableExtension());
 
             std::ostringstream cmd;
@@ -513,6 +539,7 @@ int PackageManager::testPackage(const std::filesystem::path& manifestPath, bool 
             for (const auto& inc : res.includePaths) {
                 cmd << " -I \"" << inc.string() << "\"";
             }
+            cmd << linkFlags.str();
 
             int compileRes = runCommand(cmd.str());
             if (compileRes != 0) {
@@ -537,11 +564,57 @@ int PackageManager::testPackage(const std::filesystem::path& manifestPath, bool 
     return failed == 0 ? 0 : 1;
 }
 
-bool PackageManager::addDependency(const std::filesystem::path& manifestPath, const std::string& depName, const DependencySpec& spec, std::string& errorMsg) {
+int PackageManager::checkPackage(const std::filesystem::path& manifestPath) {
+    std::string loadErr;
+    auto manifest = Manifest::loadFromFile(manifestPath, loadErr);
+    if (!manifest) {
+        std::cerr << "troop: error: " << loadErr << "\n";
+        return 1;
+    }
+
+    DependencyResolver resolver;
+    auto res = resolver.resolve(*manifest);
+    if (!res.success) {
+        std::cerr << "troop: error: " << res.error << "\n";
+        return 1;
+    }
+
+    auto entryPath = manifest->getEntryPointPath();
+    if (!std::filesystem::exists(entryPath)) {
+        std::cerr << "troop: error: entry point not found: " << entryPath.string() << "\n";
+        return 1;
+    }
+
+    auto compiler = getCompilerExecutable();
+    std::ostringstream cmd;
+    cmd << "\"" << compiler.string() << "\" check";
+    if (manifest->package.kind == "lib") {
+        cmd << " --lib";
+    }
+    cmd << " \"" << entryPath.string() << "\"";
+
+    for (const auto& inc : res.includePaths) {
+        cmd << " -I \"" << inc.string() << "\"";
+    }
+
+    std::cout << "    Checking " << manifest->package.name << " v" << manifest->package.version.toString() << "...\n";
+
+    int exitCode = runCommand(cmd.str());
+    if (exitCode == 0) {
+        std::cout << "    Finished dev target(s) [checked]\n";
+    }
+    return exitCode;
+}
+
+bool PackageManager::addDependency(const std::filesystem::path& manifestPath, const std::string& depName, const DependencySpec& spec, std::string& errorMsg, bool isDev) {
     auto manifest = Manifest::loadFromFile(manifestPath, errorMsg);
     if (!manifest) return false;
 
-    manifest->dependencies[depName] = spec;
+    if (isDev) {
+        manifest->devDependencies[depName] = spec;
+    } else {
+        manifest->dependencies[depName] = spec;
+    }
     if (!manifest->saveToFile(manifestPath, errorMsg)) return false;
 
     // Re-resolve and update lockfile
@@ -553,6 +626,101 @@ bool PackageManager::addDependency(const std::filesystem::path& manifestPath, co
     }
 
     return true;
+}
+
+bool PackageManager::removeDependency(const std::filesystem::path& manifestPath, const std::string& depName, std::string& errorMsg) {
+    auto manifest = Manifest::loadFromFile(manifestPath, errorMsg);
+    if (!manifest) return false;
+
+    bool found = false;
+    auto it = manifest->dependencies.find(depName);
+    if (it != manifest->dependencies.end()) {
+        manifest->dependencies.erase(it);
+        found = true;
+    }
+    auto itDev = manifest->devDependencies.find(depName);
+    if (itDev != manifest->devDependencies.end()) {
+        manifest->devDependencies.erase(itDev);
+        found = true;
+    }
+
+    if (!found) {
+        errorMsg = "dependency `" + depName + "` not found in `troop.toml`";
+        return false;
+    }
+
+    if (!manifest->saveToFile(manifestPath, errorMsg)) return false;
+
+    // Re-resolve and update lockfile
+    DependencyResolver resolver;
+    auto res = resolver.resolve(*manifest);
+    if (res.success) {
+        auto rootDir = manifest->getPackageRootDir();
+        res.lockfile.saveToFile(rootDir / "troop.lock", errorMsg);
+    }
+
+    return true;
+}
+
+static void printTreeRecursive(const std::string& pkgName,
+                               const std::map<std::string, ResolvedDependency>& packages,
+                               const std::string& prefix,
+                               bool isLast,
+                               std::set<std::string>& branchVisited) {
+    auto it = packages.find(pkgName);
+    if (it == packages.end()) return;
+
+    const auto& dep = it->second;
+    std::cout << prefix << (isLast ? "\\-- " : "|-- ")
+              << dep.name << " v" << dep.version.toString();
+    if (!dep.source.empty() && dep.source != "root") {
+        std::cout << " (" << dep.rootDir.string() << ")";
+    }
+    std::cout << "\n";
+
+    if (branchVisited.count(pkgName) > 0) {
+        return;
+    }
+    branchVisited.insert(pkgName);
+
+    std::string childPrefix = prefix + (isLast ? "    " : "|   ");
+    for (size_t i = 0; i < dep.directDeps.size(); ++i) {
+        bool childLast = (i + 1 == dep.directDeps.size());
+        auto visitedCopy = branchVisited;
+        printTreeRecursive(dep.directDeps[i], packages, childPrefix, childLast, visitedCopy);
+    }
+}
+
+int PackageManager::printTree(const std::filesystem::path& manifestPath) {
+    std::string loadErr;
+    auto manifest = Manifest::loadFromFile(manifestPath, loadErr);
+    if (!manifest) {
+        std::cerr << "troop: error: " << loadErr << "\n";
+        return 1;
+    }
+
+    DependencyResolver resolver;
+    auto res = resolver.resolve(*manifest);
+    if (!res.success) {
+        std::cerr << "troop: error: " << res.error << "\n";
+        return 1;
+    }
+
+    auto rootDir = manifest->getPackageRootDir();
+    std::cout << manifest->package.name << " v" << manifest->package.version.toString()
+              << " (" << rootDir.string() << ")\n";
+
+    std::vector<std::string> rootDirectDeps;
+    for (const auto& [name, _] : manifest->dependencies) {
+        rootDirectDeps.push_back(name);
+    }
+
+    for (size_t i = 0; i < rootDirectDeps.size(); ++i) {
+        bool isLast = (i + 1 == rootDirectDeps.size());
+        std::set<std::string> branchVisited;
+        printTreeRecursive(rootDirectDeps[i], res.packages, "", isLast, branchVisited);
+    }
+    return 0;
 }
 
 bool PackageManager::clean(const std::filesystem::path& manifestPath, std::string& errorMsg) {

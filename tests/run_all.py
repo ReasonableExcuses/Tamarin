@@ -556,6 +556,22 @@ int main() {
             sdl_tpl_ok = (p14.returncode == 0) and (tmp / "test_app" / "troop.toml").exists() and (tmp / "test_app" / "src" / "main.tmn").exists()
             self.record("Troop E2E", "troop new with --template=sdl3-app", sdl_tpl_ok)
 
+            # 15. Troop check
+            p15 = subprocess.run([str(self.troop_bin), "check"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=app_dir)
+            check_ok = (p15.returncode == 0) and ("Finished dev target(s)" in p15.stdout)
+            self.record("Troop E2E", "troop check validates package without full linking", check_ok)
+
+            # 16. Troop tree
+            p16 = subprocess.run([str(self.troop_bin), "tree"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=app_dir)
+            tree_ok = (p16.returncode == 0) and ("calc_app" in p16.stdout) and ("core_math" in p16.stdout)
+            self.record("Troop E2E", "troop tree displays dependency hierarchy", tree_ok)
+
+            # 17. Troop remove
+            p17 = subprocess.run([str(self.troop_bin), "remove", "core_math"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=app_dir)
+            app_toml_after = (app_dir / "troop.toml").read_text(encoding="utf-8")
+            rm_ok = (p17.returncode == 0) and ("core_math" not in app_toml_after)
+            self.record("Troop E2E", "troop remove updates manifest and lockfile", rm_ok)
+
     # -------------------------------------------------------------------------
     # Suite 10: @cfg(...) & Multi-Target Cross-Compilation (5 tests)
     # -------------------------------------------------------------------------

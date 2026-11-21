@@ -29,6 +29,9 @@ public:
     /// Builds the package (resolves dependencies, invokes compiler, writes bin/ and troop.lock)
     int buildPackage(const std::filesystem::path& manifestPath, bool isRelease, const std::string& targetTriple = "", const std::vector<std::string>& extraArgs = {});
 
+    /// Validates syntax and types of the package without code generation or linking
+    int checkPackage(const std::filesystem::path& manifestPath);
+
     /// Builds and executes the package binary
     int runPackage(const std::filesystem::path& manifestPath, bool isRelease, const std::vector<std::string>& runArgs = {});
 
@@ -36,7 +39,13 @@ public:
     int testPackage(const std::filesystem::path& manifestPath, bool isRelease);
 
     /// Adds a dependency to troop.toml
-    bool addDependency(const std::filesystem::path& manifestPath, const std::string& depName, const DependencySpec& spec, std::string& errorMsg);
+    bool addDependency(const std::filesystem::path& manifestPath, const std::string& depName, const DependencySpec& spec, std::string& errorMsg, bool isDev = false);
+
+    /// Removes a dependency from troop.toml
+    bool removeDependency(const std::filesystem::path& manifestPath, const std::string& depName, std::string& errorMsg);
+
+    /// Prints dependency tree visualization (like cargo tree)
+    int printTree(const std::filesystem::path& manifestPath);
 
     /// Cleans build artifacts (bin/, build/, .troop/)
     bool clean(const std::filesystem::path& manifestPath, std::string& errorMsg);

@@ -325,3 +325,87 @@ TAMARIN_TEST(Troop, TemplateSDL3App) {
     std::filesystem::remove_all(tempBase, ec);
     return true;
 }
+
+TAMARIN_TEST(Troop, CheckPackage) {
+    std::error_code ec;
+    auto tempBase = std::filesystem::temp_directory_path() / "troop_test_check";
+    std::filesystem::remove_all(tempBase, ec);
+    std::filesystem::create_directories(tempBase);
+
+    PackageManager pm;
+    std::string err;
+    auto pkgDir = tempBase / "test_check_pkg";
+    EXPECT_TRUE(pm.newPackage(pkgDir, "test_check_pkg", false, err));
+
+    int res = pm.checkPackage(pkgDir / "troop.toml");
+    EXPECT_EQ(res, 0);
+
+    std::filesystem::remove_all(tempBase, ec);
+    return true;
+}
+
+TAMARIN_TEST(Troop, AddAndRemoveDependency) {
+    std::error_code ec;
+    auto tempBase = std::filesystem::temp_directory_path() / "troop_test_rm_dep";
+    std::filesystem::remove_all(tempBase, ec);
+    std::filesystem::create_directories(tempBase);
+
+    PackageManager pm;
+    std::string err;
+    auto pkgDir = tempBase / "main_pkg";
+    auto depDir = tempBase / "dep_pkg";
+    EXPECT_TRUE(pm.newPackage(pkgDir, "main_pkg", false, err));
+    EXPECT_TRUE(pm.newPackage(depDir, "dep_pkg", true, err));
+
+    DependencySpec spec;
+    spec.name = "dep_pkg";
+    spec.sourceKind = DependencySourceKind::Path;
+    spec.path = "../dep_pkg";
+    spec.versionReq = *VersionReq::parse("^0.1.0");
+
+    EXPECT_TRUE(pm.addDependency(pkgDir / "troop.toml", "dep_pkg", spec, err));
+
+    auto manifestAfterAdd = Manifest::loadFromFile(pkgDir / "troop.toml", err);
+    EXPECT_TRUE(manifestAfterAdd.has_value());
+    EXPECT_TRUE(manifestAfterAdd->dependencies.count("dep_pkg") > 0);
+
+    // Now test printTree
+    int treeRes = pm.printTree(pkgDir / "troop.toml");
+    EXPECT_EQ(treeRes, 0);
+
+    // Now remove dependency
+    EXPECT_TRUE(pm.removeDependency(pkgDir / "troop.toml", "dep_pkg", err));
+
+    auto manifestAfterRm = Manifest::loadFromFile(pkgDir / "troop.toml", err);
+    EXPECT_TRUE(manifestAfterRm.has_value());
+    EXPECT_EQ(manifestAfterRm->dependencies.count("dep_pkg"), 0u);
+
+    std::filesystem::remove_all(tempBase, ec);
+    return true;
+}
+
+TAMARIN_TEST(Troop, AddDevDependency) {
+    std::error_code ec;
+    auto tempBase = std::filesystem::temp_directory_path() / "troop_test_dev_dep";
+    std::filesystem::remove_all(tempBase, ec);
+    std::filesystem::create_directories(tempBase);
+
+    PackageManager pm;
+    std::string err;
+    auto pkgDir = tempBase / "dev_pkg";
+    EXPECT_TRUE(pm.newPackage(pkgDir, "dev_pkg", false, err));
+
+    DependencySpec spec;
+    spec.name = "test_helper";
+    spec.versionReq = *VersionReq::parse("~1.2.0");
+
+    EXPECT_TRUE(pm.addDependency(pkgDir / "troop.toml", "test_helper", spec, err, true));
+
+    auto manifest = Manifest::loadFromFile(pkgDir / "troop.toml", err);
+    EXPECT_TRUE(manifest.has_value());
+    EXPECT_TRUE(manifest->devDependencies.count("test_helper") > 0);
+    EXPECT_EQ(manifest->dependencies.count("test_helper"), 0u);
+
+    std::filesystem::remove_all(tempBase, ec);
+    return true;
+}
