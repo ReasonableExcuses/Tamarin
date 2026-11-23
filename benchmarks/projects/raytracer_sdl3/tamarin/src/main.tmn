@@ -295,8 +295,10 @@ void init_scene() {
     }
 }
 
-// ── SoA Intersection Kernel (SIMD 8-wide AVX2 sphere batching) ─────────────
-@inline bool hit_scene_soa(Ray& r, float t_min, float t_max, HitRecord& rec) {
+bool g_use_simd = true;
+
+// ── SIMD 8-wide AVX2 Sphere Batching Kernel ─────────────────────────────────
+@inline bool hit_scene_simd(Ray& r, float t_min, float t_max, HitRecord& rec) {
     bool hit_anything = false;
     float closest_so_far = t_max;
     int closest_idx = -1;
@@ -360,6 +362,57 @@ void init_scene() {
     return hit_anything;
 }
 
+// ── Standard Scalar SoA Intersection Kernel ─────────────────────────────────
+@inline bool hit_scene_soa(Ray& r, float t_min, float t_max, HitRecord& rec) {
+    bool hit_anything = false;
+    float closest_so_far = t_max;
+    int closest_idx = -1;
+
+    float ro_x = r.origin.x;
+    float ro_y = r.origin.y;
+    float ro_z = r.origin.z;
+    float rd_x = r.dir.x;
+    float rd_y = r.dir.y;
+    float rd_z = r.dir.z;
+
+    for (int i = 0; i < 124; i++) {
+        float oc_x = ro_x - g_cx[i];
+        float oc_y = ro_y - g_cy[i];
+        float oc_z = ro_z - g_cz[i];
+        float half_b = oc_x * rd_x + oc_y * rd_y + oc_z * rd_z;
+        float c = oc_x * oc_x + oc_y * oc_y + oc_z * oc_z - g_radius[i] * g_radius[i];
+        float discriminant = half_b * half_b - c;
+
+        if (discriminant > 0.0f) {
+            float sqrtd = sqrtf(discriminant);
+            float root = 0.0f - half_b - sqrtd;
+            if (root <= t_min || closest_so_far <= root) {
+                root = 0.0f - half_b + sqrtd;
+            }
+            if (root > t_min && root < closest_so_far) {
+                closest_so_far = root;
+                closest_idx = i;
+                hit_anything = true;
+            }
+        }
+    }
+
+    if (hit_anything) {
+        rec.t = closest_so_far;
+        rec.p = v3(r.origin.x + r.dir.x * closest_so_far, r.origin.y + r.dir.y * closest_so_far, r.origin.z + r.dir.z * closest_so_far);
+        float onx = (rec.p.x - g_cx[closest_idx]) * g_inv_radius[closest_idx];
+        float ony = (rec.p.y - g_cy[closest_idx]) * g_inv_radius[closest_idx];
+        float onz = (rec.p.z - g_cz[closest_idx]) * g_inv_radius[closest_idx];
+        rec.front_face = (r.dir.x * onx + r.dir.y * ony + r.dir.z * onz) < 0.0f;
+        rec.normal = rec.front_face ? v3(onx, ony, onz) : v3(0.0f - onx, 0.0f - ony, 0.0f - onz);
+        rec.mat_type = g_mat_type[closest_idx];
+        rec.albedo = v3(g_albedo_r[closest_idx], g_albedo_g[closest_idx], g_albedo_b[closest_idx]);
+        rec.fuzz = g_fuzz[closest_idx];
+        rec.ior = g_ior[closest_idx];
+    }
+    return hit_anything;
+}
+
 // ── Camera ──────────────────────────────────────────────────────────────────
 struct Camera {
     Vec3 origin;
@@ -399,7 +452,12 @@ Camera init_camera() {
 
     for (int depth = 0; depth < 8; depth++) {
         HitRecord rec = create_empty_hit();
-        bool hit = hit_scene_soa(cur_ray, 0.001f, 1e20f, rec);
+        bool hit = false;
+        if (g_use_simd) {
+            hit = hit_scene_simd(cur_ray, 0.001f, 1e20f, rec);
+        } else {
+            hit = hit_scene_soa(cur_ray, 0.001f, 1e20f, rec);
+        }
         if (hit) {
             if (rec.mat_type == 0) {
                 // Lambertian Diffuse
@@ -698,13 +756,28 @@ int main() {
         take_screenshot = true;
     }
 
+    *const u8 soa_match = strstr(cmd, "--soa");
+    if (soa_match != null) {
+        g_use_simd = false;
+    }
+
+    *const u8 simd_match = strstr(cmd, "--simd");
+    if (simd_match != null) {
+        g_use_simd = true;
+    }
+
     init_scene();
     Camera cam = init_camera();
 
     if (headless) {
         print("Running in HEADLESS mode (");
         print(headless_frames);
-        print(" frames, layout=SoA)...\n");
+        print(" frames, layout=");
+        if (g_use_simd) {
+            print("SIMD)...\n");
+        } else {
+            print("SoA)...\n");
+        }
 
         double total_ms = 0.0;
         u64 last_checksum = 0u64;
