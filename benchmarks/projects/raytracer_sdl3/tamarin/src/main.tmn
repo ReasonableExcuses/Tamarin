@@ -162,17 +162,22 @@ HitRecord create_empty_hit() {
 }
 
 // ── Structure-of-Arrays (SoA) Contiguous Scene ─────────────────────────────
-float g_cx[124];
-float g_cy[124];
-float g_cz[124];
-float g_radius[124];
-float g_inv_radius[124];
-float g_albedo_r[124];
-float g_albedo_g[124];
-float g_albedo_b[124];
-float g_fuzz[124];
-float g_ior[124];
-int g_mat_type[124];
+float g_cx[128];
+float g_cy[128];
+float g_cz[128];
+float g_radius[128];
+float g_inv_radius[128];
+float g_albedo_r[128];
+float g_albedo_g[128];
+float g_albedo_b[128];
+float g_fuzz[128];
+float g_ior[128];
+int g_mat_type[128];
+
+float8 g_cx8[16];
+float8 g_cy8[16];
+float8 g_cz8[16];
+float8 g_rsq8[16];
 
 u32 g_framebuffer[720][1280];
 
@@ -256,9 +261,41 @@ void init_scene() {
             idx = idx + 1;
         }
     }
+
+    // 124..127: Dummy spheres that never intersect
+    for (int d = 124; d < 128; d++) {
+        g_cx[d] = 0.0f;
+        g_cy[d] = -100000.0f;
+        g_cz[d] = 0.0f;
+        g_radius[d] = 0.0f;
+        g_inv_radius[d] = 0.0f;
+        g_mat_type[d] = 0;
+        g_albedo_r[d] = 0.0f;
+        g_albedo_g[d] = 0.0f;
+        g_albedo_b[d] = 0.0f;
+        g_fuzz[d] = 0.0f;
+        g_ior[d] = 1.0f;
+    }
+
+    for (int b = 0; b < 16; b++) {
+        int i = b * 8;
+        g_cx8[b] = float8(g_cx[i], g_cx[i + 1], g_cx[i + 2], g_cx[i + 3], g_cx[i + 4], g_cx[i + 5], g_cx[i + 6], g_cx[i + 7]);
+        g_cy8[b] = float8(g_cy[i], g_cy[i + 1], g_cy[i + 2], g_cy[i + 3], g_cy[i + 4], g_cy[i + 5], g_cy[i + 6], g_cy[i + 7]);
+        g_cz8[b] = float8(g_cz[i], g_cz[i + 1], g_cz[i + 2], g_cz[i + 3], g_cz[i + 4], g_cz[i + 5], g_cz[i + 6], g_cz[i + 7]);
+        g_rsq8[b] = float8(
+            g_radius[i] * g_radius[i],
+            g_radius[i + 1] * g_radius[i + 1],
+            g_radius[i + 2] * g_radius[i + 2],
+            g_radius[i + 3] * g_radius[i + 3],
+            g_radius[i + 4] * g_radius[i + 4],
+            g_radius[i + 5] * g_radius[i + 5],
+            g_radius[i + 6] * g_radius[i + 6],
+            g_radius[i + 7] * g_radius[i + 7]
+        );
+    }
 }
 
-// ── SoA Intersection Kernel (SIMD auto-vectorized sweep) ────────────────────
+// ── SoA Intersection Kernel (SIMD 8-wide AVX2 sphere batching) ─────────────
 @inline bool hit_scene_soa(Ray& r, float t_min, float t_max, HitRecord& rec) {
     bool hit_anything = false;
     float closest_so_far = t_max;
@@ -271,34 +308,50 @@ void init_scene() {
     float rd_y = r.dir.y;
     float rd_z = r.dir.z;
 
-    for (int i = 0; i < 124; i++) {
-        float oc_x = ro_x - g_cx[i];
-        float oc_y = ro_y - g_cy[i];
-        float oc_z = ro_z - g_cz[i];
-        float half_b = oc_x * rd_x + oc_y * rd_y + oc_z * rd_z;
-        float c = oc_x * oc_x + oc_y * oc_y + oc_z * oc_z - g_radius[i] * g_radius[i];
-        float discriminant = half_b * half_b - c;
+    float8 v_rox = float8(ro_x);
+    float8 v_roy = float8(ro_y);
+    float8 v_roz = float8(ro_z);
+    float8 v_rdx = float8(rd_x);
+    float8 v_rdy = float8(rd_y);
+    float8 v_rdz = float8(rd_z);
 
-        if (discriminant > 0.0f) {
-            float sqrtd = sqrtf(discriminant);
-            float root = 0.0f - half_b - sqrtd;
-            if (root <= t_min || closest_so_far <= root) {
-                root = 0.0f - half_b + sqrtd;
-            }
-            if (root > t_min && root < closest_so_far) {
-                closest_so_far = root;
-                closest_idx = i;
-                hit_anything = true;
+    for (int b = 0; b < 16; b++) {
+        float8 oc_x = v_rox - g_cx8[b];
+        float8 oc_y = v_roy - g_cy8[b];
+        float8 oc_z = v_roz - g_cz8[b];
+        float8 half_b = oc_x * v_rdx + oc_y * v_rdy + oc_z * v_rdz;
+        float8 c = oc_x * oc_x + oc_y * oc_y + oc_z * oc_z - g_rsq8[b];
+        float8 disc = half_b * half_b - c;
+
+        if (disc[0] > 0.0f || disc[1] > 0.0f || disc[2] > 0.0f || disc[3] > 0.0f ||
+            disc[4] > 0.0f || disc[5] > 0.0f || disc[6] > 0.0f || disc[7] > 0.0f) {
+            int base = b * 8;
+            for (int k = 0; k < 8; k++) {
+                int idx = base + k;
+                if (idx < 124 && disc[k] > 0.0f) {
+                    float sqrtd = sqrtf(disc[k]);
+                    float hb = half_b[k];
+                    float r1 = 0.0f - hb - sqrtd;
+                    float r2 = 0.0f - hb + sqrtd;
+                    float root = (r1 <= t_min || closest_so_far <= r1) ? r2 : r1;
+                    if (root > t_min && root < closest_so_far) {
+                        closest_so_far = root;
+                        closest_idx = idx;
+                        hit_anything = true;
+                    }
+                }
             }
         }
     }
 
     if (hit_anything) {
         rec.t = closest_so_far;
-        rec.p = v3_add(r.origin, v3_scale(r.dir, closest_so_far));
-        Vec3 outward_normal = v3_scale(v3_sub(rec.p, v3(g_cx[closest_idx], g_cy[closest_idx], g_cz[closest_idx])), g_inv_radius[closest_idx]);
-        rec.front_face = v3_dot(r.dir, outward_normal) < 0.0f;
-        rec.normal = rec.front_face ? outward_normal : v3_neg(outward_normal);
+        rec.p = v3(r.origin.x + r.dir.x * closest_so_far, r.origin.y + r.dir.y * closest_so_far, r.origin.z + r.dir.z * closest_so_far);
+        float onx = (rec.p.x - g_cx[closest_idx]) * g_inv_radius[closest_idx];
+        float ony = (rec.p.y - g_cy[closest_idx]) * g_inv_radius[closest_idx];
+        float onz = (rec.p.z - g_cz[closest_idx]) * g_inv_radius[closest_idx];
+        rec.front_face = (r.dir.x * onx + r.dir.y * ony + r.dir.z * onz) < 0.0f;
+        rec.normal = rec.front_face ? v3(onx, ony, onz) : v3(0.0f - onx, 0.0f - ony, 0.0f - onz);
         rec.mat_type = g_mat_type[closest_idx];
         rec.albedo = v3(g_albedo_r[closest_idx], g_albedo_g[closest_idx], g_albedo_b[closest_idx]);
         rec.fuzz = g_fuzz[closest_idx];
@@ -408,8 +461,23 @@ Camera init_camera() {
 // ── Scanline Renderer ───────────────────────────────────────────────────────
 @inline void render_scanline(int y, int frame_idx, Camera cam) {
     int j = 720 - 1 - y;
+    float cam_ox = cam.origin.x;
+    float cam_oy = cam.origin.y;
+    float cam_oz = cam.origin.z;
+    float cam_llcx = cam.lower_left_corner.x;
+    float cam_llcy = cam.lower_left_corner.y;
+    float cam_llcz = cam.lower_left_corner.z;
+    float cam_hx = cam.horizontal.x;
+    float cam_hy = cam.horizontal.y;
+    float cam_hz = cam.horizontal.z;
+    float cam_vx = cam.vertical.x;
+    float cam_vy = cam.vertical.y;
+    float cam_vz = cam.vertical.z;
+
+    u32 base_seed = (u32)y * 1280u32 * 1973u32 + (u32)frame_idx * 9277u32 + 1u32;
+
     for (int x = 0; x < 1280; x++) {
-        u32 pixel_seed = ((u32)y * 1280u32 + (u32)x) * 1973u32 + (u32)frame_idx * 9277u32 + 1u32;
+        u32 pixel_seed = base_seed + (u32)x * 1973u32;
         xorshift32(pixel_seed);
         xorshift32(pixel_seed);
 
@@ -423,10 +491,15 @@ Camera init_camera() {
             float u_coord = ((float)x + u_jitter) * (1.0f / 1280.0f);
             float v_coord = ((float)j + v_jitter) * (1.0f / 720.0f);
 
-            Vec3 ray_dir = v3_sub(v3_add(v3_add(cam.lower_left_corner, v3_scale(cam.horizontal, u_coord)), v3_scale(cam.vertical, v_coord)), cam.origin);
+            float rdx = ((cam_llcx + cam_hx * u_coord) + cam_vx * v_coord) - cam_ox;
+            float rdy = ((cam_llcy + cam_hy * u_coord) + cam_vy * v_coord) - cam_oy;
+            float rdz = ((cam_llcz + cam_hz * u_coord) + cam_vz * v_coord) - cam_oz;
+            float len = sqrtf(rdx * rdx + rdy * rdy + rdz * rdz);
+            float inv_len = 1.0f / len;
+
             Ray r;
             r.origin = cam.origin;
-            r.dir = v3_normalize(ray_dir);
+            r.dir = v3(rdx * inv_len, rdy * inv_len, rdz * inv_len);
 
             Vec3 c = ray_color(r, pixel_seed);
             tot_r = tot_r + c.x;

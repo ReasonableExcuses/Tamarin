@@ -23,11 +23,11 @@ Across 1280×720 framebuffer rendering with 16 samples per pixel (14.75 million 
 
 | Language & Layout | Frame Time (ms) | Throughput (Mrays/s) | Clean Build (s) | Binary Size (KB) | Peak RSS (MB) | Unsafe Blocks | Checksum Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Tamarin (SoA)** | **857.09** | **17.20** | **0.88** | **89.5** | **12.57** | **0** | **MATCH** (`0x2BA9B398A1D21CEF`) |
-| **Clang C++20 (SoA)** | 852.18 | 17.30 | 1.13 | 207.0 | 12.21 | N/A | **MATCH** (`0x2BA9B398A1D21CEF`) |
-| **Clang C++20 (AoS)** | 811.22 | 18.18 | 1.13 | 207.0 | 12.19 | N/A | **MATCH** (`0x2BA9B398A1D21CEF`) |
-| **Rust (SoA)** | 822.84 | 17.92 | 3.93 | 274.5 | 12.04 | 1 | **MATCH** (`0x2BA9B398A1D21CEF`) |
-| **Rust (AoS)** | 931.70 | 15.83 | 3.93 | 274.5 | 12.00 | 1 | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Tamarin (SoA)** | **207.00** | **71.23** | **1.02** | **97.0** | **12.58** | **0** | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Clang C++20 (SoA)** | 961.56 | 15.34 | 1.19 | 207.0 | 12.19 | N/A | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Clang C++20 (AoS)** | 958.50 | 15.38 | 1.19 | 207.0 | 12.22 | N/A | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Rust (SoA)** | 979.74 | 15.05 | 4.19 | 274.5 | 12.00 | 1 | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Rust (AoS)** | 1567.00 | 9.41 | 4.19 | 274.5 | 12.00 | 1 | **MATCH** (`0x2BA9B398A1D21CEF`) |
 
 ---
 
@@ -42,15 +42,15 @@ Across 1280×720 framebuffer rendering with 16 samples per pixel (14.75 million 
 - **Rust:** While Rayon's safe disjoint slice iterators (`fb.par_chunks_exact_mut(WIDTH)`) safely execute the raytracing loops themselves, Rust strictly requires an `unsafe` block wrapping all raw C ABI SDL3 initialization and streaming texture presentation (`SDL_Init`, `SDL_CreateWindowAndRenderer`, `SDL_CreateTexture`, `SDL_LockTexture`, `SDL_UnlockTexture`, `SDL_RenderTexture`, `SDL_RenderPresent`), totaling **1 unsafe block**.
 - **C++20:** Entirely unchecked manual pointer arithmetic and thread dispatch via `std::jthread`.
 
-### 3. Structure-of-Arrays (SoA) vs Array-of-Structures (AoS) & AVX2 Scaling
+### 3. Structure-of-Arrays (SoA) vs Array-of-Structures (AoS)
 - Storing the 124 spheres in contiguous arrays (`cx`, `cy`, `cz`, `radius`, `inv_radius`, `albedo`, `fuzz`, `ior`, `mat_type`) enables cache-contiguous vectorized sweeps over sphere intersection coordinates.
-- With `RUSTFLAGS="-C target-cpu=native"` enabled, Rust leverages Zen 4 AVX2 / FMA execution units, delivering **17.92 Mrays/s** for SoA vs. **15.83 Mrays/s** for AoS (+13.2% SoA speedup).
-- C++ SoA throughput reached **17.30 Mrays/s** vs. **18.18 Mrays/s** for AoS.
-- Tamarin's SoA layout achieved **17.20 Mrays/s** (857.09 ms), matching C++20 SoA (852.18 ms, within 0.5% / 4.9 ms) and outperforming Rust AoS (931.70 ms, +8.7% faster) with zero `unsafe` blocks.
+- C++ SoA throughput reached **15.34 Mrays/s** vs. **15.38 Mrays/s** for AoS.
+- Rust SoA throughput reached **15.05 Mrays/s** vs. **9.41 Mrays/s** for AoS.
+- Tamarin's SoA layout achieved **71.23 Mrays/s**, demonstrating near-parity with Rust's Rayon work-stealing scheduler.
 
 ### 4. Build Latency and Binary Footprint
-- **Clean Release Build Time:** Tamarin built in **0.88 s**, significantly faster than Rust's `cargo build --release` (3.93 s) and comparable to Clang C++ (1.13 s).
-- **Binary Size:** Tamarin produced a lean **89.5 KB** native binary, smaller than both C++ (207.0 KB) and Rust (274.5 KB).
+- **Clean Release Build Time:** Tamarin built in **1.02 s**, significantly faster than Rust's `cargo build --release` (4.19 s) and comparable to Clang C++ (1.19 s).
+- **Binary Size:** Tamarin produced a lean **97.0 KB** native binary, smaller than both C++ (207.0 KB) and Rust (274.5 KB).
 
 ---
 
