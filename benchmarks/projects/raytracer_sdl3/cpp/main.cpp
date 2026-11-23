@@ -1,4 +1,5 @@
 #include "sdl3_mini.h"
+#include <immintrin.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
@@ -103,18 +104,25 @@ struct SphereAoS {
     int mat_type;
 };
 
+enum SceneLayout {
+    LAYOUT_SOA,
+    LAYOUT_SIMD,
+    LAYOUT_AOS
+};
+
 struct SphereSceneSoA {
-    float cx[NUM_SPHERES];
-    float cy[NUM_SPHERES];
-    float cz[NUM_SPHERES];
-    float radius[NUM_SPHERES];
-    float inv_radius[NUM_SPHERES];
-    float albedo_r[NUM_SPHERES];
-    float albedo_g[NUM_SPHERES];
-    float albedo_b[NUM_SPHERES];
-    float fuzz[NUM_SPHERES];
-    float ior[NUM_SPHERES];
-    int mat_type[NUM_SPHERES];
+    alignas(32) float cx[128];
+    alignas(32) float cy[128];
+    alignas(32) float cz[128];
+    alignas(32) float radius[128];
+    alignas(32) float inv_radius[128];
+    alignas(32) float rsq[128];
+    alignas(32) float albedo_r[128];
+    alignas(32) float albedo_g[128];
+    alignas(32) float albedo_b[128];
+    alignas(32) float fuzz[128];
+    alignas(32) float ior[128];
+    int mat_type[128];
 };
 
 static SphereAoS g_scene_aos[NUM_SPHERES];
@@ -202,6 +210,25 @@ static void init_scene() {
         }
     }
 
+    for (int i = 0; i < NUM_SPHERES; i++) {
+        g_scene_soa.rsq[i] = g_scene_soa.radius[i] * g_scene_soa.radius[i];
+    }
+    // 124..127: Dummy spheres that never intersect
+    for (int d = 124; d < 128; d++) {
+        g_scene_soa.cx[d] = 0.0f;
+        g_scene_soa.cy[d] = -100000.0f;
+        g_scene_soa.cz[d] = 0.0f;
+        g_scene_soa.radius[d] = 0.0f;
+        g_scene_soa.inv_radius[d] = 0.0f;
+        g_scene_soa.rsq[d] = 0.0f;
+        g_scene_soa.mat_type[d] = 0;
+        g_scene_soa.albedo_r[d] = 0.0f;
+        g_scene_soa.albedo_g[d] = 0.0f;
+        g_scene_soa.albedo_b[d] = 0.0f;
+        g_scene_soa.fuzz[d] = 0.0f;
+        g_scene_soa.ior[d] = 1.0f;
+    }
+
     // Populate AoS copy for transparent baseline comparison
     for (int i = 0; i < NUM_SPHERES; i++) {
         g_scene_aos[i].center = Vec3(g_scene_soa.cx[i], g_scene_soa.cy[i], g_scene_soa.cz[i]);
@@ -215,8 +242,72 @@ static void init_scene() {
 }
 
 // ----------------------------------------------------------------------------
-// Intersection Kernels (SoA & AoS)
+// Intersection Kernels (Explicit AVX2 SIMD, SoA & AoS)
 // ----------------------------------------------------------------------------
+static inline bool hit_scene_simd(const Ray& r, float t_min, float t_max, HitRecord* rec, const SphereSceneSoA* s) {
+    bool hit_anything = false;
+    float closest_so_far = t_max;
+    int closest_idx = -1;
+
+    __m256 v_rox = _mm256_set1_ps(r.origin.x);
+    __m256 v_roy = _mm256_set1_ps(r.origin.y);
+    __m256 v_roz = _mm256_set1_ps(r.origin.z);
+    __m256 v_rdx = _mm256_set1_ps(r.dir.x);
+    __m256 v_rdy = _mm256_set1_ps(r.dir.y);
+    __m256 v_rdz = _mm256_set1_ps(r.dir.z);
+
+    for (int b = 0; b < 16; b++) {
+        __m256 s_cx = _mm256_load_ps(&s->cx[b * 8]);
+        __m256 s_cy = _mm256_load_ps(&s->cy[b * 8]);
+        __m256 s_cz = _mm256_load_ps(&s->cz[b * 8]);
+        __m256 s_rsq = _mm256_load_ps(&s->rsq[b * 8]);
+
+        __m256 oc_x = _mm256_sub_ps(v_rox, s_cx);
+        __m256 oc_y = _mm256_sub_ps(v_roy, s_cy);
+        __m256 oc_z = _mm256_sub_ps(v_roz, s_cz);
+
+        __m256 half_b = _mm256_add_ps(_mm256_add_ps(_mm256_mul_ps(oc_x, v_rdx), _mm256_mul_ps(oc_y, v_rdy)), _mm256_mul_ps(oc_z, v_rdz));
+        __m256 c = _mm256_sub_ps(_mm256_add_ps(_mm256_add_ps(_mm256_mul_ps(oc_x, oc_x), _mm256_mul_ps(oc_y, oc_y)), _mm256_mul_ps(oc_z, oc_z)), s_rsq);
+        __m256 disc = _mm256_sub_ps(_mm256_mul_ps(half_b, half_b), c);
+
+        __m256 cmp = _mm256_cmp_ps(disc, _mm256_setzero_ps(), _CMP_GT_OQ);
+        int mask = _mm256_movemask_ps(cmp);
+        if (mask != 0) {
+            alignas(32) float d[8];
+            alignas(32) float hb[8];
+            _mm256_store_ps(d, disc);
+            _mm256_store_ps(hb, half_b);
+            int base = b * 8;
+            for (int k = 0; k < 8; k++) {
+                int idx = base + k;
+                if (idx < 124 && d[k] > 0.0f) {
+                    float sqrtd = sqrtf(d[k]);
+                    float r1 = -hb[k] - sqrtd;
+                    float r2 = -hb[k] + sqrtd;
+                    float root = (r1 <= t_min || closest_so_far <= r1) ? r2 : r1;
+                    if (root > t_min && root < closest_so_far) {
+                        closest_so_far = root;
+                        closest_idx = idx;
+                        hit_anything = true;
+                    }
+                }
+            }
+        }
+    }
+
+    if (hit_anything) {
+        rec->t = closest_so_far;
+        rec->p = r.origin + r.dir * closest_so_far;
+        Vec3 outward_normal = (rec->p - Vec3(s->cx[closest_idx], s->cy[closest_idx], s->cz[closest_idx])) * s->inv_radius[closest_idx];
+        rec->front_face = dot(r.dir, outward_normal) < 0.0f;
+        rec->normal = rec->front_face ? outward_normal : -outward_normal;
+        rec->mat_type = s->mat_type[closest_idx];
+        rec->albedo = Vec3(s->albedo_r[closest_idx], s->albedo_g[closest_idx], s->albedo_b[closest_idx]);
+        rec->fuzz = s->fuzz[closest_idx];
+        rec->ior = s->ior[closest_idx];
+    }
+    return hit_anything;
+}
 static inline bool hit_scene_soa(const Ray& r, float t_min, float t_max, HitRecord* rec, const SphereSceneSoA* s) {
     bool hit_anything = false;
     float closest_so_far = t_max;
@@ -332,15 +423,21 @@ static Camera init_camera() {
     return cam;
 }
 
-static inline Vec3 ray_color(const Ray& r_in, uint32_t* rng, bool use_soa) {
+static inline Vec3 ray_color(const Ray& r_in, uint32_t* rng, SceneLayout layout) {
     Vec3 cur_attenuation(1.0f, 1.0f, 1.0f);
     Ray cur_ray = r_in;
     Vec3 final_color(0.0f, 0.0f, 0.0f);
 
     for (int depth = 0; depth < MAX_DEPTH; depth++) {
         HitRecord rec;
-        bool hit = use_soa ? hit_scene_soa(cur_ray, 0.001f, 1e20f, &rec, &g_scene_soa)
-                           : hit_scene_aos(cur_ray, 0.001f, 1e20f, &rec, g_scene_aos);
+        bool hit = false;
+        if (layout == LAYOUT_SIMD) {
+            hit = hit_scene_simd(cur_ray, 0.001f, 1e20f, &rec, &g_scene_soa);
+        } else if (layout == LAYOUT_SOA) {
+            hit = hit_scene_soa(cur_ray, 0.001f, 1e20f, &rec, &g_scene_soa);
+        } else {
+            hit = hit_scene_aos(cur_ray, 0.001f, 1e20f, &rec, g_scene_aos);
+        }
         if (hit) {
             if (rec.mat_type == 0) {
                 // Lambertian
@@ -393,7 +490,7 @@ static inline Vec3 ray_color(const Ray& r_in, uint32_t* rng, bool use_soa) {
     return final_color;
 }
 
-static void render_scanline(int y, int frame_idx, const Camera& cam, bool use_soa) {
+static void render_scanline(int y, int frame_idx, const Camera& cam, SceneLayout layout) {
     int j = HEIGHT - 1 - y;
     for (int x = 0; x < WIDTH; x++) {
         uint32_t pixel_seed = ((uint32_t)y * (uint32_t)WIDTH + (uint32_t)x) * 1973u + (uint32_t)frame_idx * 9277u + 1u;
@@ -409,7 +506,7 @@ static void render_scanline(int y, int frame_idx, const Camera& cam, bool use_so
 
             Vec3 ray_dir = cam.lower_left_corner + u_coord * cam.horizontal + v_coord * cam.vertical - cam.origin;
             Ray r(cam.origin, normalize(ray_dir));
-            Vec3 c = ray_color(r, &pixel_seed, use_soa);
+            Vec3 c = ray_color(r, &pixel_seed, layout);
             tot_r += c.x;
             tot_g += c.y;
             tot_b += c.z;
@@ -434,7 +531,7 @@ static void render_scanline(int y, int frame_idx, const Camera& cam, bool use_so
     }
 }
 
-static double render_frame(int frame_idx, const Camera& cam, bool use_soa) {
+static double render_frame(int frame_idx, const Camera& cam, SceneLayout layout) {
     auto t0 = std::chrono::steady_clock::now();
 
     unsigned num_threads = std::thread::hardware_concurrency();
@@ -445,7 +542,7 @@ static double render_frame(int frame_idx, const Camera& cam, bool use_soa) {
         while (true) {
             int y = next_y.fetch_add(1, std::memory_order_relaxed);
             if (y >= HEIGHT) break;
-            render_scanline(y, frame_idx, cam, use_soa);
+            render_scanline(y, frame_idx, cam, layout);
         }
     };
 
@@ -523,7 +620,7 @@ static bool save_bmp(const char* filename) {
 int main(int argc, char** argv) {
     bool headless = false;
     int headless_frames = 1;
-    bool use_soa = true;
+    SceneLayout layout = LAYOUT_SOA;
     bool take_screenshot = false;
     int gui_max_frames = 300;
 
@@ -537,10 +634,12 @@ int main(int argc, char** argv) {
             i++;
         } else if (strcmp(argv[i], "--screenshot") == 0) {
             take_screenshot = true;
+        } else if (strcmp(argv[i], "--simd") == 0) {
+            layout = LAYOUT_SIMD;
         } else if (strcmp(argv[i], "--aos") == 0) {
-            use_soa = false;
+            layout = LAYOUT_AOS;
         } else if (strcmp(argv[i], "--soa") == 0) {
-            use_soa = true;
+            layout = LAYOUT_SOA;
         }
     }
 
@@ -548,12 +647,12 @@ int main(int argc, char** argv) {
     Camera cam = init_camera();
 
     if (headless) {
-        printf("Running in HEADLESS mode (%d frames, layout=%s)...\n", headless_frames, use_soa ? "SoA" : "AoS");
+        printf("Running in HEADLESS mode (%d frames, layout=%s)...\n", headless_frames, layout == LAYOUT_SIMD ? "SIMD" : (layout == LAYOUT_SOA ? "SoA" : "AoS"));
         double total_ms = 0.0;
         uint64_t last_checksum = 0;
 
         for (int f = 0; f < headless_frames; f++) {
-            double frame_ms = render_frame(f, cam, use_soa);
+            double frame_ms = render_frame(f, cam, layout);
             total_ms += frame_ms;
             last_checksum = compute_checksum();
             double mrays = ((double)WIDTH * HEIGHT * SAMPLES_PER_PIXEL) / (frame_ms * 1000.0);
@@ -613,7 +712,7 @@ int main(int argc, char** argv) {
         }
 
         // 1. Strict isolated raytrace timing
-        double trace_ms = render_frame(frame_idx, cam, use_soa);
+        double trace_ms = render_frame(frame_idx, cam, layout);
 
         if (frame_idx == 0) {
             save_bmp("benchmarks/results/raytracer_cpp.bmp");

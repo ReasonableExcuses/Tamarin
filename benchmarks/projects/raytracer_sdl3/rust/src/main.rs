@@ -203,26 +203,34 @@ struct SphereAoS {
     mat_type: i32,
 }
 
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Layout {
+    Soa,
+    Simd,
+    Aos,
+}
+
 struct SphereSceneSoA {
-    cx: [f32; NUM_SPHERES],
-    cy: [f32; NUM_SPHERES],
-    cz: [f32; NUM_SPHERES],
-    radius: [f32; NUM_SPHERES],
-    inv_radius: [f32; NUM_SPHERES],
-    albedo_r: [f32; NUM_SPHERES],
-    albedo_g: [f32; NUM_SPHERES],
-    albedo_b: [f32; NUM_SPHERES],
-    fuzz: [f32; NUM_SPHERES],
-    ior: [f32; NUM_SPHERES],
-    mat_type: [i32; NUM_SPHERES],
+    cx: [f32; 128],
+    cy: [f32; 128],
+    cz: [f32; 128],
+    radius: [f32; 128],
+    inv_radius: [f32; 128],
+    rsq: [f32; 128],
+    albedo_r: [f32; 128],
+    albedo_g: [f32; 128],
+    albedo_b: [f32; 128],
+    fuzz: [f32; 128],
+    ior: [f32; 128],
+    mat_type: [i32; 128],
 }
 
 fn init_scene() -> (SphereSceneSoA, Vec<SphereAoS>) {
     let mut soa = SphereSceneSoA {
-        cx: [0.0; NUM_SPHERES], cy: [0.0; NUM_SPHERES], cz: [0.0; NUM_SPHERES],
-        radius: [0.0; NUM_SPHERES], inv_radius: [0.0; NUM_SPHERES],
-        albedo_r: [0.0; NUM_SPHERES], albedo_g: [0.0; NUM_SPHERES], albedo_b: [0.0; NUM_SPHERES],
-        fuzz: [0.0; NUM_SPHERES], ior: [0.0; NUM_SPHERES], mat_type: [0; NUM_SPHERES],
+        cx: [0.0; 128], cy: [0.0; 128], cz: [0.0; 128],
+        radius: [0.0; 128], inv_radius: [0.0; 128], rsq: [0.0; 128],
+        albedo_r: [0.0; 128], albedo_g: [0.0; 128], albedo_b: [0.0; 128],
+        fuzz: [0.0; 128], ior: [0.0; 128], mat_type: [0; 128],
     };
 
     // 0: Ground
@@ -305,6 +313,24 @@ fn init_scene() -> (SphereSceneSoA, Vec<SphereAoS>) {
         }
     }
 
+    for i in 0..NUM_SPHERES {
+        soa.rsq[i] = soa.radius[i] * soa.radius[i];
+    }
+    for d in 124..128 {
+        soa.cx[d] = 0.0;
+        soa.cy[d] = -100000.0;
+        soa.cz[d] = 0.0;
+        soa.radius[d] = 0.0;
+        soa.inv_radius[d] = 0.0;
+        soa.rsq[d] = 0.0;
+        soa.mat_type[d] = 0;
+        soa.albedo_r[d] = 0.0;
+        soa.albedo_g[d] = 0.0;
+        soa.albedo_b[d] = 0.0;
+        soa.fuzz[d] = 0.0;
+        soa.ior[d] = 1.0;
+    }
+
     let mut aos = Vec::with_capacity(NUM_SPHERES);
     for i in 0..NUM_SPHERES {
         aos.push(SphereAoS {
@@ -322,8 +348,74 @@ fn init_scene() -> (SphereSceneSoA, Vec<SphereAoS>) {
 }
 
 // ----------------------------------------------------------------------------
-// Intersection Kernels (SoA and AoS)
+// Intersection Kernels (Explicit AVX2 SIMD, SoA and AoS)
 // ----------------------------------------------------------------------------
+#[inline(always)]
+unsafe fn hit_scene_simd(r: &Ray, t_min: f32, t_max: f32, rec: &mut HitRecord, s: &SphereSceneSoA) -> bool {
+    use std::arch::x86_64::*;
+    let mut hit_anything = false;
+    let mut closest_so_far = t_max;
+    let mut closest_idx = 0;
+
+    let v_rox = _mm256_set1_ps(r.origin.x);
+    let v_roy = _mm256_set1_ps(r.origin.y);
+    let v_roz = _mm256_set1_ps(r.origin.z);
+    let v_rdx = _mm256_set1_ps(r.dir.x);
+    let v_rdy = _mm256_set1_ps(r.dir.y);
+    let v_rdz = _mm256_set1_ps(r.dir.z);
+
+    for b in 0..16 {
+        let s_cx = _mm256_loadu_ps(s.cx.as_ptr().add(b * 8));
+        let s_cy = _mm256_loadu_ps(s.cy.as_ptr().add(b * 8));
+        let s_cz = _mm256_loadu_ps(s.cz.as_ptr().add(b * 8));
+        let s_rsq = _mm256_loadu_ps(s.rsq.as_ptr().add(b * 8));
+
+        let oc_x = _mm256_sub_ps(v_rox, s_cx);
+        let oc_y = _mm256_sub_ps(v_roy, s_cy);
+        let oc_z = _mm256_sub_ps(v_roz, s_cz);
+
+        let half_b = _mm256_add_ps(_mm256_add_ps(_mm256_mul_ps(oc_x, v_rdx), _mm256_mul_ps(oc_y, v_rdy)), _mm256_mul_ps(oc_z, v_rdz));
+        let c = _mm256_sub_ps(_mm256_add_ps(_mm256_add_ps(_mm256_mul_ps(oc_x, oc_x), _mm256_mul_ps(oc_y, oc_y)), _mm256_mul_ps(oc_z, oc_z)), s_rsq);
+        let disc = _mm256_sub_ps(_mm256_mul_ps(half_b, half_b), c);
+
+        let cmp = _mm256_cmp_ps(disc, _mm256_setzero_ps(), _CMP_GT_OQ);
+        let mask = _mm256_movemask_ps(cmp);
+        if mask != 0 {
+            let mut d = [0.0f32; 8];
+            let mut hb = [0.0f32; 8];
+            _mm256_storeu_ps(d.as_mut_ptr(), disc);
+            _mm256_storeu_ps(hb.as_mut_ptr(), half_b);
+            let base = b * 8;
+            for k in 0..8 {
+                let idx = base + k;
+                if idx < 124 && d[k] > 0.0 {
+                    let sqrtd = d[k].sqrt();
+                    let r1 = -hb[k] - sqrtd;
+                    let r2 = -hb[k] + sqrtd;
+                    let root = if r1 <= t_min || closest_so_far <= r1 { r2 } else { r1 };
+                    if root > t_min && root < closest_so_far {
+                        closest_so_far = root;
+                        closest_idx = idx;
+                        hit_anything = true;
+                    }
+                }
+            }
+        }
+    }
+
+    if hit_anything {
+        rec.t = closest_so_far;
+        rec.p = r.origin.add(r.dir.mul_scalar(closest_so_far));
+        let outward_normal = rec.p.sub(Vec3::new(s.cx[closest_idx], s.cy[closest_idx], s.cz[closest_idx])).mul_scalar(s.inv_radius[closest_idx]);
+        rec.front_face = r.dir.dot(outward_normal) < 0.0;
+        rec.normal = if rec.front_face { outward_normal } else { outward_normal.neg() };
+        rec.mat_type = s.mat_type[closest_idx];
+        rec.albedo = Vec3::new(s.albedo_r[closest_idx], s.albedo_g[closest_idx], s.albedo_b[closest_idx]);
+        rec.fuzz = s.fuzz[closest_idx];
+        rec.ior = s.ior[closest_idx];
+    }
+    hit_anything
+}
 #[inline(always)]
 fn hit_scene_soa(r: &Ray, t_min: f32, t_max: f32, rec: &mut HitRecord, s: &SphereSceneSoA) -> bool {
     let mut hit_anything = false;
@@ -445,17 +537,17 @@ fn init_camera() -> Camera {
 }
 
 #[inline(always)]
-fn ray_color(r_in: Ray, rng: &mut u32, soa: &SphereSceneSoA, aos: &[SphereAoS], use_soa: bool) -> Vec3 {
+fn ray_color(r_in: Ray, rng: &mut u32, soa: &SphereSceneSoA, aos: &[SphereAoS], layout: Layout) -> Vec3 {
     let mut cur_attenuation = Vec3::new(1.0, 1.0, 1.0);
     let mut cur_ray = r_in;
     let mut final_color = Vec3::default();
 
     for _ in 0..MAX_DEPTH {
         let mut rec = HitRecord::default();
-        let hit = if use_soa {
-            hit_scene_soa(&cur_ray, 0.001, 1e20, &mut rec, soa)
-        } else {
-            hit_scene_aos(&cur_ray, 0.001, 1e20, &mut rec, aos)
+        let hit = match layout {
+            Layout::Simd => unsafe { hit_scene_simd(&cur_ray, 0.001, 1e20, &mut rec, soa) },
+            Layout::Soa => hit_scene_soa(&cur_ray, 0.001, 1e20, &mut rec, soa),
+            Layout::Aos => hit_scene_aos(&cur_ray, 0.001, 1e20, &mut rec, aos),
         };
 
         if hit {
@@ -516,7 +608,7 @@ fn render_scanline(
     cam: &Camera,
     soa: &SphereSceneSoA,
     aos: &[SphereAoS],
-    use_soa: bool,
+    layout: Layout,
     row: &mut [u32],
 ) {
     let j = HEIGHT - 1 - y;
@@ -540,7 +632,7 @@ fn render_scanline(
                 .add(cam.vertical.mul_scalar(v_coord))
                 .sub(cam.origin);
             let r = Ray { origin: cam.origin, dir: ray_dir.normalize() };
-            let c = ray_color(r, &mut pixel_seed, soa, aos, use_soa);
+            let c = ray_color(r, &mut pixel_seed, soa, aos, layout);
             tot_r += c.x;
             tot_g += c.y;
             tot_b += c.z;
@@ -628,7 +720,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let mut headless = false;
     let mut headless_frames = 1;
-    let mut use_soa = true;
+    let mut layout = Layout::Soa;
     let mut take_screenshot = false;
     let mut gui_max_frames = 300;
 
@@ -644,9 +736,11 @@ fn main() {
         } else if args[i] == "--screenshot" {
             take_screenshot = true;
         } else if args[i] == "--aos" {
-            use_soa = false;
+            layout = Layout::Aos;
         } else if args[i] == "--soa" {
-            use_soa = true;
+            layout = Layout::Soa;
+        } else if args[i] == "--simd" {
+            layout = Layout::Simd;
         }
         i += 1;
     }
@@ -656,7 +750,12 @@ fn main() {
     let mut fb = vec![0u32; WIDTH * HEIGHT];
 
     if headless {
-        println!("Running in HEADLESS mode ({} frames, layout={})...", headless_frames, if use_soa { "SoA" } else { "AoS" });
+        let layout_str = match layout {
+            Layout::Simd => "SIMD",
+            Layout::Soa => "SoA",
+            Layout::Aos => "AoS",
+        };
+        println!("Running in HEADLESS mode ({} frames, layout={})...", headless_frames, layout_str);
         let mut total_ms = 0.0;
         let mut last_checksum = 0;
 
@@ -666,7 +765,7 @@ fn main() {
             fb.par_chunks_exact_mut(WIDTH)
                 .enumerate()
                 .for_each(|(y, row)| {
-                    render_scanline(y, f, &cam, &soa, &aos, use_soa, row);
+                    render_scanline(y, f, &cam, &soa, &aos, layout, row);
                 });
 
             let frame_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -750,7 +849,7 @@ fn main() {
             fb.par_chunks_exact_mut(WIDTH)
                 .enumerate()
                 .for_each(|(y, row)| {
-                    render_scanline(y, frame_idx, &cam, &soa, &aos, use_soa, row);
+                    render_scanline(y, frame_idx, &cam, &soa, &aos, layout, row);
                 });
             let trace_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
