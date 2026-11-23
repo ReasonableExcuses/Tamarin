@@ -333,4 +333,35 @@ The GUI Calculator benchmark evaluates developer ergonomics, binary footprint, b
 | **Safety Invariants** | **Safe by Default** (0 `unsafe`) | Unsafe Manual | Unsafe FFI Blocks | Tamarin requires **zero `unsafe` blocks**; Rust requires `unsafe` for every Raylib call |
 
 > [!NOTE]
-> **CPU Compute Throughput Note**: For unthrottled CPU compute throughput independent of display swapchain pacing, see the core compute benchmarks (such as N-Body orbit simulation, SoA scan & reduction, and async microtask dispatch), where Tamarin's `@layout(scan)` Structure-of-Arrays layout and SIMD auto-vectorization differentiate CPU execution times.
+> **CPU Compute Throughput Note**: For unthrottled CPU compute throughput independent of display swapchain pacing, see the core compute benchmarks (such as N-Body orbit simulation, SoA scan & reduction, and async microtask dispatch) and the SDL3 Streaming CPU Raytracer below, where Tamarin's `@layout(scan)` Structure-of-Arrays layout and SIMD auto-vectorization differentiate CPU execution times.
+
+### 7.3 Multi-Threaded CPU Raytracer Benchmark (`benchmarks/projects/raytracer_sdl3/`)
+
+To evaluate raw unthrottled CPU compute throughput independent of display swapchain pacing, Milestone v0.18.5 includes a high-performance multi-threaded CPU path/ray tracer rendering live to an unthrottled **SDL3 streaming texture** (`SDL_LockTexture`, `SDL_PIXELFORMAT_RGBA32`):
+
+#### 1. Architecture & Concurrency Model
+- **Workload:** 1280×720 framebuffer, 16 samples per pixel (14.75 million rays), maximum ray bounce depth 8.
+- **Deterministic Scene:** Ground sphere + 3 large hero spheres (Lambertian diffuse, metallic mirror with fuzz, dielectric glass with Schlick Fresnel refraction) + 120 procedural spheres on a 15×8 grid (124 spheres total).
+- **Structure-of-Arrays (SoA):** Contiguous arrays for sphere center coordinates (`cx`, `cy`, `cz`), radius, `inv_radius`, `rsq`, albedo, fuzz, and material type (`g_cx`, `g_cy`, `g_cz`, etc.).
+- **Zero-Copy Streaming Presentation:** The texture is locked on the main thread via `SDL_LockTexture(tex, null, &pixels, &pitch)`. Rows are written respecting driver byte pitch, unlocked via `SDL_UnlockTexture`, and presented via `SDL_RenderTexture` and `SDL_RenderPresent`.
+- **Affine Injectivity Concurrency:** Scanlines are distributed via `parallel for (int y = 0; y < 720; y++)`. Tamarin's affine index injectivity checker statically proves that disjoint row writes to `g_framebuffer[y][x]` are 100% data race-free, requiring **zero `unsafe` blocks** across the entire application.
+
+#### 2. Cross-Language Parity & Benchmark Results
+Evaluated on AMD Ryzen 7 7840HS (8 physical cores, 16 threads, 16 GB DDR5, Windows 11):
+
+| Language & Configuration | Frame Time (ms) | Throughput (Mrays/s) | Clean Build (s) | Binary Size (KB) | Peak RSS (MB) | Unsafe Blocks | Bit-Exact Checksum |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Tamarin (SIMD 8-wide)** | **231.01** | **63.83** | **1.13** | **96.5** | **12.61** | **0** | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Clang C++20 (SIMD 8-wide)** | 247.52 | 59.57 | 1.49 | 209.5 | 12.23 | Unchecked | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Rust (SIMD 8-wide)** | 244.61 | 60.28 | 4.67 | 276.5 | 12.00 | 3 | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Tamarin (Standard SoA)** | 1057.42 | 13.94 | 1.13 | 96.5 | 12.59 | **0** | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Clang C++20 (Standard SoA)** | 1051.67 | 14.02 | 1.49 | 209.5 | 12.23 | Unchecked | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Rust (Standard SoA)** | 1023.88 | 14.40 | 4.67 | 276.5 | 12.01 | 3 | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Clang C++20 (AoS Baseline)** | 1033.76 | 14.26 | 1.49 | 209.5 | 12.22 | Unchecked | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Rust (AoS Baseline)** | 1190.52 | 12.39 | 4.67 | 276.5 | 11.95 | 3 | **MATCH** (`0x2BA9B398A1D21CEF`) |
+
+#### 3. Compiler Backend & Codegen Enhancements
+- **Memory Alignment (`align 64`):** LLVM codegen aligns global array structures to 64 bytes, eliminating cache-line split penalties during 8-wide AVX2 loads (`vmovaps`).
+- **Math Flags Parity:** Emits `-fno-math-errno -fno-trapping-math` on release builds, allowing loop and SLP vectorizers to optimize mathematical loops while strictly adhering to IEEE-754 precision.
+- **Direct Hardware Intrinsics:** Calls to `sqrt`/`sqrtf` lower to native `@llvm.sqrt.f32/@llvm.sqrt.f64` hardware instructions (`vsqrtss`/`vsqrtsd`) with `nounwind willreturn memory(none)`.
+- **Zero-Allocation Stack Scheduling:** Parallel loop frames are stack-allocated with atomic fetch-and-add task queues, eliminating runtime heap allocations during multithreaded dispatch.

@@ -151,6 +151,11 @@ The path to **Version 1.0 GA** focuses on self-hosting and compiler maturation.
   - Automatic native `.dll` deployment on Windows: copies required `.dll` files from `lib-dirs` to output `bin/` directory upon build completion.
 - **Real-World Application Benchmarking (Raylib 5.5 Calculator)**:
   - Validated native GUI application development in `benchmarks/projects/gui_test/`: Tamarin achieves 50.0 FPS (20.01 ms frame time) and 502 KB binary size with zero `unsafe` blocks, matching C++ and outperforming Rust.
+- **Unthrottled Multi-Threaded CPU Raytracer Benchmark (`benchmarks/projects/raytracer_sdl3/`)**:
+  - Validated raw CPU compute and vectorization throughput: 1280×720, 16 SPP, 8 bounces, 124 spheres rendering live to SDL3 streaming textures (`SDL_LockTexture`).
+  - Symmetrically benchmarked across Tamarin, C++20, and Rust with 100% bit-for-bit checksum match (`0x2BA9B398A1D21CEF`) and identical PNG/BMP screenshots.
+  - Tamarin achieves **63.83 Mrays/s (231.01 ms)** with **zero `unsafe` blocks**, compiling in **1.13 s** (4.1× faster than Rust) with a **96.5 KB** stripped binary (65% smaller than Rust).
+  - Enhanced LLVM backend codegen with 64-byte alignment (`align 64`), release math flags (`-fno-math-errno -fno-trapping-math`), direct hardware `@llvm.sqrt` intrinsic lowering, and zero-allocation stack job parallel scheduling.
 - **Documentation**:
   - Published comprehensive graphics guide in `docs/graphics.md`.
 

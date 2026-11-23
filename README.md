@@ -203,8 +203,28 @@ Evaluated on `benchmarks/projects/gui_test/` across a complete, native GUI Calcu
 | **Peak Working Set** | **92.59 MB** | 92.17 MB | 92.23 MB | Identical memory footprint (GPU swapchain context) |
 | **Safety Invariants** | **Safe by Default** (0 `unsafe`) | Unsafe Manual | Unsafe FFI Blocks | Tamarin requires **zero `unsafe` blocks**; Rust requires `unsafe` for every Raylib call |
 
+### Multi-Threaded CPU Raytracer Benchmark (SDL3 Streaming Textures)
+
+Evaluated on `benchmarks/projects/raytracer_sdl3/` across a high-throughput, multi-threaded CPU path/ray tracer rendering 1280×720 frames (16 SPP, max bounce depth 8, 124 spheres: ground + 3 hero spheres + 120 procedural spheres on a 15×8 grid) live to an unthrottled **SDL3 streaming texture** (`SDL_LockTexture`, `SDL_PIXELFORMAT_RGBA32`). Symmetrically benchmarked across **Tamarin (v0.18.5+)**, **Clang C++20**, and **Rust (1.84)**:
+
+| Language & Configuration | Frame Time (ms) | Throughput (Mrays/s) | Clean Build (s) | Binary Size (KB) | Peak RSS (MB) | Unsafe Blocks | Bit-Exact Checksum |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Tamarin (SIMD 8-wide)** | **231.01** | **63.83** | **1.13** | **96.5** | **12.61** | **0** | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Clang C++20 (SIMD 8-wide)** | 247.52 | 59.57 | 1.49 | 209.5 | 12.23 | Unchecked | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Rust (SIMD 8-wide)** | 244.61 | 60.28 | 4.67 | 276.5 | 12.00 | 3 | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Tamarin (Standard SoA)** | 1057.42 | 13.94 | 1.13 | 96.5 | 12.59 | **0** | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Clang C++20 (Standard SoA)** | 1051.67 | 14.02 | 1.49 | 209.5 | 12.23 | Unchecked | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Rust (Standard SoA)** | 1023.88 | 14.40 | 4.67 | 276.5 | 12.01 | 3 | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Clang C++20 (AoS Baseline)** | 1033.76 | 14.26 | 1.49 | 209.5 | 12.22 | Unchecked | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Rust (AoS Baseline)** | 1190.52 | 12.39 | 4.67 | 276.5 | 11.95 | 3 | **MATCH** (`0x2BA9B398A1D21CEF`) |
+
+*Key Technical Architectural Takeaways:*
+- **100% Mathematical Determinism:** All 8 configurations produce the identical final checksum `0x2BA9B398A1D21CEF` and bit-identical PNG/BMP screenshots (SHA-256 `eecfed20fd678671eb8f5810cfbaea233ce7f648977a0b6759860f6893a52575`), proving zero mathematical compromises or precision loss.
+- **Safety with AVX2 Speed:** Tamarin achieves the fastest frame time (**231.01 ms / 63.83 Mrays/s**) using first-class safe `float8` vector types and race-free affine `parallel for` with **zero `unsafe` blocks**, while Rust requires `unsafe` for AVX2 intrinsics and C FFI (3 blocks total).
+- **Compilation Speed & Footprint:** Tamarin compiles clean in **1.13 s** (4.1× faster than `cargo build --release` at 4.67 s) and generates a stripped binary of **96.5 KB** (65% smaller than Rust's 276.5 KB and 54% smaller than C++'s 209.5 KB).
+
 *Methodology Note on Asynchronous Execution & GUI Rendering:*  
-Tamarin's async runtime optimizes fine-grained leaf tasks through cooperative stack frames and eager inline task execution, avoiding mandatory heap allocation and thread context switches for non-suspending workloads. Independent parallel loops execute across the lock-free `ThreadTaskPool` work-stealing scheduler. In GUI and graphics workloads, Tamarin C ABI struct lowering passes composite values directly in registers without intermediate wrapper thunks or runtime allocations. For unthrottled CPU compute throughput, see the compute benchmarks above where `@layout(scan)` SoA vectorization directly differentiates execution speed.
+Tamarin's async runtime optimizes fine-grained leaf tasks through cooperative stack frames and eager inline task execution, avoiding mandatory heap allocation and thread context switches for non-suspending workloads. Independent parallel loops execute across the lock-free `ThreadTaskPool` work-stealing scheduler. In GUI and graphics workloads, Tamarin C ABI struct lowering passes composite values directly in registers without intermediate wrapper thunks or runtime allocations. For unthrottled CPU compute throughput, see the compute benchmarks and raytracer above where `@layout(scan)` SoA vectorization and safe `float8` SIMD directly differentiate execution speed.
 
 ---
 

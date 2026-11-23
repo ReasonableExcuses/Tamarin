@@ -108,6 +108,9 @@ TIR (`src/ir/`) is a mid-level SSA intermediate representation designed to bridg
 - Converts TIR basic blocks and instructions into strongly typed LLVM IR.
 - Configures target machine triples, data layouts, CPU features (e.g., `+avx2,+fma` under `--target-cpu native`), and floating-point models (`--fast-math`).
 - Automatically emits metadata for loop auto-vectorization (`llvm.loop.vectorize.enable`).
+- **Memory Alignment (`align 64`):** Vectorizable global arrays and large aggregate types are emitted with `align 64` (upgraded from 16), ensuring unpeeled AVX2 aligned loads (`vmovaps`) without peel-loop overhead or cache-line split penalties.
+- **Math Optimization Flags:** Release builds (`-O2/-O3`) emit `-fno-math-errno -fno-trapping-math`, enabling LLVM loop and SLP vectorizers to vectorize loops containing math calls without assuming `errno` side-effects, while strictly preserving IEEE-754 floating-point precision.
+- **Hardware Intrinsics & Pure Attributes:** Calls to `sqrt`/`sqrtf` lower directly to hardware instructions (`@llvm.sqrt.f32/@llvm.sqrt.f64`), decorated with `nounwind willreturn memory(none)`, and non-escaping reference parameters receive `ptr noalias nocapture` attributes.
 - Preserves pointer return types for decayed fixed-size arrays and string slices (`isPointerValue_`), generating valid `ret ptr` opcodes rather than illegal scalar bitwidth conversions.
 
 ### 5.2 C99 Header Generation (`src/backend/c_header_generator.cpp`)
@@ -125,6 +128,7 @@ Tamarin applications link against a lightweight, zero-overhead runtime (`tamarin
 
 ### 6.2 `ThreadTaskPool` (`src/runtime/concurrency.cpp`)
 - Work-stealing thread pool configured to the number of physical CPU cores.
+- **Zero-Allocation Stack Job Scheduling:** `tamarin_parallel_for` eliminates heap allocations (`std::make_shared<SharedJob>` and `std::function` closures) by using stack-allocated job frames and atomic fetch-and-add task queues with dynamic chunking, achieving microsecond-scale thread dispatch.
 - Executes `parallel for` partitions across work queues using deque-based work stealing.
 - Provides coroutine scheduling and lightweight fiber execution for `Task<T>`.
 
