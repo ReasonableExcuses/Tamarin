@@ -471,10 +471,10 @@ void LLVMCodeGen::emitHeader(std::ostream& os) {
                     int64_t val = (i < (int64_t)g.arrayInitializers.size()) ? g.arrayInitializers[i] : 0;
                     os << elemStr << " " << val;
                 }
-                os << "], align 16\n";
+                os << "], align 64\n";
             } else {
                 os << "@" << g.name << " = internal global [" << arrCount << " x " << elemStr
-                   << "] zeroinitializer, align 16\n";
+                   << "] zeroinitializer, align 64\n";
             }
         } else {
             std::string tyStr = g.type ? llvmType(g.type) : "i32";
@@ -482,7 +482,15 @@ void LLVMCodeGen::emitHeader(std::ostream& os) {
             if (g.type && g.type->isFloat()) {
                 valStr = "0.0";
             }
-            os << "@" << g.name << " = internal global " << tyStr << " " << valStr << ", align 8\n";
+            size_t align = 8;
+            if (g.type) {
+                align = std::max((size_t)8, g.type->alignment());
+                if (g.type->isRecord() || g.type->isStruct()) {
+                    if (g.type->size() >= 64) align = std::max(align, (size_t)64);
+                    else if (g.type->size() >= 32) align = std::max(align, (size_t)32);
+                }
+            }
+            os << "@" << g.name << " = internal global " << tyStr << " " << valStr << ", align " << align << "\n";
         }
     }
 
@@ -2119,7 +2127,21 @@ void LLVMCodeGen::emitFunction(const ir::IRFunction& fn, std::ostream& os) {
                 os << llvmType(pTy);
             }
         }
-        os << ")\n\n";
+        std::string extFnAttrs;
+        if (fn.linkage == "C" || fn.isExtern) {
+            extFnAttrs = "nounwind";
+            static const std::unordered_set<std::string> mathPureFns = {
+                "sqrt", "sqrtf", "sin", "sinf", "cos", "cosf", "tan", "tanf",
+                "asin", "asinf", "acos", "acosf", "atan", "atanf", "atan2", "atan2f",
+                "exp", "expf", "log", "logf", "log10", "log10f", "pow", "powf",
+                "fabs", "fabsf", "floor", "floorf", "ceil", "ceilf", "round", "roundf",
+                "trunc", "truncf", "fmin", "fminf", "fmax", "fmaxf"
+            };
+            if (mathPureFns.count(fn.name)) {
+                extFnAttrs += " willreturn memory(none)";
+            }
+        }
+        os << ") " << extFnAttrs << "\n\n";
         return;
     }
 
@@ -2139,8 +2161,14 @@ void LLVMCodeGen::emitFunction(const ir::IRFunction& fn, std::ostream& os) {
         valueTypes_[pVal] = pTy;
         if (pTy && pTy->isReference()) {
             isPointerValue_.insert(pVal);
+            if (fn.linkage != "C" && !fn.name.ends_with("_destructor")) {
+                os << "ptr noalias nocapture %v" << pVal;
+            } else {
+                os << "ptr %v" << pVal;
+            }
+        } else {
+            os << llvmType(pTy) << " %v" << pVal;
         }
-        os << llvmType(pTy) << " %v" << pVal;
     }
     std::string fnAttrs = "mustprogress nounwind";
     if (fn.isAlwaysInline) fnAttrs += " alwaysinline";
@@ -2185,7 +2213,17 @@ void LLVMCodeGen::emitFunction(const ir::IRFunction& fn, std::ostream& os) {
                 for (auto& inst : b->instructions) {
                     if (inst.opcode == ir::Opcode::Alloca) {
                         std::string tyStr = (inst.strImm == "__tamarin_region") ? "%__tamarin_region" : llvmType(inst.type);
-                        os << "  %v" << inst.result << " = alloca " << tyStr << "\n";
+                        size_t align = 8;
+                        if (inst.type) {
+                            align = std::max((size_t)8, inst.type->alignment());
+                            if (inst.type->isArray()) {
+                                align = std::max((size_t)64, align);
+                            } else if (inst.type->isRecord() || inst.type->isStruct()) {
+                                if (inst.type->size() >= 64) align = std::max(align, (size_t)64);
+                                else if (inst.type->size() >= 32) align = std::max(align, (size_t)32);
+                            }
+                        }
+                        os << "  %v" << inst.result << " = alloca " << tyStr << ", align " << align << "\n";
                     } else if (inst.opcode == ir::Opcode::ArrayAlloc) {
                         auto elemTy = inst.type && inst.type->elementType ? inst.type->elementType : nullptr;
                         std::string elemStr = elemTy ? llvmType(elemTy) : "i32";
@@ -2647,6 +2685,24 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
                 }
                 os << ")\n";
             } else {
+                if (inst.strImm == "sqrtf" && inst.callArgs.size() == 1) {
+                    auto argTy = getValueType(inst.callArgs[0]);
+                    os << "  ";
+                    if (inst.result != ir::InvalidValue) {
+                        os << "%v" << inst.result << " = ";
+                    }
+                    os << "call float @llvm.sqrt.f32(float " << formatOperand(inst.callArgs[0], argTy) << ")\n";
+                    break;
+                }
+                if (inst.strImm == "sqrt" && inst.callArgs.size() == 1) {
+                    auto argTy = getValueType(inst.callArgs[0]);
+                    os << "  ";
+                    if (inst.result != ir::InvalidValue) {
+                        os << "%v" << inst.result << " = ";
+                    }
+                    os << "call double @llvm.sqrt.f64(double " << formatOperand(inst.callArgs[0], argTy) << ")\n";
+                    break;
+                }
                 const ir::IRFunction* targetFn = nullptr;
                 auto it = functionMap_.find(inst.strImm);
                 if (it != functionMap_.end()) {
@@ -3746,13 +3802,24 @@ static std::string resolveArchFlag(const std::string& targetCPU, const target::T
     return "";
 }
 
+static std::string buildExtraOptFlags(int optLevel, bool fastMath) {
+    std::string fastMathFlag = fastMath ? " -ffast-math" : "";
+    std::string noMathErrno = (optLevel >= 2) ? " -fno-math-errno -fno-trapping-math" : "";
+    std::string llvmOpt;
+    if (optLevel >= 3) {
+        llvmOpt = " -mllvm -inline-threshold=2500 -mllvm -unroll-threshold=800 -mllvm -vectorize-loops=true -mllvm -vectorize-slp=true";
+    } else if (optLevel >= 2) {
+        llvmOpt = " -mllvm -inline-threshold=1000 -mllvm -vectorize-loops=true";
+    }
+    return noMathErrno + llvmOpt + fastMathFlag;
+}
+
 bool LLVMCodeGen::optimizeLLVMIR(const std::filesystem::path& inputLL,
                                 const std::filesystem::path& outputLL,
                                 int optLevel) {
     std::string optFlag = "-O" + std::to_string(optLevel);
     std::string archFlag = resolveArchFlag(targetCPU_, targetTriple_);
-    std::string fastMath = fastMath_ ? " -ffast-math" : "";
-    std::string extraOpt = ((optLevel >= 3) ? " -mllvm -inline-threshold=2500 -mllvm -unroll-threshold=800 -mllvm -vectorize-loops=true -mllvm -vectorize-slp=true" : ((optLevel >= 2) ? " -mllvm -inline-threshold=1000 -mllvm -vectorize-loops=true" : "")) + fastMath;
+    std::string extraOpt = buildExtraOptFlags(optLevel, fastMath_);
     std::string cmd = "\"" + clangPath_ + "\" -x ir " + optFlag + archFlag + extraOpt +
                       " -S -emit-llvm --target=" + targetTriple_.str() + " -Wno-override-module -o \"" +
                       outputLL.string() + "\" \"" + inputLL.string() + "\"";
@@ -3770,8 +3837,7 @@ bool LLVMCodeGen::compileToAssembly(const std::filesystem::path& llPath,
                                    int optLevel) {
     std::string optFlag = "-O" + std::to_string(optLevel);
     std::string archFlag = resolveArchFlag(targetCPU_, targetTriple_);
-    std::string fastMath = fastMath_ ? " -ffast-math" : "";
-    std::string extraOpt = ((optLevel >= 3) ? " -mllvm -inline-threshold=2500 -mllvm -unroll-threshold=800 -mllvm -vectorize-loops=true -mllvm -vectorize-slp=true" : ((optLevel >= 2) ? " -mllvm -inline-threshold=1000 -mllvm -vectorize-loops=true" : "")) + fastMath;
+    std::string extraOpt = buildExtraOptFlags(optLevel, fastMath_);
     std::string cmd = "\"" + clangPath_ + "\" -x ir " + optFlag + archFlag + extraOpt +
                       " -S --target=" + targetTriple_.str() + " -Wno-override-module -o \"" +
                       asmPath.string() + "\" \"" + llPath.string() + "\"";
@@ -3848,8 +3914,7 @@ bool LLVMCodeGen::compileToExecutable(const std::filesystem::path& llPath,
                                      int optLevel) {
     std::string optFlag = "-O" + std::to_string(optLevel);
     std::string archFlag = resolveArchFlag(targetCPU_, targetTriple_);
-    std::string fastMath = fastMath_ ? " -ffast-math" : "";
-    std::string extraOpt = ((optLevel >= 3) ? " -mllvm -inline-threshold=2500 -mllvm -unroll-threshold=800 -mllvm -vectorize-loops=true -mllvm -vectorize-slp=true" : ((optLevel >= 2) ? " -mllvm -inline-threshold=1000 -mllvm -vectorize-loops=true" : "")) + fastMath;
+    std::string extraOpt = buildExtraOptFlags(optLevel, fastMath_);
     std::string crtFlag;
     if (targetTriple_.isWindows()) {
         if (crtLinkage_ == CrtLinkage::Static) {
@@ -3888,8 +3953,7 @@ bool LLVMCodeGen::compileToObject(const std::filesystem::path& llPath,
                                  int optLevel) {
     std::string optFlag = "-O" + std::to_string(optLevel);
     std::string archFlag = resolveArchFlag(targetCPU_, targetTriple_);
-    std::string fastMath = fastMath_ ? " -ffast-math" : "";
-    std::string extraOpt = ((optLevel >= 3) ? " -mllvm -inline-threshold=2500 -mllvm -unroll-threshold=800 -mllvm -vectorize-loops=true -mllvm -vectorize-slp=true" : ((optLevel >= 2) ? " -mllvm -inline-threshold=1000 -mllvm -vectorize-loops=true" : "")) + fastMath;
+    std::string extraOpt = buildExtraOptFlags(optLevel, fastMath_);
     std::string cmd = "\"" + clangPath_ + "\" -x ir " + optFlag + archFlag + extraOpt +
                       " -c --target=" + targetTriple_.str() + " -Wno-override-module -o \"" +
                       objPath.string() + "\" \"" + llPath.string() + "\"";
@@ -3907,8 +3971,7 @@ bool LLVMCodeGen::compileToSharedLibrary(const std::filesystem::path& llPath,
                                         int optLevel) {
     std::string optFlag = "-O" + std::to_string(optLevel);
     std::string archFlag = resolveArchFlag(targetCPU_, targetTriple_);
-    std::string fastMath = fastMath_ ? " -ffast-math" : "";
-    std::string extraOpt = ((optLevel >= 3) ? " -mllvm -inline-threshold=2500 -mllvm -unroll-threshold=800 -mllvm -vectorize-loops=true -mllvm -vectorize-slp=true" : ((optLevel >= 2) ? " -mllvm -inline-threshold=1000 -mllvm -vectorize-loops=true" : "")) + fastMath;
+    std::string extraOpt = buildExtraOptFlags(optLevel, fastMath_);
     std::string crtFlag;
     if (targetTriple_.isWindows()) {
         crtFlag = " -fuse-ld=lld -fms-runtime-lib=dll -Xlinker /DEFAULTLIB:msvcrt.lib -Xlinker /NODEFAULTLIB:libcmt.lib -Xlinker /DEFAULTLIB:kernel32.lib";

@@ -97,6 +97,18 @@ struct TaskItem {
     struct TaskScope* scope = nullptr;
 };
 
+struct ParallelJob {
+    int64_t start = 0;
+    int64_t end = 0;
+    int64_t grain = 1;
+    tamarin_parallel_worker_fn worker = nullptr;
+    void* ctx = nullptr;
+    std::atomic<int64_t> nextIndex{0};
+    std::atomic<int64_t> activeWorkers{0};
+    std::mutex mtx;
+    std::condition_variable cv;
+};
+
 struct TaskScope {
     std::atomic<int32_t> pendingTasks{0};
     std::mutex mtx;
@@ -156,40 +168,28 @@ public:
             return;
         }
 
-        struct SharedJob {
-            int64_t start;
-            int64_t end;
-            int64_t grain;
-            tamarin_parallel_worker_fn worker;
-            void* ctx;
-            std::atomic<int64_t> nextIndex;
-            std::atomic<int64_t> activeWorkers;
-            std::mutex mtx;
-            std::condition_variable cv;
-        };
-
-        auto job = std::make_shared<SharedJob>();
-        job->start = start;
-        job->end = end;
-        job->grain = grainSize;
-        job->worker = worker;
-        job->ctx = ctx;
-        job->nextIndex.store(start, std::memory_order_relaxed);
+        ParallelJob job;
+        job.start = start;
+        job.end = end;
+        job.grain = grainSize;
+        job.worker = worker;
+        job.ctx = ctx;
+        job.nextIndex.store(start, std::memory_order_relaxed);
 
         int64_t numChunks = (total + grainSize - 1) / grainSize;
         size_t tasksToSpawn = std::min(static_cast<size_t>(numChunks), numWorkers_);
-        job->activeWorkers.store(static_cast<int64_t>(tasksToSpawn), std::memory_order_release);
+        job.activeWorkers.store(static_cast<int64_t>(tasksToSpawn), std::memory_order_release);
 
-        auto runWorkerChunks = [job]() {
+        auto runWorkerChunks = [](ParallelJob* j) {
             while (true) {
-                int64_t cStart = job->nextIndex.fetch_add(job->grain, std::memory_order_relaxed);
-                if (cStart >= job->end) break;
-                int64_t cEnd = std::min(cStart + job->grain, job->end);
-                job->worker(cStart, cEnd, job->ctx);
+                int64_t cStart = j->nextIndex.fetch_add(j->grain, std::memory_order_relaxed);
+                if (cStart >= j->end) break;
+                int64_t cEnd = std::min(cStart + j->grain, j->end);
+                j->worker(cStart, cEnd, j->ctx);
             }
-            if (job->activeWorkers.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-                std::unique_lock<std::mutex> lk(job->mtx);
-                job->cv.notify_all();
+            if (j->activeWorkers.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                std::unique_lock<std::mutex> lk(j->mtx);
+                j->cv.notify_all();
             }
         };
 
@@ -197,19 +197,19 @@ public:
             {
                 std::unique_lock<std::mutex> lock(queueMutex_);
                 for (size_t i = 1; i < tasksToSpawn; ++i) {
-                    parallelQueue_.push_back(runWorkerChunks);
+                    parallelQueue_.push_back(&job);
                 }
             }
             cvTask_.notify_all();
         }
 
         // Calling thread participates directly
-        runWorkerChunks();
+        runWorkerChunks(&job);
 
         // Wait for background workers to finish
-        std::unique_lock<std::mutex> lk(job->mtx);
-        job->cv.wait(lk, [&]() {
-            return job->activeWorkers.load(std::memory_order_acquire) == 0;
+        std::unique_lock<std::mutex> lk(job.mtx);
+        job.cv.wait(lk, [&]() {
+            return job.activeWorkers.load(std::memory_order_acquire) == 0;
         });
     }
 
@@ -234,19 +234,19 @@ public:
     }
 
     bool executeOnePendingTask() {
-        std::function<void()> pTask;
+        ParallelJob* pJob = nullptr;
         TaskItem tItem;
         TamarinAsyncTask* aTask = nullptr;
-        bool hasPTask = false;
+        bool hasPJob = false;
         bool hasTItem = false;
         bool hasATask = false;
 
         {
             std::unique_lock<std::mutex> lock(queueMutex_);
             if (!parallelQueue_.empty()) {
-                pTask = std::move(parallelQueue_.front());
+                pJob = parallelQueue_.front();
                 parallelQueue_.pop_front();
-                hasPTask = true;
+                hasPJob = true;
             } else if (!tasksQueue_.empty()) {
                 tItem = tasksQueue_.front();
                 tasksQueue_.pop_front();
@@ -258,8 +258,17 @@ public:
             }
         }
 
-        if (hasPTask) {
-            pTask();
+        if (hasPJob && pJob) {
+            while (true) {
+                int64_t cStart = pJob->nextIndex.fetch_add(pJob->grain, std::memory_order_relaxed);
+                if (cStart >= pJob->end) break;
+                int64_t cEnd = std::min(cStart + pJob->grain, pJob->end);
+                pJob->worker(cStart, cEnd, pJob->ctx);
+            }
+            if (pJob->activeWorkers.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                std::unique_lock<std::mutex> lk(pJob->mtx);
+                pJob->cv.notify_all();
+            }
             return true;
         }
         if (hasTItem) {
@@ -331,10 +340,10 @@ public:
 private:
     void workerLoop() {
         while (true) {
-            std::function<void()> pTask;
+            ParallelJob* pJob = nullptr;
             TaskItem tItem;
             TamarinAsyncTask* aTask = nullptr;
-            bool hasPTask = false;
+            bool hasPJob = false;
             bool hasTItem = false;
             bool hasATask = false;
 
@@ -349,9 +358,9 @@ private:
                 }
 
                 if (!parallelQueue_.empty()) {
-                    pTask = std::move(parallelQueue_.front());
+                    pJob = parallelQueue_.front();
                     parallelQueue_.pop_front();
-                    hasPTask = true;
+                    hasPJob = true;
                 } else if (!tasksQueue_.empty()) {
                     tItem = tasksQueue_.front();
                     tasksQueue_.pop_front();
@@ -363,8 +372,17 @@ private:
                 }
             }
 
-            if (hasPTask) {
-                pTask();
+            if (hasPJob && pJob) {
+                while (true) {
+                    int64_t cStart = pJob->nextIndex.fetch_add(pJob->grain, std::memory_order_relaxed);
+                    if (cStart >= pJob->end) break;
+                    int64_t cEnd = std::min(cStart + pJob->grain, pJob->end);
+                    pJob->worker(cStart, cEnd, pJob->ctx);
+                }
+                if (pJob->activeWorkers.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                    std::unique_lock<std::mutex> lk(pJob->mtx);
+                    pJob->cv.notify_all();
+                }
             } else if (hasTItem) {
                 tItem.fn(tItem.ctx);
                 if (tItem.scope) {
@@ -394,7 +412,7 @@ private:
 
     size_t numWorkers_ = 0;
     std::vector<std::thread> workers_;
-    std::deque<std::function<void()>> parallelQueue_;
+    std::deque<ParallelJob*> parallelQueue_;
     std::deque<TaskItem> tasksQueue_;
     std::deque<TamarinAsyncTask*> asyncQueue_;
     std::mutex queueMutex_;
