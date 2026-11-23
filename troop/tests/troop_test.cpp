@@ -7,7 +7,11 @@
 #include "troop/lockfile.h"
 #include "troop/dependency_resolver.h"
 #include "troop/package_manager.h"
+#include "tamarin/runtime/concurrency.h"
+#include "tamarin/runtime/page_provider.h"
 
+#include <atomic>
+#include <vector>
 #include <filesystem>
 #include <fstream>
 
@@ -405,6 +409,109 @@ TAMARIN_TEST(Troop, AddDevDependency) {
     EXPECT_TRUE(manifest.has_value());
     EXPECT_TRUE(manifest->devDependencies.count("test_helper") > 0);
     EXPECT_EQ(manifest->dependencies.count("test_helper"), 0u);
+
+    std::filesystem::remove_all(tempBase, ec);
+    return true;
+}
+
+TAMARIN_TEST(Runtime, Concurrency_ParallelForRaceFree) {
+    constexpr int64_t N = 10000;
+    std::vector<int64_t> data(N, 0);
+    tamarin_parallel_for(0, N, 64, [](int64_t start, int64_t end, void* ctx) {
+        auto* arr = static_cast<std::vector<int64_t>*>(ctx);
+        for (int64_t i = start; i < end; ++i) {
+            (*arr)[i] = i * 2 + 1;
+        }
+    }, &data);
+
+    for (int64_t i = 0; i < N; ++i) {
+        EXPECT_EQ(data[i], i * 2 + 1);
+    }
+    return true;
+}
+
+TAMARIN_TEST(Runtime, Concurrency_TaskScopeRaceFree) {
+    std::atomic<int64_t> counter{0};
+    void* scope = tamarin_task_scope_begin();
+    EXPECT_TRUE(scope != nullptr);
+
+    constexpr int NUM_TASKS = 50;
+    for (int i = 0; i < NUM_TASKS; ++i) {
+        tamarin_task_spawn(scope, [](void* ctx) {
+            auto* c = static_cast<std::atomic<int64_t>*>(ctx);
+            c->fetch_add(1, std::memory_order_relaxed);
+        }, &counter);
+    }
+
+    tamarin_task_scope_end(scope);
+    EXPECT_EQ(counter.load(), NUM_TASKS);
+    return true;
+}
+
+TAMARIN_TEST(Runtime, Concurrency_AsyncTaskLifecycle) {
+    int64_t inputVal = 42;
+    void* task = tamarin_async_task_create([](void* ctx, void* res) {
+        int64_t v = *static_cast<int64_t*>(ctx);
+        *static_cast<int64_t*>(res) = v * 2;
+    }, &inputVal, sizeof(int64_t), sizeof(int64_t));
+
+    EXPECT_TRUE(task != nullptr);
+    int64_t* result = static_cast<int64_t*>(tamarin_async_task_await(task));
+    EXPECT_TRUE(result != nullptr);
+    EXPECT_EQ(*result, 84);
+    EXPECT_EQ(tamarin_async_task_is_ready(task), 1);
+    tamarin_async_task_free(task);
+
+    // Unawaited task recycling test
+    for (int i = 0; i < 70; ++i) {
+        tamarin_async_task_create([](void* ctx, void* res) {
+            *static_cast<int64_t*>(res) = 123;
+        }, &inputVal, sizeof(int64_t), sizeof(int64_t));
+    }
+    tamarin_yield();
+    return true;
+}
+
+TAMARIN_TEST(Runtime, Slab_GenerationalRetirement) {
+    TamarinSlab slab;
+    __tamarin_slab_init(&slab, sizeof(uint64_t), alignof(uint64_t), 4);
+
+    uint64_t val = 12345;
+    uint64_t h1 = __tamarin_slab_insert(&slab, &val);
+    EXPECT_TRUE(__tamarin_slab_is_valid(&slab, h1));
+
+    uint32_t slot = static_cast<uint32_t>(h1 & 0xFFFFFFFF);
+    slab.generations[slot] = 0xFFFFFFFD; // Odd -> active
+    uint64_t retiredHandle = (static_cast<uint64_t>(0xFFFFFFFD) << 32) | slot;
+    EXPECT_TRUE(__tamarin_slab_is_valid(&slab, retiredHandle));
+
+    __tamarin_slab_remove(&slab, retiredHandle, nullptr);
+    EXPECT_EQ(slab.generations[slot], 0xFFFFFFFF);
+
+    EXPECT_EQ(__tamarin_slab_is_valid(&slab, retiredHandle), 0);
+    uint64_t genMaxHandle = (static_cast<uint64_t>(0xFFFFFFFF) << 32) | slot;
+    EXPECT_EQ(__tamarin_slab_is_valid(&slab, genMaxHandle), 0);
+
+    __tamarin_slab_clear(&slab, nullptr);
+    EXPECT_EQ(slab.generations[slot], 0xFFFFFFFF);
+
+    __tamarin_slab_destroy(&slab, nullptr);
+    return true;
+}
+
+TAMARIN_TEST(Troop, TestPackageWithProfileFlagsAndDllDeploy) {
+    auto tempBase = std::filesystem::temp_directory_path() / "troop_test_pkg_profile";
+    std::error_code ec;
+    std::filesystem::remove_all(tempBase, ec);
+    std::filesystem::create_directories(tempBase);
+
+    PackageManager pm;
+    std::string err;
+    auto pkgDir = tempBase / "test_app";
+    EXPECT_TRUE(pm.newPackage(pkgDir, "test_app", false, err));
+
+    int testRes = pm.testPackage(pkgDir / "troop.toml", false);
+    EXPECT_EQ(testRes, 0);
 
     std::filesystem::remove_all(tempBase, ec);
     return true;

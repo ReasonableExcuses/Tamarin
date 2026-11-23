@@ -656,6 +656,19 @@ bool Sema::analyzeModules(const std::vector<std::shared_ptr<driver::Module>>& mo
                     ? origName
                     : (modScope->mangledPrefix + origName);
                 cd.name = mangledName;
+                if (cd.value) {
+                    auto eval = checker_.evalIntConstExpr(*cd.value);
+                    if (eval.divByZero) {
+                        diag_.report(cd.loc, Severity::Error,
+                                     "division by zero in constant expression for '" + origName + "'");
+                    } else if (eval.overflow) {
+                        diag_.report(cd.loc, Severity::Error,
+                                     "integer overflow in constant expression for '" + origName + "'");
+                    } else if (eval.isConst) {
+                        checker_.setConstValue(origName, eval.value);
+                        checker_.setConstValue(mangledName, eval.value);
+                    }
+                }
                 ProvenanceSet cProv(ProvenanceKind::StaticStorage, 0, origName);
                 Symbol sym{
                     .name = origName,
@@ -1069,6 +1082,18 @@ void Sema::registerTopDecls(ast::Program& prog) {
         else if (decl->kind == DeclKind::Const) {
             auto& cd = static_cast<ConstDecl&>(*decl);
             auto ty = checker_.resolveType(*cd.type);
+            if (cd.value) {
+                auto eval = checker_.evalIntConstExpr(*cd.value);
+                if (eval.divByZero) {
+                    diag_.report(cd.loc, Severity::Error,
+                                 "division by zero in constant expression for '" + cd.name + "'");
+                } else if (eval.overflow) {
+                    diag_.report(cd.loc, Severity::Error,
+                                 "integer overflow in constant expression for '" + cd.name + "'");
+                } else if (eval.isConst) {
+                    checker_.setConstValue(cd.name, eval.value);
+                }
+            }
             ProvenanceSet cProv(ProvenanceKind::StaticStorage, 0, cd.name);
             Symbol sym{
                 .name        = cd.name,

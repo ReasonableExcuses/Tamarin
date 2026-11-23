@@ -32,6 +32,18 @@ LLVMVerifier::LLVMVerifier() {
 #else
         clangPath_ = "clang";
 #endif
+#ifdef _WIN32
+        if (clangPath_ == "clang") {
+            const char* progFiles = std::getenv("ProgramFiles");
+            if (progFiles) {
+                auto p = std::filesystem::path(progFiles) / "LLVM" / "bin" / "clang.exe";
+                std::error_code ec;
+                if (std::filesystem::exists(p, ec)) {
+                    clangPath_ = p.string();
+                }
+            }
+        }
+#endif
     }
 }
 

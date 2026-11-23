@@ -785,6 +785,9 @@ tamarin::runtime::MemoryPageProvider* __tamarin_runtime_get_page_provider() {
 
 // ── Generational Slab Runtime Implementation ────────────────────────────────
 
+static constexpr uint32_t SLAB_RETIRED_GEN = 0xFFFFFFFF;
+static constexpr uint32_t SLAB_RETIRE_THRESHOLD = 0xFFFFFFFE;
+
 static bool find_slab_slot(tamarin::runtime::TamarinSlab* slab, uint32_t slot,
                            uint32_t** out_gen_ptr, uint8_t** out_slot_ptr) {
     if (!slab || slot >= slab->capacity) return false;
@@ -935,30 +938,41 @@ void __tamarin_slab_init(tamarin::runtime::TamarinSlab* slab, size_t elem_size, 
 
 uint64_t __tamarin_slab_insert(tamarin::runtime::TamarinSlab* slab, const void* elem_val) {
     if (!slab) return 0;
-    if (slab->free_head == 0xFFFFFFFF) {
+    while (slab->free_head == 0xFFFFFFFF) {
         slab_grow_chunk(slab);
     }
 
-    uint32_t slot = static_cast<uint32_t>(slab->free_head);
-    uint32_t* gen_ptr = nullptr;
-    uint8_t* slot_ptr = nullptr;
-    if (!find_slab_slot(slab, slot, &gen_ptr, &slot_ptr)) {
-        return 0;
+    while (slab->free_head != 0xFFFFFFFF) {
+        uint32_t slot = static_cast<uint32_t>(slab->free_head);
+        uint32_t* gen_ptr = nullptr;
+        uint8_t* slot_ptr = nullptr;
+        if (!find_slab_slot(slab, slot, &gen_ptr, &slot_ptr)) {
+            return 0;
+        }
+
+        slab->free_head = *reinterpret_cast<uint32_t*>(slot_ptr);
+
+        if (*gen_ptr >= SLAB_RETIRE_THRESHOLD) {
+            *gen_ptr = SLAB_RETIRED_GEN;
+            if (slab->free_head == 0xFFFFFFFF) {
+                slab_grow_chunk(slab);
+            }
+            continue;
+        }
+
+        uint32_t cur_gen = *gen_ptr;
+        cur_gen++; // advances to odd = active
+        *gen_ptr = cur_gen;
+
+        std::memset(slot_ptr, 0, slab->slot_stride);
+        if (elem_val) {
+            std::memcpy(slot_ptr, elem_val, slab->elem_size);
+        }
+
+        slab->count++;
+        return (static_cast<uint64_t>(cur_gen) << 32) | static_cast<uint64_t>(slot);
     }
-
-    slab->free_head = *reinterpret_cast<uint32_t*>(slot_ptr);
-
-    uint32_t cur_gen = *gen_ptr;
-    cur_gen++; // advances to odd = active
-    *gen_ptr = cur_gen;
-
-    std::memset(slot_ptr, 0, slab->slot_stride);
-    if (elem_val) {
-        std::memcpy(slot_ptr, elem_val, slab->elem_size);
-    }
-
-    slab->count++;
-    return (static_cast<uint64_t>(cur_gen) << 32) | static_cast<uint64_t>(slot);
+    return 0;
 }
 
 void __tamarin_slab_panic(uint32_t slot, uint32_t handle_gen, uint32_t actual_gen) {
@@ -979,7 +993,7 @@ int32_t __tamarin_slab_is_valid(const tamarin::runtime::TamarinSlab* slab, uint6
     if (!slab) return 0;
     uint32_t slot = static_cast<uint32_t>(handle & 0xFFFFFFFF);
     uint32_t gen = static_cast<uint32_t>(handle >> 32);
-    if (gen == 0 || slot >= slab->capacity) return 0;
+    if (gen == 0 || gen == SLAB_RETIRED_GEN || slot >= slab->capacity) return 0;
 
     uint32_t* gen_ptr = nullptr;
     uint8_t* slot_ptr = nullptr;
@@ -987,7 +1001,7 @@ int32_t __tamarin_slab_is_valid(const tamarin::runtime::TamarinSlab* slab, uint6
         return 0;
     }
 
-    if (*gen_ptr == gen && (*gen_ptr & 1) != 0) return 1;
+    if (*gen_ptr != SLAB_RETIRED_GEN && *gen_ptr == gen && (*gen_ptr & 1) != 0) return 1;
     return 0;
 }
 
@@ -995,7 +1009,7 @@ void* __tamarin_slab_get(tamarin::runtime::TamarinSlab* slab, uint64_t handle) {
     if (!slab) __tamarin_slab_panic(0, 0, 0);
     uint32_t slot = static_cast<uint32_t>(handle & 0xFFFFFFFF);
     uint32_t gen = static_cast<uint32_t>(handle >> 32);
-    if (gen == 0 || slot >= slab->capacity) {
+    if (gen == 0 || gen == SLAB_RETIRED_GEN || slot >= slab->capacity) {
         __tamarin_slab_panic(slot, gen, 0);
     }
 
@@ -1005,7 +1019,7 @@ void* __tamarin_slab_get(tamarin::runtime::TamarinSlab* slab, uint64_t handle) {
         __tamarin_slab_panic(slot, gen, 0);
     }
 
-    if (*gen_ptr != gen || (*gen_ptr & 1) == 0) {
+    if (*gen_ptr == SLAB_RETIRED_GEN || *gen_ptr != gen || (*gen_ptr & 1) == 0) {
         __tamarin_slab_panic(slot, gen, *gen_ptr);
     }
 
@@ -1036,8 +1050,8 @@ int32_t __tamarin_slab_remove(tamarin::runtime::TamarinSlab* slab, uint64_t hand
     }
 
     uint32_t new_gen = *gen_ptr + 1; // advances to even = free
-    if (new_gen >= 0xFFFFFFFE) {
-        *gen_ptr = 0xFFFFFFFF; // permanently retired
+    if (new_gen >= SLAB_RETIRE_THRESHOLD) {
+        *gen_ptr = SLAB_RETIRED_GEN; // permanently retired
         slab->count--;
         return 1;
     }
@@ -1068,11 +1082,16 @@ void __tamarin_slab_clear(tamarin::runtime::TamarinSlab* slab, void (*dtor)(void
     for (auto it = chunk_list.rbegin(); it != chunk_list.rend(); ++it) {
         auto* c = *it;
         for (int64_t i = static_cast<int64_t>(c->capacity) - 1; i >= 0; --i) {
-            if ((c->generations[i] & 1) != 0) {
+            if (c->generations[i] != SLAB_RETIRED_GEN && (c->generations[i] & 1) != 0) {
                 if (dtor) {
                     dtor(c->slots + static_cast<size_t>(i) * slab->slot_stride);
                 }
-                c->generations[i]++;
+                uint32_t ng = c->generations[i] + 1;
+                if (ng >= SLAB_RETIRE_THRESHOLD) {
+                    c->generations[i] = SLAB_RETIRED_GEN;
+                } else {
+                    c->generations[i] = ng;
+                }
             }
         }
     }
@@ -1080,22 +1099,27 @@ void __tamarin_slab_clear(tamarin::runtime::TamarinSlab* slab, void (*dtor)(void
     // Destruct primary chunk active items in reverse order
     uint32_t cap0 = slab->chunks ? slab->chunks->slot_offset : static_cast<uint32_t>(slab->capacity);
     for (int64_t i = static_cast<int64_t>(cap0) - 1; i >= 0; --i) {
-        if ((slab->generations[i] & 1) != 0) {
+        if (slab->generations[i] != SLAB_RETIRED_GEN && (slab->generations[i] & 1) != 0) {
             if (dtor) {
                 dtor(slab->slots + static_cast<size_t>(i) * slab->slot_stride);
             }
-            slab->generations[i]++;
+            uint32_t ng = slab->generations[i] + 1;
+            if (ng >= SLAB_RETIRE_THRESHOLD) {
+                slab->generations[i] = SLAB_RETIRED_GEN;
+            } else {
+                slab->generations[i] = ng;
+            }
         }
     }
 
-    // Rebuild free list
+    // Rebuild free list: ONLY include non-retired slots (< SLAB_RETIRE_THRESHOLD)
     slab->free_head = 0xFFFFFFFF;
 
     // From back to front
     for (auto it = chunk_list.rbegin(); it != chunk_list.rend(); ++it) {
         auto* c = *it;
         for (int64_t i = static_cast<int64_t>(c->capacity) - 1; i >= 0; --i) {
-            if (c->generations[i] < 0xFFFFFFFE) {
+            if (c->generations[i] != SLAB_RETIRED_GEN && c->generations[i] < SLAB_RETIRE_THRESHOLD) {
                 uint32_t s_idx = c->slot_offset + static_cast<uint32_t>(i);
                 *reinterpret_cast<uint32_t*>(c->slots + static_cast<size_t>(i) * slab->slot_stride) = static_cast<uint32_t>(slab->free_head);
                 slab->free_head = s_idx;
@@ -1103,7 +1127,7 @@ void __tamarin_slab_clear(tamarin::runtime::TamarinSlab* slab, void (*dtor)(void
         }
     }
     for (int64_t i = static_cast<int64_t>(cap0) - 1; i >= 0; --i) {
-        if (slab->generations[i] < 0xFFFFFFFE) {
+        if (slab->generations[i] != SLAB_RETIRED_GEN && slab->generations[i] < SLAB_RETIRE_THRESHOLD) {
             *reinterpret_cast<uint32_t*>(slab->slots + static_cast<size_t>(i) * slab->slot_stride) = static_cast<uint32_t>(slab->free_head);
             slab->free_head = static_cast<uint32_t>(i);
         }

@@ -6672,6 +6672,286 @@ TAMARIN_TEST(CodeGen, NativeLinkerFlagsFormatting) {
     return true;
 }
 
+TAMARIN_TEST(CodeGen, OpcodePhi_Verification) {
+    SourceManager sm;
+    std::ostringstream errs;
+    DiagnosticEngine diag(sm, errs);
+    sema::TypeContext ctx;
+
+    ir::IRModule mod;
+    mod.name = "test_phi_mod";
+
+    // Test scalar and pointer Phi nodes
+    auto fn = mod.createFunction("test_phi", ctx.getI32());
+    fn->params = {
+        {"cond", ctx.getI32(), 1},
+        {"a", ctx.getI32(), 2},
+        {"b", ctx.getI32(), 3}
+    };
+
+    auto entry = fn->createBlock("entry");
+    auto thenBb = fn->createBlock("then_bb");
+    auto elseBb = fn->createBlock("else_bb");
+    auto mergeBb = fn->createBlock("merge_bb");
+
+    // entry: branch to then_bb or else_bb
+    ir::Instruction cmpInst;
+    cmpInst.opcode = ir::Opcode::ICmpNe;
+    cmpInst.result = 4;
+    cmpInst.op1 = 1;
+    cmpInst.intImm = 0;
+    cmpInst.type = ctx.getBool();
+    entry->instructions.push_back(cmpInst);
+
+    ir::Instruction brInst;
+    brInst.opcode = ir::Opcode::Branch;
+    brInst.op1 = 4;
+    brInst.label1 = "then_bb";
+    brInst.label2 = "else_bb";
+    entry->instructions.push_back(brInst);
+
+    // then_bb:
+    ir::Instruction addInst;
+    addInst.opcode = ir::Opcode::Add;
+    addInst.result = 5;
+    addInst.op1 = 2;
+    addInst.intImm = 10;
+    addInst.type = ctx.getI32();
+    thenBb->instructions.push_back(addInst);
+
+    ir::Instruction jmp1;
+    jmp1.opcode = ir::Opcode::Jump;
+    jmp1.label1 = "merge_bb";
+    thenBb->instructions.push_back(jmp1);
+
+    // else_bb:
+    ir::Instruction mulInst;
+    mulInst.opcode = ir::Opcode::Mul;
+    mulInst.result = 6;
+    mulInst.op1 = 3;
+    mulInst.intImm = 2;
+    mulInst.type = ctx.getI32();
+    elseBb->instructions.push_back(mulInst);
+
+    ir::Instruction jmp2;
+    jmp2.opcode = ir::Opcode::Jump;
+    jmp2.label1 = "merge_bb";
+    elseBb->instructions.push_back(jmp2);
+
+    // merge_bb: Phi node merging then_bb and else_bb
+    ir::Instruction phiInst;
+    phiInst.opcode = ir::Opcode::Phi;
+    phiInst.result = 7;
+    phiInst.op1 = 5;
+    phiInst.label1 = "then_bb";
+    phiInst.op2 = 6;
+    phiInst.label2 = "else_bb";
+    phiInst.type = ctx.getI32();
+    mergeBb->instructions.push_back(phiInst);
+
+    ir::Instruction retInst;
+    retInst.opcode = ir::Opcode::Return;
+    retInst.op1 = 7;
+    retInst.type = ctx.getI32();
+    mergeBb->instructions.push_back(retInst);
+
+    backend::LLVMCodeGen codegen(mod, diag);
+    std::ostringstream llvmIR;
+    EXPECT_TRUE(codegen.emitLLVMIR(llvmIR));
+
+    auto irStr = llvmIR.str();
+    EXPECT_TRUE(irStr.find("phi i32") != std::string::npos);
+    EXPECT_TRUE(irStr.find("%then_bb") != std::string::npos);
+    EXPECT_TRUE(irStr.find("%else_bb") != std::string::npos);
+
+    auto vRes = backend::LLVMVerifier::instance().verifyIR(irStr);
+    if (!vRes.ok) {
+        std::cerr << "Verification error in OpcodePhi_Verification: " << vRes.errorMessage << "\n";
+        std::cerr << "Generated IR:\n" << irStr << "\n";
+    }
+    EXPECT_TRUE(vRes.ok);
+
+    return true;
+}
+
+TAMARIN_TEST(CodeGen, OpcodeVecShuffle_Verification) {
+    SourceManager sm;
+    std::ostringstream errs;
+    DiagnosticEngine diag(sm, errs);
+    sema::TypeContext ctx;
+
+    ir::IRModule mod;
+    mod.name = "test_vec_mod";
+
+    const auto* vecTy = ctx.getSIMDVector(ctx.getI32(), 4);
+    auto fn = mod.createFunction("test_shuffle", vecTy);
+    fn->params = {
+        {"v1", vecTy, 1},
+        {"v2", vecTy, 2}
+    };
+
+    auto entry = fn->createBlock("entry");
+
+    // Shuffle with custom mask
+    ir::Instruction shufInst;
+    shufInst.opcode = ir::Opcode::VecShuffle;
+    shufInst.result = 3;
+    shufInst.op1 = 1;
+    shufInst.op2 = 2;
+    shufInst.strImm = "2, 3, 0, 1";
+    shufInst.type = vecTy;
+    entry->instructions.push_back(shufInst);
+
+    // Shuffle with poison lane (-1)
+    ir::Instruction shufPoison;
+    shufPoison.opcode = ir::Opcode::VecShuffle;
+    shufPoison.result = 4;
+    shufPoison.op1 = 3;
+    shufPoison.op2 = ir::InvalidValue;
+    shufPoison.strImm = "3, 2, -1, 0";
+    shufPoison.type = vecTy;
+    entry->instructions.push_back(shufPoison);
+
+    ir::Instruction retInst;
+    retInst.opcode = ir::Opcode::Return;
+    retInst.op1 = 4;
+    retInst.type = vecTy;
+    entry->instructions.push_back(retInst);
+
+    backend::LLVMCodeGen codegen(mod, diag);
+    std::ostringstream llvmIR;
+    EXPECT_TRUE(codegen.emitLLVMIR(llvmIR));
+
+    auto irStr = llvmIR.str();
+    EXPECT_TRUE(irStr.find("shufflevector <4 x i32>") != std::string::npos);
+    EXPECT_TRUE(irStr.find("i32 poison") != std::string::npos);
+
+    auto vRes = backend::LLVMVerifier::instance().verifyIR(irStr);
+    if (!vRes.ok) {
+        std::cerr << "Verification error in OpcodeVecShuffle_Verification: " << vRes.errorMessage << "\n";
+        std::cerr << "Generated IR:\n" << irStr << "\n";
+    }
+    EXPECT_TRUE(vRes.ok);
+
+    return true;
+}
+
+TAMARIN_TEST(CodeGen, OpcodeVecReduceAddAndDot_Verification) {
+    SourceManager sm;
+    std::ostringstream errs;
+    DiagnosticEngine diag(sm, errs);
+    sema::TypeContext ctx;
+
+    ir::IRModule mod;
+    mod.name = "test_reduce_mod";
+
+    const auto* f4Ty = ctx.getFloat4();
+    auto fn = mod.createFunction("test_reduce", ctx.getF32());
+    fn->params = {
+        {"a", f4Ty, 1},
+        {"b", f4Ty, 2}
+    };
+
+    auto entry = fn->createBlock("entry");
+
+    // VecDot
+    ir::Instruction dotInst;
+    dotInst.opcode = ir::Opcode::VecDot;
+    dotInst.result = 3;
+    dotInst.op1 = 1;
+    dotInst.op2 = 2;
+    dotInst.type = ctx.getF32();
+    entry->instructions.push_back(dotInst);
+
+    // VecReduceAdd
+    ir::Instruction redInst;
+    redInst.opcode = ir::Opcode::VecReduceAdd;
+    redInst.result = 4;
+    redInst.op1 = 1;
+    redInst.type = ctx.getF32();
+    entry->instructions.push_back(redInst);
+
+    // Add them together
+    ir::Instruction addInst;
+    addInst.opcode = ir::Opcode::FAdd;
+    addInst.result = 5;
+    addInst.op1 = 3;
+    addInst.op2 = 4;
+    addInst.type = ctx.getF32();
+    entry->instructions.push_back(addInst);
+
+    ir::Instruction retInst;
+    retInst.opcode = ir::Opcode::Return;
+    retInst.op1 = 5;
+    retInst.type = ctx.getF32();
+    entry->instructions.push_back(retInst);
+
+    backend::LLVMCodeGen codegen(mod, diag);
+    std::ostringstream llvmIR;
+    EXPECT_TRUE(codegen.emitLLVMIR(llvmIR));
+
+    auto irStr = llvmIR.str();
+    EXPECT_TRUE(irStr.find("@llvm.vector.reduce.fadd.v4f32") != std::string::npos);
+    EXPECT_TRUE(irStr.find("fmul <4 x float>") != std::string::npos);
+
+    auto vRes = backend::LLVMVerifier::instance().verifyIR(irStr);
+    if (!vRes.ok) {
+        std::cerr << "Verification error in OpcodeVecReduceAddAndDot_Verification: " << vRes.errorMessage << "\n";
+        std::cerr << "Generated IR:\n" << irStr << "\n";
+    }
+    EXPECT_TRUE(vRes.ok);
+
+    return true;
+}
+
+TAMARIN_TEST(CHeaderGen, StructFixedArrayAndCAbiDiagnostics) {
+    SourceManager sm;
+    auto fileId = sm.addSource("header_test.tmn",
+        "struct SensorData {\n"
+        "    int id;\n"
+        "    float[4] readings;\n"
+        "    u8 flags;\n"
+        "};\n"
+        "struct BadSliceStruct {\n"
+        "    int[] items;\n"
+        "};\n"
+        "@export\n"
+        "int process_sensor(SensorData s) {\n"
+        "    return s.id;\n"
+        "}\n");
+    std::ostringstream errs;
+    DiagnosticEngine diag(sm, errs);
+    lexer::Lexer lex(sm, fileId, diag);
+    parser::Parser p(lex, diag);
+    auto prog = p.parseProgram();
+
+    sema::Sema sema(diag);
+    bool ok = sema.analyze(prog);
+    if (!ok) {
+        std::cerr << "Sema errors in CHeaderGen test: " << errs.str() << "\n";
+    }
+    EXPECT_TRUE(ok);
+
+    std::ostringstream headerOut;
+    backend::CHeaderGenerator headerGen(diag);
+    headerGen.generate(prog, sema.checker(), "sensor_api.h", headerOut);
+
+    // Diagnostics should report error about BadSliceStruct having a slice crossing C ABI
+    EXPECT_TRUE(diag.hasErrors());
+    EXPECT_TRUE(errs.str().find("slice type") != std::string::npos);
+    EXPECT_TRUE(errs.str().find("16-byte fat-pointer layout") != std::string::npos);
+
+    auto h = headerOut.str();
+    // Struct forward declaration
+    EXPECT_TRUE(h.find("typedef struct SensorData SensorData;") != std::string::npos);
+    // Fixed size array layout (not void*)
+    EXPECT_TRUE(h.find("float readings[4];") != std::string::npos);
+    EXPECT_TRUE(h.find("int32_t id;") != std::string::npos);
+    EXPECT_TRUE(h.find("uint8_t flags;") != std::string::npos);
+
+    return true;
+}
+
 
 
 

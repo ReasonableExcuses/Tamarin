@@ -25,6 +25,80 @@ TypeContext::TypeContext() {
     int16Ty_.vectorWidth = 16;
 }
 
+TypeContext::TypeContext(TypeContext&& other) noexcept
+    : voidTy_(std::move(other.voidTy_)),
+      boolTy_(std::move(other.boolTy_)),
+      i8Ty_(std::move(other.i8Ty_)),
+      i16Ty_(std::move(other.i16Ty_)),
+      i32Ty_(std::move(other.i32Ty_)),
+      i64Ty_(std::move(other.i64Ty_)),
+      i128Ty_(std::move(other.i128Ty_)),
+      isizeTy_(std::move(other.isizeTy_)),
+      u8Ty_(std::move(other.u8Ty_)),
+      u16Ty_(std::move(other.u16Ty_)),
+      u32Ty_(std::move(other.u32Ty_)),
+      u64Ty_(std::move(other.u64Ty_)),
+      u128Ty_(std::move(other.u128Ty_)),
+      usizeTy_(std::move(other.usizeTy_)),
+      f32Ty_(std::move(other.f32Ty_)),
+      f64Ty_(std::move(other.f64Ty_)),
+      float4Ty_(std::move(other.float4Ty_)),
+      float8Ty_(std::move(other.float8Ty_)),
+      int4Ty_(std::move(other.int4Ty_)),
+      int8Ty_(std::move(other.int8Ty_)),
+      int16Ty_(std::move(other.int16Ty_)),
+      arena_(std::move(other.arena_)),
+      recordMap_(std::move(other.recordMap_)),
+      enumMap_(std::move(other.enumMap_)),
+      refCache_(std::move(other.refCache_)),
+      viewCache_(std::move(other.viewCache_)),
+      handleCache_(std::move(other.handleCache_)),
+      taskCache_(std::move(other.taskCache_)) {
+    float4Ty_.elementType = &f32Ty_;
+    float8Ty_.elementType = &f32Ty_;
+    int4Ty_.elementType = &i32Ty_;
+    int8Ty_.elementType = &i32Ty_;
+    int16Ty_.elementType = &i32Ty_;
+}
+
+TypeContext& TypeContext::operator=(TypeContext&& other) noexcept {
+    if (this == &other) return *this;
+    voidTy_ = std::move(other.voidTy_);
+    boolTy_ = std::move(other.boolTy_);
+    i8Ty_ = std::move(other.i8Ty_);
+    i16Ty_ = std::move(other.i16Ty_);
+    i32Ty_ = std::move(other.i32Ty_);
+    i64Ty_ = std::move(other.i64Ty_);
+    i128Ty_ = std::move(other.i128Ty_);
+    isizeTy_ = std::move(other.isizeTy_);
+    u8Ty_ = std::move(other.u8Ty_);
+    u16Ty_ = std::move(other.u16Ty_);
+    u32Ty_ = std::move(other.u32Ty_);
+    u64Ty_ = std::move(other.u64Ty_);
+    u128Ty_ = std::move(other.u128Ty_);
+    usizeTy_ = std::move(other.usizeTy_);
+    f32Ty_ = std::move(other.f32Ty_);
+    f64Ty_ = std::move(other.f64Ty_);
+    float4Ty_ = std::move(other.float4Ty_);
+    float8Ty_ = std::move(other.float8Ty_);
+    int4Ty_ = std::move(other.int4Ty_);
+    int8Ty_ = std::move(other.int8Ty_);
+    int16Ty_ = std::move(other.int16Ty_);
+    arena_ = std::move(other.arena_);
+    recordMap_ = std::move(other.recordMap_);
+    enumMap_ = std::move(other.enumMap_);
+    refCache_ = std::move(other.refCache_);
+    viewCache_ = std::move(other.viewCache_);
+    handleCache_ = std::move(other.handleCache_);
+    taskCache_ = std::move(other.taskCache_);
+    float4Ty_.elementType = &f32Ty_;
+    float8Ty_.elementType = &f32Ty_;
+    int4Ty_.elementType = &i32Ty_;
+    int8Ty_.elementType = &i32Ty_;
+    int16Ty_.elementType = &i32Ty_;
+    return *this;
+}
+
 const Type* TypeContext::getSIMDVector(const Type* elem, uint32_t width) {
     if (elem == &f32Ty_) {
         if (width == 4) return &float4Ty_;
@@ -67,7 +141,9 @@ const Type* TypeContext::getArray(const Type* elem, int64_t size, bool isConst) 
 
 
 const Type* TypeContext::getArrayView(const Type* elem, bool isConst) {
-    uint64_t key = (reinterpret_cast<uintptr_t>(elem) << 1) | (isConst ? 1 : 0);
+    uint64_t ptrVal = reinterpret_cast<uintptr_t>(elem);
+    uint64_t key = ptrVal ^ ((isConst ? 0x9e3779b97f4a7c15ULL : 0) +
+                             (ptrVal << 6) + (ptrVal >> 2));
     auto it = viewCache_.find(key);
     if (it != viewCache_.end()) return it->second;
     for (auto& t : arena_) {
@@ -118,7 +194,10 @@ const Type* TypeContext::getTuple(std::vector<const Type*> elements) {
 
 
 const Type* TypeContext::getReference(const Type* elem, bool isConst, bool isPointer) {
-    uint64_t key = (reinterpret_cast<uintptr_t>(elem) << 2) | (isConst ? 1 : 0) | (isPointer ? 2 : 0);
+    uint64_t ptrVal = reinterpret_cast<uintptr_t>(elem);
+    uint64_t key = ptrVal ^ ((isConst ? 0x9e3779b97f4a7c15ULL : 0) +
+                             (isPointer ? 0xbf58476d1ce4e5b9ULL : 0) +
+                             (ptrVal << 6) + (ptrVal >> 2));
     auto it = refCache_.find(key);
     if (it != refCache_.end()) return it->second;
     for (auto& t : arena_) {
@@ -223,6 +302,7 @@ const Type* TypeContext::getStruct(std::string name, std::vector<StructFieldType
                 t->layoutDirective = layout;
                 computeRecordLayout(t.get());
             }
+            recordMap_[t->structName] = t.get();
             return t.get();
         }
     }
@@ -234,8 +314,10 @@ const Type* TypeContext::getStruct(std::string name, std::vector<StructFieldType
     t->layoutDirective = layout;
     computeRecordLayout(t.get());
 
+    auto* retPtr = t.get();
+    recordMap_[retPtr->structName] = retPtr;
     arena_.push_back(std::move(t));
-    return arena_.back().get();
+    return retPtr;
 }
 
 
@@ -310,29 +392,7 @@ std::vector<const Type*> TypeContext::getStructTypes() const {
     return getRecordTypes();
 }
 
-const Type* TypeContext::getEnum(std::string name, std::vector<EnumVariantType> variants, bool isNiche) {
-    auto it = enumMap_.find(name);
-    if (it != enumMap_.end()) {
-        auto* t = const_cast<Type*>(it->second);
-        if (!variants.empty() && t->enumVariants.empty()) {
-            t->enumVariants = std::move(variants);
-        }
-        return t;
-    }
-    for (const auto& t : arena_) {
-        if (t->kind == TypeKind::Enum && t->enumName == name) {
-            if (!variants.empty() && t->enumVariants.empty()) {
-                t->enumVariants = std::move(variants);
-            }
-            enumMap_[name] = t.get();
-            return t.get();
-        }
-    }
-    auto ty = std::make_unique<Type>();
-    ty->kind = TypeKind::Enum;
-    ty->enumName = name;
-    ty->isNicheOptimized = isNiche;
-
+static void computeEnumLayout(Type* ty, std::vector<EnumVariantType> variants) {
     size_t maxPayload = 0;
     size_t maxAlign = 1;
 
@@ -363,6 +423,31 @@ const Type* TypeContext::getEnum(std::string name, std::vector<EnumVariantType> 
     ty->enumVariants = std::move(variants);
     ty->maxPayloadSize = maxPayload;
     ty->maxPayloadAlignment = maxAlign;
+}
+
+const Type* TypeContext::getEnum(std::string name, std::vector<EnumVariantType> variants, bool isNiche) {
+    auto it = enumMap_.find(name);
+    if (it != enumMap_.end()) {
+        auto* t = const_cast<Type*>(it->second);
+        if (!variants.empty() && (t->enumVariants.empty() || t->maxPayloadSize == 0)) {
+            computeEnumLayout(t, std::move(variants));
+        }
+        return t;
+    }
+    for (const auto& t : arena_) {
+        if (t->kind == TypeKind::Enum && t->enumName == name) {
+            if (!variants.empty() && (t->enumVariants.empty() || t->maxPayloadSize == 0)) {
+                computeEnumLayout(t.get(), std::move(variants));
+            }
+            enumMap_[name] = t.get();
+            return t.get();
+        }
+    }
+    auto ty = std::make_unique<Type>();
+    ty->kind = TypeKind::Enum;
+    ty->enumName = name;
+    ty->isNicheOptimized = isNiche;
+    computeEnumLayout(ty.get(), std::move(variants));
 
     auto* ptr = ty.get();
     enumMap_[ptr->enumName] = ptr;

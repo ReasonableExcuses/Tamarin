@@ -143,6 +143,13 @@ public:
 
     /// Active AST Program for attaching monomorphized declarations
     void setActiveProgram(ast::Program* prog) { activeProgram_ = prog; }
+
+    void setConstValue(const std::string& name, int64_t val) { constValues_[name] = val; }
+    std::optional<int64_t> getConstValue(const std::string& name) const {
+        auto it = constValues_.find(name);
+        if (it != constValues_.end()) return it->second;
+        return std::nullopt;
+    }
     ast::Program* getActiveProgram() const noexcept { return activeProgram_; }
     void flushMonomorphizedDecls(ast::Program& prog);
 
@@ -323,6 +330,7 @@ private:
     std::unordered_map<std::string, ProvenanceSet> varProvenanceFallback_;
     std::unordered_map<std::string, std::unordered_map<std::string, ProvenanceSet>> varFieldProvenanceFallback_;
     std::unordered_map<std::string, FunctionBorrowSummary> functionSummaries_;
+    mutable std::unordered_map<std::string, int64_t> constValues_;
     std::string currentFunctionName_;
     const Type* currentFuncReturnType_ = nullptr;
     std::vector<MemoryReportEntry> memoryReport_;

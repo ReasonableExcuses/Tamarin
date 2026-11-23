@@ -526,6 +526,23 @@ int PackageManager::testPackage(const std::filesystem::path& manifestPath, bool 
     std::vector<std::string> allLinks;
     gatherLibDirsAndLinks(*manifest, res, hostTriple, allLibDirs, allLinks);
 
+#ifdef _WIN32
+    // Deploy .dll dependencies from native lib-dirs next to the test executables
+    for (const auto& d : allLibDirs) {
+        std::filesystem::path p(d);
+        if (!p.is_absolute()) p = rootDir / p;
+        if (std::filesystem::exists(p) && std::filesystem::is_directory(p)) {
+            for (const auto& entry : std::filesystem::directory_iterator(p)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".dll") {
+                    std::error_code ec;
+                    std::filesystem::copy_file(entry.path(), binTestsDir / entry.path().filename(),
+                        std::filesystem::copy_options::overwrite_existing, ec);
+                }
+            }
+        }
+    }
+#endif
+
     std::ostringstream linkFlags;
     std::unordered_set<std::string> seenDirs;
     for (const auto& d : allLibDirs) {
@@ -541,6 +558,7 @@ int PackageManager::testPackage(const std::filesystem::path& manifestPath, bool 
     }
 
     auto compiler = getCompilerExecutable();
+    auto profile = isRelease ? manifest->profileRelease : manifest->profileDev;
     int passed = 0;
     int failed = 0;
 
@@ -552,7 +570,19 @@ int PackageManager::testPackage(const std::filesystem::path& manifestPath, bool 
             std::ostringstream cmd;
             cmd << "\"" << compiler.string() << "\" build \"" << entry.path().string() << "\"";
             cmd << " -o \"" << outTestExe.string() << "\"";
-            cmd << (isRelease ? " -O3" : " -O0");
+            if (profile.optLevel > 0) {
+                cmd << " -O" << profile.optLevel;
+            } else {
+                cmd << (isRelease ? " -O3" : " -O0");
+            }
+            if (profile.fastMath) {
+                cmd << " --fast-math";
+            }
+            if (profile.crt == "static") {
+                cmd << " --static";
+            } else {
+                cmd << " --dynamic";
+            }
             for (const auto& inc : res.includePaths) {
                 cmd << " -I \"" << inc.string() << "\"";
             }

@@ -33,9 +33,20 @@ std::string CHeaderGenerator::toCType(const sema::Type* ty) {
         case sema::TypeKind::F64:      return "double";
         case sema::TypeKind::Struct:   return ty->structName;
         case sema::TypeKind::Class:    return ty->structName;
+        case sema::TypeKind::Array: {
+            std::string inner = toCType(ty->elementType);
+            return inner + "*";
+        }
+        case sema::TypeKind::Enum: {
+            return ty->enumName.empty() ? "int32_t" : ty->enumName;
+        }
         case sema::TypeKind::Reference: {
-            if (!ty->elementType || ty->elementType->isVoid()) return "void*";
-            if (ty->elementType->kind == sema::TypeKind::U8 && ty->isConstRef) return "const char*";
+            if (!ty->elementType || ty->elementType->isVoid()) {
+                return ty->isConstRef ? "const void*" : "void*";
+            }
+            if ((ty->elementType->kind == sema::TypeKind::U8 || ty->elementType->kind == sema::TypeKind::I8) && ty->isConstRef) {
+                return "const char*";
+            }
             std::string inner = toCType(ty->elementType);
             if (ty->isConstRef) {
                 return "const " + inner + "*";
@@ -105,6 +116,17 @@ bool CHeaderGenerator::generateDecls(const std::vector<const ast::Decl*>& decls,
     os << "extern \"C\" {\n";
     os << "#endif\n\n";
 
+    // 0. Forward declare all structs
+    for (const auto* decl : decls) {
+        if (!decl) continue;
+        if (decl->kind == ast::DeclKind::Struct) {
+            const auto& sd = static_cast<const ast::StructDecl&>(*decl);
+            if (!sd.typeParams.empty()) continue; // Skip unmonomorphized generics
+            os << "typedef struct " << sd.name << " " << sd.name << ";\n";
+        }
+    }
+    os << "\n";
+
     // 1. Emit struct declarations
     bool hasStructs = false;
     for (const auto* decl : decls) {
@@ -116,15 +138,27 @@ bool CHeaderGenerator::generateDecls(const std::vector<const ast::Decl*>& decls,
             hasStructs = true;
             os << "typedef struct " << sd.name << " {\n";
             for (const auto& field : sd.fields) {
-                if (field.type) {
-                    auto fTy = checker.resolveType(*field.type);
-                    if (fTy && fTy->isFunction()) {
+                const sema::Type* fTy = field.type ? checker.resolveType(*field.type) : nullptr;
+                if (fTy) {
+                    if (fTy->isFunction()) {
                         diag_.report(field.loc, Severity::Error,
                                      "closure type '" + fTy->toString() + "' has a 16-byte fat-pointer layout and cannot cross C ABI boundaries directly");
+                    } else if (fTy->isArrayView()) {
+                        diag_.report(field.loc, Severity::Error,
+                                     "slice type '" + fTy->toString() + "' has a 16-byte fat-pointer layout and cannot cross C ABI boundaries directly; use raw pointer (*T) instead");
+                    } else if (fTy->isTask()) {
+                        diag_.report(field.loc, Severity::Error,
+                                     "task type '" + fTy->toString() + "' cannot cross C ABI boundaries directly");
                     }
                 }
-                std::string fType = field.type ? toCType(*field.type, checker) : "void*";
-                os << "    " << fType << " " << field.name << ";\n";
+                if (fTy && fTy->isArray()) {
+                    std::string elemType = toCType(fTy->elementType);
+                    int64_t arrSize = fTy->arraySize >= 0 ? fTy->arraySize : 0;
+                    os << "    " << elemType << " " << field.name << "[" << arrSize << "];\n";
+                } else {
+                    std::string fType = fTy ? toCType(fTy) : (field.type ? toCType(*field.type, checker) : "void*");
+                    os << "    " << fType << " " << field.name << ";\n";
+                }
             }
             os << "} " << sd.name << ";\n\n";
         }

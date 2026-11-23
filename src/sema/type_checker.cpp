@@ -163,9 +163,11 @@ const Type* TypeChecker::instantiateGenericStruct(
 
     auto specializedStruct = Monomorphizer::monomorphizeStruct(tmpl, mangledName, subst);
 
+    std::string baseClassName = specializedStruct->baseClasses.empty() ? "" : specializedStruct->baseClasses[0].name;
+
     // Forward declare the record in TypeContext
     tc_.getClass(mangledName, {}, static_cast<int>(specializedStruct->layout),
-                 "", specializedStruct->isClass, specializedStruct->isInterface);
+                 baseClassName, specializedStruct->isClass, specializedStruct->isInterface);
 
     // Resolve field types
     std::vector<StructFieldType> fieldTypes;
@@ -183,9 +185,15 @@ const Type* TypeChecker::instantiateGenericStruct(
     // Register full struct in TypeContext
     auto recTy = tc_.getClass(mangledName, std::move(fieldTypes),
                               static_cast<int>(specializedStruct->layout),
-                              "", specializedStruct->isClass, specializedStruct->isInterface);
+                              baseClassName, specializedStruct->isClass, specializedStruct->isInterface);
 
     auto mutRecTy = const_cast<Type*>(recTy);
+    if (!baseClassName.empty()) {
+        mutRecTy->baseClass = tc_.findRecord(baseClassName);
+        if (!mutRecTy->baseClass) {
+            mutRecTy->baseClass = resolveNamedType(baseClassName, specializedStruct->baseClasses[0].loc);
+        }
+    }
 
     // Register methods
     for (auto& m : specializedStruct->methods) {
@@ -205,6 +213,10 @@ const Type* TypeChecker::instantiateGenericStruct(
             .paramTypes = std::move(paramTypes),
             .paramNames = std::move(paramNames),
             .isConst = m.isConst,
+            .isVirtual = m.isVirtual,
+            .isOverride = m.isOverride,
+            .isPureVirtual = m.isPureVirtual,
+            .isAsync = m.isAsync,
             .access = static_cast<int>(m.access),
         });
     }
@@ -695,6 +707,45 @@ TypeChecker::ConstEvalResult TypeChecker::evalIntConstExpr(const ast::Expr& expr
             auto& lit = static_cast<const BoolLiteralExpr&>(expr);
             res.isConst = true;
             res.value = lit.value ? 1 : 0;
+            return res;
+        }
+        case ExprKind::Cast: {
+            auto& c = static_cast<const CastExpr&>(expr);
+            auto opRes = evalIntConstExpr(*c.operand);
+            if (!opRes.isConst) return res;
+            if (opRes.overflow || opRes.divByZero) return opRes;
+            res.isConst = true;
+            res.value = opRes.value;
+            return res;
+        }
+        case ExprKind::Identifier: {
+            auto& id = static_cast<const IdentifierExpr&>(expr);
+            auto val = getConstValue(id.name);
+            if (val.has_value()) {
+                res.isConst = true;
+                res.value = *val;
+                return res;
+            }
+            if (currentModuleScope_) {
+                auto it = currentModuleScope_->symbols.find(id.name);
+                if (it != currentModuleScope_->symbols.end() && it->second.isConst) {
+                    auto mVal = getConstValue(it->second.name);
+                    if (mVal.has_value()) {
+                        res.isConst = true;
+                        res.value = *mVal;
+                        return res;
+                    }
+                }
+            }
+            auto sym = syms_.lookup(id.name);
+            if (sym && sym->isConst) {
+                auto sVal = getConstValue(sym->name);
+                if (sVal.has_value()) {
+                    res.isConst = true;
+                    res.value = *sVal;
+                    return res;
+                }
+            }
             return res;
         }
         case ExprKind::Ternary: {
@@ -1424,6 +1475,12 @@ const Type* TypeChecker::resolveNamedType(const std::string& name, SourceLocatio
     auto eTy = tc_.findEnum(name);
     if (eTy) return eTy;
 
+    if (name == "float4") return tc_.getFloat4();
+    if (name == "float8") return tc_.getFloat8();
+    if (name == "int4") return tc_.getInt4();
+    if (name == "int8") return tc_.getInt8();
+    if (name == "int16") return tc_.getInt16();
+
     diag_.report(loc, Severity::Error, "unresolved type: " + name);
     return tc_.getI32();
 }
@@ -1523,27 +1580,26 @@ const Type* TypeChecker::resolveType(const ast::TypeNode& node) {
             auto elemTy = resolveType(*at.elementType);
             if (at.sizeExpr) {
                 // Fixed size array
-                if (at.sizeExpr->kind == ExprKind::IntLiteral) {
-                    auto size = static_cast<const IntLiteralExpr*>(at.sizeExpr.get())->value;
-                    if (size < 0) {
-                        diag_.report(at.sizeExpr->loc, Severity::Error,
-                                     "array size cannot be negative: " + std::to_string(size));
-                        return tc_.getArray(elemTy, 0, at.isConst);
-                    }
-                    return tc_.getArray(elemTy, size, at.isConst);
-                } else if (at.sizeExpr->kind == ExprKind::Unary &&
-                           static_cast<const UnaryExpr*>(at.sizeExpr.get())->op == UnaryOp::Neg &&
-                           static_cast<const UnaryExpr*>(at.sizeExpr.get())->operand->kind == ExprKind::IntLiteral) {
-                    auto val = static_cast<const IntLiteralExpr*>(static_cast<const UnaryExpr*>(at.sizeExpr.get())->operand.get())->value;
-                    int64_t size = -val;
-                    diag_.report(at.sizeExpr->loc, Severity::Error,
-                                 "array size cannot be negative: " + std::to_string(size));
+                auto eval = evalIntConstExpr(*at.sizeExpr);
+                if (eval.divByZero) {
+                    diag_.report(at.sizeExpr->loc, Severity::Error, "division by zero in array size expression");
                     return tc_.getArray(elemTy, 0, at.isConst);
-                } else {
+                }
+                if (eval.overflow) {
+                    diag_.report(at.sizeExpr->loc, Severity::Error, "integer overflow in array size expression");
+                    return tc_.getArray(elemTy, 0, at.isConst);
+                }
+                if (!eval.isConst) {
                     diag_.report(at.sizeExpr->loc, Severity::Error,
                                  "variable-length arrays are not supported; array size must be a constant integer expression");
                     return tc_.getArray(elemTy, 0, at.isConst);
                 }
+                if (eval.value < 0) {
+                    diag_.report(at.sizeExpr->loc, Severity::Error,
+                                 "array size cannot be negative: " + std::to_string(eval.value));
+                    return tc_.getArray(elemTy, 0, at.isConst);
+                }
+                return tc_.getArray(elemTy, eval.value, at.isConst);
             }
             // Unsized = view
             return tc_.getArrayView(elemTy, at.isConst);
@@ -2105,11 +2161,14 @@ const Type* TypeChecker::checkUnary(UnaryExpr& expr) {
         case UnaryOp::PreInc:
         case UnaryOp::PreDec:
         case UnaryOp::PostInc:
-        case UnaryOp::PostDec:
+        case UnaryOp::PostDec: {
             if (!opTy->isInteger()) {
                 diag_.report(expr.loc, Severity::Error, "increment/decrement requires integer");
             }
+            bool isLVal = false;
+            bool isConstVal = false;
             if (expr.operand->kind == ExprKind::Identifier) {
+                isLVal = true;
                 auto& id = static_cast<IdentifierExpr&>(*expr.operand);
                 if (parallelLoopScopeDepth_ > 0 && !parallelLoopInductionVars_.count(id.name) && !activeReductionVars_.count(id.name)) {
                     size_t symDepth = syms_.lookupScopeDepth(id.name);
@@ -2121,6 +2180,7 @@ const Type* TypeChecker::checkUnary(UnaryExpr& expr) {
                 }
                 auto sym = syms_.lookup(id.name);
                 if (sym && sym->isConst) {
+                    isConstVal = true;
                     diag_.report(expr.loc, Severity::Error, "cannot modify const variable '" + id.name + "'");
                 }
                 if (isMoved(id.name)) {
@@ -2136,9 +2196,101 @@ const Type* TypeChecker::checkUnary(UnaryExpr& expr) {
                         }
                     }
                 }
+            } else if (expr.operand->kind == ExprKind::Field) {
+                isLVal = true;
+                auto& fe = static_cast<FieldExpr&>(*expr.operand);
+                auto baseTy = getExprType(fe.object.get());
+                if (baseTy && baseTy->isReference()) baseTy = baseTy->elementType;
+                if (baseTy && baseTy->isRecord()) {
+                    auto f = baseTy->findField(fe.fieldName);
+                    if (f && f->isConst) isConstVal = true;
+                }
+                if (fe.object->kind == ExprKind::Identifier) {
+                    auto sym = syms_.lookup(static_cast<IdentifierExpr&>(*fe.object).name);
+                    if (sym && sym->isConst) isConstVal = true;
+                }
+                if (isConstVal) {
+                    diag_.report(expr.loc, Severity::Error, "cannot modify const field '" + fe.fieldName + "'");
+                }
+            } else if (expr.operand->kind == ExprKind::Index) {
+                isLVal = true;
+                auto& idx = static_cast<IndexExpr&>(*expr.operand);
+                auto arrTy = getExprType(idx.array.get());
+                if (arrTy && arrTy->isConst) {
+                    isConstVal = true;
+                    diag_.report(expr.loc, Severity::Error, "cannot modify element of const array");
+                }
+                if (idx.array->kind == ExprKind::Identifier) {
+                    auto sym = syms_.lookup(static_cast<IdentifierExpr&>(*idx.array).name);
+                    if (sym && sym->isConst) {
+                        isConstVal = true;
+                        diag_.report(expr.loc, Severity::Error, "cannot modify element of const array '" + sym->name + "'");
+                    }
+                }
+            } else if (expr.operand->kind == ExprKind::Unary && static_cast<UnaryExpr&>(*expr.operand).op == UnaryOp::Deref) {
+                isLVal = true;
+                auto ptrTy = getExprType(static_cast<UnaryExpr&>(*expr.operand).operand.get());
+                if (ptrTy && ptrTy->isReference() && ptrTy->isConstRef) {
+                    isConstVal = true;
+                    diag_.report(expr.loc, Severity::Error, "cannot modify through pointer to const");
+                }
+            } else if (expr.operand->kind == ExprKind::TupleIndex) {
+                isLVal = true;
+                auto& ti = static_cast<TupleIndexExpr&>(*expr.operand);
+                auto tupTy = getExprType(ti.tuple.get());
+                if (tupTy && tupTy->isConst) {
+                    isConstVal = true;
+                    diag_.report(expr.loc, Severity::Error, "cannot modify element of const tuple");
+                }
+                if (ti.tuple->kind == ExprKind::Identifier) {
+                    auto sym = syms_.lookup(static_cast<IdentifierExpr&>(*ti.tuple).name);
+                    if (sym && sym->isConst) {
+                        isConstVal = true;
+                        diag_.report(expr.loc, Severity::Error, "cannot modify element of const tuple '" + sym->name + "'");
+                    }
+                }
+            } else if (opTy && opTy->isReference()) {
+                isLVal = true;
+                if (opTy->isConstRef) {
+                    isConstVal = true;
+                    diag_.report(expr.loc, Severity::Error, "cannot modify const reference");
+                }
+            }
+            if (!isLVal) {
+                diag_.report(expr.loc, Severity::Error, "expression is not incrementable (must be a mutable lvalue)");
             }
             return opTy;
+        }
         case UnaryOp::AddrOf: {
+            bool isLVal = (expr.operand->kind == ExprKind::Identifier ||
+                           expr.operand->kind == ExprKind::Field ||
+                           expr.operand->kind == ExprKind::Index ||
+                           (expr.operand->kind == ExprKind::Unary && static_cast<UnaryExpr&>(*expr.operand).op == UnaryOp::Deref) ||
+                           expr.operand->kind == ExprKind::TupleIndex ||
+                           (opTy && opTy->isReference()));
+            if (!isLVal) {
+                diag_.report(expr.loc, Severity::Error, "cannot take address of rvalue");
+            }
+            bool isOpConst = opTy->isConst;
+            if (expr.operand->kind == ExprKind::Identifier) {
+                auto sym = syms_.lookup(static_cast<IdentifierExpr&>(*expr.operand).name);
+                if (sym && sym->isConst) isOpConst = true;
+            } else if (expr.operand->kind == ExprKind::Field) {
+                auto& fe = static_cast<FieldExpr&>(*expr.operand);
+                auto baseTy = getExprType(fe.object.get());
+                if (baseTy && baseTy->isReference()) baseTy = baseTy->elementType;
+                if (baseTy && baseTy->isRecord()) {
+                    auto f = baseTy->findField(fe.fieldName);
+                    if (f && f->isConst) isOpConst = true;
+                }
+                if (fe.object->kind == ExprKind::Identifier) {
+                    auto sym = syms_.lookup(static_cast<IdentifierExpr&>(*fe.object).name);
+                    if (sym && sym->isConst) isOpConst = true;
+                }
+            } else if (expr.operand->kind == ExprKind::Index) {
+                auto arrTy = getExprType(static_cast<IndexExpr&>(*expr.operand).array.get());
+                if (arrTy && arrTy->isConst) isOpConst = true;
+            }
             if (!activeLambdaStack_.empty()) {
                 auto [tStr, rTarget] = extractBorrowTarget(expr.operand.get());
                 if (!rTarget.empty()) {
@@ -2208,7 +2360,7 @@ const Type* TypeChecker::checkUnary(UnaryExpr& expr) {
                     setExprRegionProvenance(&expr, opProv.primaryRegionId());
                 }
             }
-            return tc_.getReference(opTy, false, /*isPointer=*/true);
+            return tc_.getReference(opTy, isOpConst, /*isPointer=*/true);
         }
         case UnaryOp::Deref: {
             ProvenanceSet opProv = getExprProvenance(expr.operand.get());
@@ -2421,10 +2573,35 @@ const Type* TypeChecker::checkAssign(AssignExpr& expr) {
             }
             setExprType(expr.target.get(), targetTy);
         } else {
+            diag_.report(expr.loc, Severity::Error, "expression is not assignable (must be a mutable lvalue)");
             targetTy = checkExpr(*expr.target);
         }
+    } else if (expr.target->kind == ExprKind::TupleIndex) {
+        auto& ti = static_cast<TupleIndexExpr&>(*expr.target);
+        auto tupTy = checkExpr(*ti.tuple);
+        if (tupTy && tupTy->isConst) {
+            diag_.report(expr.loc, Severity::Error, "cannot modify element of const tuple");
+        }
+        if (ti.tuple->kind == ExprKind::Identifier) {
+            auto& id = static_cast<IdentifierExpr&>(*ti.tuple);
+            auto sym = syms_.lookup(id.name);
+            if (sym && sym->isConst) {
+                diag_.report(expr.loc, Severity::Error, "cannot modify element of const tuple '" + id.name + "'");
+            }
+        }
+        targetTy = checkTupleIndex(ti);
+        setExprType(expr.target.get(), targetTy);
     } else {
         targetTy = checkExpr(*expr.target);
+        if (targetTy && targetTy->isReference()) {
+            if (targetTy->isConstRef) {
+                diag_.report(expr.loc, Severity::Error, "cannot assign to const reference");
+            }
+            targetTy = targetTy->elementType;
+            setExprType(expr.target.get(), targetTy);
+        } else {
+            diag_.report(expr.loc, Severity::Error, "expression is not assignable (must be a mutable lvalue)");
+        }
     }
 
     auto valueTy = checkExpr(*expr.value);
@@ -4369,7 +4546,9 @@ const Type* TypeChecker::checkCompoundInit(CompoundInitExpr& expr) {
             if (!fProv.empty()) {
                 aggregateProv.merge(fProv);
             }
-            if (valTy && *valTy != *sft->type && !valTy->isImplicitlyConvertibleTo(*sft->type)) {
+            bool isNullToPtr = sft->type->isPointer() && f.value->kind == ExprKind::IntLiteral &&
+                               static_cast<const IntLiteralExpr*>(f.value.get())->value == 0;
+            if (valTy && *valTy != *sft->type && !isNullToPtr && !valTy->isImplicitlyConvertibleTo(*sft->type)) {
                 diag_.report(f.loc, Severity::Error,
                              "type mismatch initializing field '" + sft->name + "': expected " +
                              sft->type->toString() + ", got " + valTy->toString());
@@ -4822,7 +5001,10 @@ const Type* TypeChecker::checkConstruct(ConstructExpr& expr) {
             bool typesMatch = true;
             for (size_t i = 0; i < expr.args.size(); ++i) {
                 auto argTy = checkExpr(*expr.args[i]);
-                if (argTy && !argTy->isImplicitlyConvertibleTo(*ctor.paramTypes[i])) {
+                bool isNullToPtr = ctor.paramTypes[i]->isPointer() &&
+                                   expr.args[i]->kind == ExprKind::IntLiteral &&
+                                   static_cast<const IntLiteralExpr*>(expr.args[i].get())->value == 0;
+                if (argTy && !isNullToPtr && !argTy->isImplicitlyConvertibleTo(*ctor.paramTypes[i])) {
                     typesMatch = false;
                     break;
                 }
@@ -5025,8 +5207,17 @@ const Type* TypeChecker::checkTernary(ast::TernaryExpr& expr) {
     if (!thenTy || !elseTy) return tc_.getI32();
 
     const Type* resultTy = nullptr;
+    bool thenIsNull = thenTy->isInteger() && expr.thenExpr->kind == ExprKind::IntLiteral &&
+                      static_cast<const IntLiteralExpr*>(expr.thenExpr.get())->value == 0;
+    bool elseIsNull = elseTy->isInteger() && expr.elseExpr->kind == ExprKind::IntLiteral &&
+                      static_cast<const IntLiteralExpr*>(expr.elseExpr.get())->value == 0;
+
     if (*thenTy == *elseTy) {
         resultTy = thenTy;
+    } else if (thenTy->isPointer() && elseIsNull) {
+        resultTy = thenTy;
+    } else if (elseTy->isPointer() && thenIsNull) {
+        resultTy = elseTy;
     } else if (thenTy->isNumeric() && elseTy->isNumeric()) {
         resultTy = tc_.getCommonArithmeticType(thenTy, elseTy);
     } else if (thenTy->isImplicitlyConvertibleTo(*elseTy)) {
@@ -5677,6 +5868,12 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
             if (!movedStack_.empty()) {
                 movedStack_.back()[v.name] = false;
             }
+            if (v.isConst && v.initializer) {
+                auto eval = evalIntConstExpr(*v.initializer);
+                if (eval.isConst && !eval.overflow && !eval.divByZero) {
+                    setConstValue(v.name, eval.value);
+                }
+            }
 
             uint64_t curRid = currentRegionId();
             if (curRid > 0) {
@@ -5816,6 +6013,15 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
             ProvenanceSet initProv = getExprProvenance(ds.initializer.get());
             for (size_t i = 0; i < ds.names.size(); ++i) {
                 const auto* elemTy = initTy->tupleElements[i];
+                if (i < ds.types.size() && ds.types[i]) {
+                    auto explicitTy = resolveType(*ds.types[i]);
+                    if (explicitTy && elemTy && !elemTy->isImplicitlyConvertibleTo(*explicitTy)) {
+                        diag_.report(ds.loc, Severity::Error,
+                                     "type mismatch in destructuring for '" + ds.names[i] +
+                                     "': expected " + explicitTy->toString() + ", got " + elemTy->toString());
+                    }
+                    if (explicitTy) elemTy = explicitTy;
+                }
                 destructureTypes_[&ds].push_back(elemTy);
                 Symbol sym{
                     .name        = ds.names[i],
@@ -5948,11 +6154,16 @@ void TypeChecker::checkStmt(ast::Stmt& stmt, const Type* currentFuncReturnType) 
                 if (currentFuncReturnType && currentFuncReturnType->isVoid()) {
                     diag_.report(r.loc, Severity::Error,
                                  "void function should not return a value");
-                } else if (valTy && currentFuncReturnType && !valTy->isImplicitlyConvertibleTo(*currentFuncReturnType)) {
-                    diag_.report(r.loc, Severity::Error,
-                                 "return type mismatch: expected " +
-                                 currentFuncReturnType->toString() + ", got " +
-                                 valTy->toString());
+                } else if (valTy && currentFuncReturnType) {
+                    bool isNullToPtr = currentFuncReturnType->isPointer() &&
+                                       r.value->kind == ExprKind::IntLiteral &&
+                                       static_cast<const IntLiteralExpr*>(r.value.get())->value == 0;
+                    if (!isNullToPtr && !valTy->isImplicitlyConvertibleTo(*currentFuncReturnType)) {
+                        diag_.report(r.loc, Severity::Error,
+                                     "return type mismatch: expected " +
+                                     currentFuncReturnType->toString() + ", got " +
+                                     valTy->toString());
+                    }
                 }
             } else {
                 if (currentFuncReturnType && !currentFuncReturnType->isVoid()) {

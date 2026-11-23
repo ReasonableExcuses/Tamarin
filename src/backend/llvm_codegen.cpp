@@ -139,6 +139,18 @@ LLVMCodeGen::LLVMCodeGen(const ir::IRModule& module, DiagnosticEngine& diag, std
 #else
             clangPath_ = "clang";
 #endif
+#ifdef _WIN32
+            if (clangPath_ == "clang") {
+                const char* progFiles = std::getenv("ProgramFiles");
+                if (progFiles) {
+                    auto p = std::filesystem::path(progFiles) / "LLVM" / "bin" / "clang.exe";
+                    std::error_code ec;
+                    if (std::filesystem::exists(p, ec)) {
+                        clangPath_ = p.string();
+                    }
+                }
+            }
+#endif
         }
     }
     const char* fm = std::getenv("TAMARIN_FAST_MATH");
@@ -328,13 +340,20 @@ void LLVMCodeGen::emitHeader(std::ostream& os) {
 
     std::unordered_set<std::string> emitted;
     std::function<void(const sema::Type*)> emitStruct = [&](const sema::Type* ty) {
-        if (!ty || !ty->isRecord() || emitted.count(ty->structName)) return;
+        if (!ty) return;
+        if (ty->isArray() || ty->isArrayView() || ty->isReference()) {
+            emitStruct(ty->elementType);
+            return;
+        }
+        if (ty->isTuple()) {
+            for (const auto* el : ty->tupleElements) emitStruct(el);
+            return;
+        }
+        if (!ty->isRecord() || emitted.count(ty->structName)) return;
         emitted.insert(ty->structName);
 
         for (const auto& f : ty->structFields) {
-            if (f.type && f.type->isRecord()) {
-                emitStruct(f.type);
-            }
+            emitStruct(f.type);
         }
 
         os << "%struct." << ty->structName << " = type { ";
@@ -479,8 +498,14 @@ void LLVMCodeGen::emitHeader(std::ostream& os) {
         } else {
             std::string tyStr = g.type ? llvmType(g.type) : "i32";
             std::string valStr = std::to_string(g.initialValue);
-            if (g.type && g.type->isFloat()) {
-                valStr = "0.0";
+            if (g.type) {
+                if (g.type->isArrayView() || g.type->isRecord() || g.type->isTuple() || g.type->isSIMDVector()) {
+                    valStr = "zeroinitializer";
+                } else if (g.type->isPointer() || g.type->isReference() || g.type->isHandle() || g.type->isTask()) {
+                    valStr = "null";
+                } else if (g.type->isFloat()) {
+                    valStr = "0.0";
+                }
             }
             size_t align = 8;
             if (g.type) {
@@ -564,9 +589,16 @@ void LLVMCodeGen::emitRuntimeHelpers(std::ostream& os) {
     os << "declare double @llvm.sqrt.f64(double)\n";
     os << "declare float @llvm.vector.reduce.fadd.v4f32(float, <4 x float>)\n";
     os << "declare float @llvm.vector.reduce.fadd.v8f32(float, <8 x float>)\n";
+    os << "declare float @llvm.vector.reduce.fadd.v16f32(float, <16 x float>)\n";
+    os << "declare double @llvm.vector.reduce.fadd.v2f64(double, <2 x double>)\n";
+    os << "declare double @llvm.vector.reduce.fadd.v4f64(double, <4 x double>)\n";
+    os << "declare double @llvm.vector.reduce.fadd.v8f64(double, <8 x double>)\n";
     os << "declare i32 @llvm.vector.reduce.add.v4i32(<4 x i32>)\n";
     os << "declare i32 @llvm.vector.reduce.add.v8i32(<8 x i32>)\n";
-    os << "declare i32 @llvm.vector.reduce.add.v16i32(<16 x i32>)\n\n";
+    os << "declare i32 @llvm.vector.reduce.add.v16i32(<16 x i32>)\n";
+    os << "declare i64 @llvm.vector.reduce.add.v2i64(<2 x i64>)\n";
+    os << "declare i64 @llvm.vector.reduce.add.v4i64(<4 x i64>)\n";
+    os << "declare i64 @llvm.vector.reduce.add.v8i64(<8 x i64>)\n\n";
 
     // --- Tamarin Generational Slab Runtime API ---
     os << "declare void @__tamarin_slab_init(ptr, i64, i64, i64)\n";
@@ -2181,23 +2213,46 @@ void LLVMCodeGen::emitFunction(const ir::IRFunction& fn, std::ostream& os) {
             if (inst.result != ir::InvalidValue && inst.type) {
                 valueTypes_[inst.result] = inst.type;
             }
-            if (inst.opcode == ir::Opcode::Alloca ||
-                inst.opcode == ir::Opcode::ArrayAlloc ||
-                inst.opcode == ir::Opcode::GetArrayElemPtr ||
-                inst.opcode == ir::Opcode::GetFieldPtr ||
-                inst.opcode == ir::Opcode::GetVTablePtr ||
-                inst.opcode == ir::Opcode::SoAArrayAlloc ||
-                inst.opcode == ir::Opcode::SoAGetFieldPtr ||
-                inst.opcode == ir::Opcode::RegionAlloc ||
-                inst.opcode == ir::Opcode::RegionReserveDestructor ||
-                inst.opcode == ir::Opcode::VariantPayloadPtr ||
-                inst.opcode == ir::Opcode::SlabGet ||
-                inst.opcode == ir::Opcode::TaskScopeBegin ||
-                inst.opcode == ir::Opcode::AsyncTaskCreate ||
-                inst.opcode == ir::Opcode::AsyncTaskAwait ||
-                ((inst.opcode == ir::Opcode::Load || inst.opcode == ir::Opcode::ArrayLoad || inst.opcode == ir::Opcode::Cast) && inst.type && inst.type->isReference())) {
-                if (inst.result != ir::InvalidValue) {
+        }
+    }
+    bool ptrSetChanged = true;
+    while (ptrSetChanged) {
+        ptrSetChanged = false;
+        for (auto& block : fn.blocks) {
+            for (auto& inst : block->instructions) {
+                if (inst.result == ir::InvalidValue || isPointerValue_.count(inst.result)) continue;
+                bool isPtr = (inst.type && (inst.type->isReference() || inst.type->isPointer()));
+                if (!isPtr) {
+                    if (inst.opcode == ir::Opcode::Alloca ||
+                        inst.opcode == ir::Opcode::ArrayAlloc ||
+                        inst.opcode == ir::Opcode::GetArrayElemPtr ||
+                        inst.opcode == ir::Opcode::GetFieldPtr ||
+                        inst.opcode == ir::Opcode::GetVTablePtr ||
+                        inst.opcode == ir::Opcode::GlobalPtr ||
+                        inst.opcode == ir::Opcode::SoAArrayAlloc ||
+                        inst.opcode == ir::Opcode::SoAGetFieldPtr ||
+                        inst.opcode == ir::Opcode::RegionAlloc ||
+                        inst.opcode == ir::Opcode::RegionReserveDestructor ||
+                        inst.opcode == ir::Opcode::VariantPayloadPtr ||
+                        inst.opcode == ir::Opcode::SlabGet ||
+                        inst.opcode == ir::Opcode::TaskScopeBegin ||
+                        inst.opcode == ir::Opcode::AsyncTaskCreate ||
+                        inst.opcode == ir::Opcode::AsyncTaskAwait) {
+                        isPtr = true;
+                    } else if (inst.opcode == ir::Opcode::Phi) {
+                        isPtr = (inst.type && (inst.type->isReference() || inst.type->isPointer()));
+                        if (!isPtr && inst.type == nullptr) {
+                            if (isPointerValue_.count(inst.op1) || isPointerValue_.count(inst.op2)) {
+                                isPtr = true;
+                            }
+                        }
+                    } else if (inst.opcode == ir::Opcode::Cast || inst.opcode == ir::Opcode::Load || inst.opcode == ir::Opcode::ArrayLoad) {
+                        isPtr = (inst.type && (inst.type->isReference() || inst.type->isPointer()));
+                    }
+                }
+                if (isPtr) {
                     isPointerValue_.insert(inst.result);
+                    ptrSetChanged = true;
                 }
             }
         }
@@ -2245,8 +2300,16 @@ void LLVMCodeGen::emitFunction(const ir::IRFunction& fn, std::ostream& os) {
                 }
             }
         }
+        // Emit PHI instructions first to satisfy LLVM SSA requirement
         for (auto& inst : block->instructions) {
-            emitInstruction(inst, os);
+            if (inst.opcode == ir::Opcode::Phi) {
+                emitInstruction(inst, os);
+            }
+        }
+        for (auto& inst : block->instructions) {
+            if (inst.opcode != ir::Opcode::Phi) {
+                emitInstruction(inst, os);
+            }
         }
     }
 
@@ -2263,15 +2326,18 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
         inst.opcode == ir::Opcode::GetArrayElemPtr ||
         inst.opcode == ir::Opcode::GetFieldPtr ||
         inst.opcode == ir::Opcode::GetVTablePtr ||
+        inst.opcode == ir::Opcode::GlobalPtr ||
         inst.opcode == ir::Opcode::SoAArrayAlloc ||
         inst.opcode == ir::Opcode::SoAGetFieldPtr ||
         inst.opcode == ir::Opcode::RegionAlloc ||
         inst.opcode == ir::Opcode::RegionReserveDestructor ||
+        inst.opcode == ir::Opcode::VariantPayloadPtr ||
         inst.opcode == ir::Opcode::SlabGet ||
         inst.opcode == ir::Opcode::TaskScopeBegin ||
         inst.opcode == ir::Opcode::AsyncTaskCreate ||
         inst.opcode == ir::Opcode::AsyncTaskAwait ||
-        ((inst.opcode == ir::Opcode::Load || inst.opcode == ir::Opcode::ArrayLoad || inst.opcode == ir::Opcode::Cast) && inst.type && inst.type->isReference())) {
+        (inst.opcode == ir::Opcode::Phi && ((inst.type && (inst.type->isReference() || inst.type->isPointer())) || (!inst.type && (isPointerValue_.count(inst.op1) || isPointerValue_.count(inst.op2))))) ||
+        ((inst.opcode == ir::Opcode::Load || inst.opcode == ir::Opcode::ArrayLoad || inst.opcode == ir::Opcode::Cast) && (inst.type && (inst.type->isReference() || inst.type->isPointer())))) {
         if (inst.result != ir::InvalidValue) {
             isPointerValue_.insert(inst.result);
         }
@@ -2537,13 +2603,18 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
 
         case ir::Opcode::Store: {
             auto valTy = getValueType(inst.op2);
+            if (!valTy) valTy = inst.type;
             std::string tyStr = "i32";
-            if (isPointerValue_.count(inst.op2) || (valTy && (valTy->isReference() || valTy->isArray()))) {
+            bool isValPtr = (valTy && (valTy->isReference() || valTy->isArray() || valTy->isPointer())) ||
+                            isPointerValue_.count(inst.op2);
+            if (isValPtr) {
                 tyStr = "ptr";
             } else if (valTy) {
                 tyStr = llvmType(valTy);
             }
-            os << "  store " << tyStr << " " << formatOperand(inst.op2, valTy)
+            std::string valStr = formatOperand(inst.op2, valTy);
+            if (isValPtr && (valStr == "0" || valStr.empty())) valStr = "null";
+            os << "  store " << tyStr << " " << valStr
                << ", ptr %v" << inst.op1 << "\n";
             break;
         }
@@ -2647,16 +2718,18 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
 
         case ir::Opcode::Return:
             if (inst.op1 != ir::InvalidValue) {
-                auto retTy = getValueType(inst.op1);
+                const sema::Type* fnRetTy = (currentFn_ && currentFn_->returnType) ? currentFn_->returnType : getValueType(inst.op1);
                 std::string tyStr = "i32";
-                if (isPointerValue_.count(inst.op1) ||
-                    (currentFn_ && currentFn_->returnType && (currentFn_->returnType->isPointer() || currentFn_->returnType->isRef())) ||
-                    (retTy && (retTy->isPointer() || retTy->isRef()))) {
+                bool isRetPtr = (fnRetTy && (fnRetTy->isPointer() || fnRetTy->isReference())) ||
+                                (!fnRetTy && isPointerValue_.count(inst.op1));
+                if (isRetPtr) {
                     tyStr = "ptr";
-                } else if (retTy) {
-                    tyStr = llvmType(retTy);
+                } else if (fnRetTy) {
+                    tyStr = llvmType(fnRetTy);
                 }
-                os << "  ret " << tyStr << " " << formatOperand(inst.op1, retTy) << "\n";
+                std::string opStr = formatOperand(inst.op1, fnRetTy);
+                if (isRetPtr && (opStr == "0" || opStr.empty())) opStr = "null";
+                os << "  ret " << tyStr << " " << opStr << "\n";
             } else {
                 os << "  ret void\n";
             }
@@ -2708,7 +2781,7 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
                 if (it != functionMap_.end()) {
                     targetFn = it->second;
                 }
-                bool isCABI = targetFn && (targetFn->isExtern || targetFn->blocks.empty()) && targetFn->linkage == "C";
+                bool isCABI = targetFn && (targetFn->linkage == "C" || targetFn->isExported || (targetFn->isExtern && targetFn->linkage.empty()));
 
                 std::vector<std::string> argTokens;
                 for (size_t i = 0; i < inst.callArgs.size(); ++i) {
@@ -3028,14 +3101,42 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
         }
 
         case ir::Opcode::Phi: {
-            std::string resTy = inst.type ? llvmType(inst.type) : "i32";
-            if (isPointerValue_.count(inst.op1) || (inst.type && inst.type->isReference())) {
-                resTy = "ptr";
+            bool isPtr = isPointerValue_.count(inst.result) ||
+                         (inst.type && (inst.type->isReference() || inst.type->isPointer())) ||
+                         isPointerValue_.count(inst.op1) ||
+                         isPointerValue_.count(inst.op2);
+            if (!isPtr && !inst.switchCases.empty()) {
+                for (const auto& sc : inst.switchCases) {
+                    if (isPointerValue_.count(static_cast<ir::ValueId>(sc.first))) {
+                        isPtr = true;
+                        break;
+                    }
+                }
             }
-            os << "  %v" << inst.result << " = phi " << resTy << " [ " << formatOperand(inst.op1, inst.type)
-               << ", %" << inst.label1 << " ]";
-            if (inst.op2 != ir::InvalidValue) {
-                os << ", [ " << formatOperand(inst.op2, inst.type) << ", %" << inst.label2 << " ]";
+            std::string resTy = isPtr ? "ptr" : (inst.type ? llvmType(inst.type) : "i32");
+            if (isPtr) {
+                isPointerValue_.insert(inst.result);
+            }
+            os << "  %v" << inst.result << " = phi " << resTy;
+            bool first = true;
+            if (inst.op1 != ir::InvalidValue && !inst.label1.empty()) {
+                std::string op1Str = formatOperand(inst.op1, isPtr ? nullptr : inst.type);
+                if (isPtr && (op1Str == "0" || op1Str.empty())) op1Str = "null";
+                os << " [ " << op1Str << ", %" << inst.label1 << " ]";
+                first = false;
+            }
+            if (inst.op2 != ir::InvalidValue && !inst.label2.empty()) {
+                std::string op2Str = formatOperand(inst.op2, isPtr ? nullptr : inst.type);
+                if (isPtr && (op2Str == "0" || op2Str.empty())) op2Str = "null";
+                os << (first ? " [ " : ", [ ") << op2Str << ", %" << inst.label2 << " ]";
+                first = false;
+            }
+            for (const auto& sc : inst.switchCases) {
+                auto valId = static_cast<ir::ValueId>(sc.first);
+                std::string valStr = formatOperand(valId, isPtr ? nullptr : inst.type);
+                if (isPtr && (valStr == "0" || valStr.empty())) valStr = "null";
+                os << (first ? " [ " : ", [ ") << valStr << ", %" << sc.second << " ]";
+                first = false;
             }
             os << "\n";
             break;
@@ -3562,28 +3663,73 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
 
         case ir::Opcode::VecShuffle: {
             auto vecTy = getValueType(inst.op1);
+            if (!vecTy) vecTy = inst.type;
             std::string vecTyStr = vecTy ? llvmType(vecTy) : "<4 x i32>";
-            std::string op2Str = (inst.op2 != ir::InvalidValue) ? ("%v" + std::to_string(inst.op2)) : "undef";
+            std::string op2Str = (inst.op2 != ir::InvalidValue) ? ("%v" + std::to_string(inst.op2)) : "poison";
+
+            // Determine mask and width
+            std::vector<int32_t> maskIndices;
+            if (!inst.strImm.empty()) {
+                std::string token;
+                for (char c : inst.strImm) {
+                    if (std::isdigit(static_cast<unsigned char>(c)) || c == '-') {
+                        token += c;
+                    } else if (!token.empty()) {
+                        maskIndices.push_back(std::stoi(token));
+                        token.clear();
+                    }
+                }
+                if (!token.empty()) {
+                    maskIndices.push_back(std::stoi(token));
+                }
+            }
+
+            if (maskIndices.empty()) {
+                uint32_t w = (inst.type && inst.type->isSIMDVector()) ? inst.type->vectorWidth
+                           : (vecTy && vecTy->isSIMDVector() ? vecTy->vectorWidth : 4);
+                if (w == 0) w = 4;
+                for (uint32_t i = 0; i < w; ++i) {
+                    maskIndices.push_back(static_cast<int32_t>(i));
+                }
+            }
+
+            size_t maskLen = maskIndices.size();
+            std::string maskStr = "<" + std::to_string(maskLen) + " x i32> <";
+            for (size_t i = 0; i < maskLen; ++i) {
+                if (i > 0) maskStr += ", ";
+                if (maskIndices[i] < 0) {
+                    maskStr += "i32 poison";
+                } else {
+                    maskStr += "i32 " + std::to_string(maskIndices[i]);
+                }
+            }
+            maskStr += ">";
+
             os << "  %v" << inst.result << " = shufflevector " << vecTyStr << " %v" << inst.op1
-               << ", " << vecTyStr << " " << op2Str << ", <4 x i32> <i32 0, i32 1, i32 2, i32 3>\n";
+               << ", " << vecTyStr << " " << op2Str << ", " << maskStr << "\n";
             break;
         }
 
         case ir::Opcode::VecReduceAdd: {
             auto vecTy = getValueType(inst.op1);
+            if (!vecTy) vecTy = inst.type;
             bool isFloat = (vecTy && vecTy->elementType && vecTy->elementType->isFloat()) ||
                            (inst.type && inst.type->isFloat());
+            bool isDouble = (vecTy && vecTy->elementType && vecTy->elementType->kind == sema::TypeKind::F64) ||
+                            (inst.type && inst.type->kind == sema::TypeKind::F64);
             uint32_t width = vecTy && vecTy->isSIMDVector() ? vecTy->vectorWidth : 4;
-            std::string vecTyStr = vecTy ? llvmType(vecTy) : (isFloat ? "<4 x float>" : "<4 x i32>");
+            if (width == 0) width = 4;
+            std::string vecTyStr = vecTy ? llvmType(vecTy) : (isDouble ? ("<" + std::to_string(width) + " x double>") : (isFloat ? ("<" + std::to_string(width) + " x float>") : ("<" + std::to_string(width) + " x i32>")));
 
             if (isFloat) {
-                std::string intrinsic = (width == 8) ? "@llvm.vector.reduce.fadd.v8f32" : "@llvm.vector.reduce.fadd.v4f32";
-                os << "  %v" << inst.result << " = call " << (fastMath_ ? "fast " : "") << "float " << intrinsic
-                   << "(float -0.000000e+00, " << vecTyStr << " %v" << inst.op1 << ")\n";
+                std::string elemTy = isDouble ? "double" : "float";
+                std::string intrinsic = "@llvm.vector.reduce.fadd.v" + std::to_string(width) + (isDouble ? "f64" : "f32");
+                os << "  %v" << inst.result << " = call " << (fastMath_ ? "fast " : "") << elemTy << " " << intrinsic
+                   << "(" << elemTy << " -0.000000e+00, " << vecTyStr << " %v" << inst.op1 << ")\n";
             } else {
-                std::string intrinsic = (width == 16) ? "@llvm.vector.reduce.add.v16i32" :
-                                        ((width == 8) ? "@llvm.vector.reduce.add.v8i32" : "@llvm.vector.reduce.add.v4i32");
-                os << "  %v" << inst.result << " = call i32 " << intrinsic
+                std::string elemTy = (vecTy && vecTy->elementType) ? llvmType(vecTy->elementType) : "i32";
+                std::string intrinsic = "@llvm.vector.reduce.add.v" + std::to_string(width) + elemTy;
+                os << "  %v" << inst.result << " = call " << elemTy << " " << intrinsic
                    << "(" << vecTyStr << " %v" << inst.op1 << ")\n";
             }
             break;
@@ -3591,23 +3737,29 @@ void LLVMCodeGen::emitInstruction(const ir::Instruction& inst, std::ostream& os)
 
         case ir::Opcode::VecDot: {
             auto vecTy = getValueType(inst.op1);
+            if (!vecTy) vecTy = getValueType(inst.op2);
+            if (!vecTy) vecTy = inst.type;
             bool isFloat = (vecTy && vecTy->elementType && vecTy->elementType->isFloat()) ||
                            (inst.type && inst.type->isFloat());
+            bool isDouble = (vecTy && vecTy->elementType && vecTy->elementType->kind == sema::TypeKind::F64) ||
+                            (inst.type && inst.type->kind == sema::TypeKind::F64);
             uint32_t width = vecTy && vecTy->isSIMDVector() ? vecTy->vectorWidth : 4;
-            std::string vecTyStr = vecTy ? llvmType(vecTy) : (isFloat ? "<4 x float>" : "<4 x i32>");
+            if (width == 0) width = 4;
+            std::string vecTyStr = vecTy ? llvmType(vecTy) : (isDouble ? ("<" + std::to_string(width) + " x double>") : (isFloat ? ("<" + std::to_string(width) + " x float>") : ("<" + std::to_string(width) + " x i32>")));
             uint32_t dId = memOpId_++;
 
             if (isFloat) {
+                std::string elemTy = isDouble ? "double" : "float";
                 os << "  %dot_mul_" << dId << " = fmul " << (fastMath_ ? "fast " : "")
                    << vecTyStr << " %v" << inst.op1 << ", %v" << inst.op2 << "\n";
-                std::string intrinsic = (width == 8) ? "@llvm.vector.reduce.fadd.v8f32" : "@llvm.vector.reduce.fadd.v4f32";
-                os << "  %v" << inst.result << " = call " << (fastMath_ ? "fast " : "") << "float " << intrinsic
-                   << "(float -0.000000e+00, " << vecTyStr << " %dot_mul_" << dId << ")\n";
+                std::string intrinsic = "@llvm.vector.reduce.fadd.v" + std::to_string(width) + (isDouble ? "f64" : "f32");
+                os << "  %v" << inst.result << " = call " << (fastMath_ ? "fast " : "") << elemTy << " " << intrinsic
+                   << "(" << elemTy << " -0.000000e+00, " << vecTyStr << " %dot_mul_" << dId << ")\n";
             } else {
+                std::string elemTy = (vecTy && vecTy->elementType) ? llvmType(vecTy->elementType) : "i32";
                 os << "  %dot_mul_" << dId << " = mul " << vecTyStr << " %v" << inst.op1 << ", %v" << inst.op2 << "\n";
-                std::string intrinsic = (width == 16) ? "@llvm.vector.reduce.add.v16i32" :
-                                        ((width == 8) ? "@llvm.vector.reduce.add.v8i32" : "@llvm.vector.reduce.add.v4i32");
-                os << "  %v" << inst.result << " = call i32 " << intrinsic
+                std::string intrinsic = "@llvm.vector.reduce.add.v" + std::to_string(width) + elemTy;
+                os << "  %v" << inst.result << " = call " << elemTy << " " << intrinsic
                    << "(" << vecTyStr << " %dot_mul_" << dId << ")\n";
             }
             break;

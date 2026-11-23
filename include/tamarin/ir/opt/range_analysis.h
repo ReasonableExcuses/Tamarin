@@ -34,9 +34,10 @@ struct Interval {
     }
     static Interval bounded(int64_t lo, int64_t hi) { return Interval(lo, hi); }
 
+    [[nodiscard]] bool isEmpty() const noexcept { return hasLower && hasUpper && min > max; }
     [[nodiscard]] bool isConstant() const noexcept { return hasLower && hasUpper && min == max; }
-    [[nodiscard]] bool isKnown() const noexcept { return hasLower && hasUpper; }
-    [[nodiscard]] bool isNonNegative() const noexcept { return hasLower && min >= 0; }
+    [[nodiscard]] bool isKnown() const noexcept { return hasLower && hasUpper && min <= max; }
+    [[nodiscard]] bool isNonNegative() const noexcept { return hasLower && min >= 0 && (!hasUpper || min <= max); }
 
     [[nodiscard]] Interval add(const Interval& other) const noexcept;
     [[nodiscard]] Interval sub(const Interval& other) const noexcept;

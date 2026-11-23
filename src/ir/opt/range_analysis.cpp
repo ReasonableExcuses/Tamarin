@@ -2,6 +2,7 @@
 // range_analysis.cpp - Implementation of Symbolic Range Analysis
 // ============================================================================
 #include "tamarin/ir/opt/range_analysis.h"
+#include <unordered_set>
 
 namespace tamarin::ir::opt {
 
@@ -69,6 +70,10 @@ Interval Interval::intersect(const Interval& other) const noexcept {
     } else if (other.hasUpper) {
         res.max = other.max;
         res.hasUpper = true;
+    }
+    if (res.hasLower && res.hasUpper && res.min > res.max) {
+        res.hasLower = false;
+        res.hasUpper = false;
     }
     return res;
 }
@@ -164,6 +169,27 @@ void RangeAnalysis::identifyCanonicalLoops(IRFunction& fn) {
     std::unordered_map<ValueId, int64_t> initialAllocaStores;
     std::unordered_map<ValueId, ValueId> getLenArrayMap; // Maps GetLen result to array ValueId
 
+    std::unordered_map<std::string, const BasicBlock*> blockMap;
+    std::unordered_map<std::string, std::vector<const BasicBlock*>> predecessors;
+    for (const auto& blk : fn.blocks) {
+        blockMap[blk->label] = blk.get();
+    }
+    for (const auto& blk : fn.blocks) {
+        if (blk->instructions.empty()) continue;
+        const auto& term = blk->instructions.back();
+        if (term.opcode == Opcode::Jump) {
+            predecessors[term.label1].push_back(blk.get());
+        } else if (term.opcode == Opcode::Branch) {
+            predecessors[term.label1].push_back(blk.get());
+            predecessors[term.label2].push_back(blk.get());
+        } else if (term.opcode == Opcode::Switch) {
+            predecessors[term.label1].push_back(blk.get());
+            for (const auto& sc : term.switchCases) {
+                predecessors[sc.second].push_back(blk.get());
+            }
+        }
+    }
+
     for (const auto& blk : fn.blocks) {
         for (const auto& inst : blk->instructions) {
             if (inst.opcode == Opcode::GetLen && inst.result != InvalidValue) {
@@ -243,28 +269,94 @@ void RangeAnalysis::identifyCanonicalLoops(IRFunction& fn) {
 
         int64_t initVal = 0;
         bool hasInitStore = false;
-        auto initIt = initialAllocaStores.find(inductionAlloca);
-        if (initIt != initialAllocaStores.end()) {
-            initVal = initIt->second;
-            hasInitStore = true;
+
+        auto predIt = predecessors.find(blk->label);
+        if (predIt != predecessors.end()) {
+            for (const auto* pred : predIt->second) {
+                for (auto rIt = pred->instructions.rbegin(); rIt != pred->instructions.rend(); ++rIt) {
+                    if (rIt->opcode == Opcode::Store && rIt->op1 == inductionAlloca) {
+                        ValueId val = unwrapCast(rIt->op2);
+                        auto cIt = constantValues_.find(val);
+                        if (cIt != constantValues_.end()) {
+                            initVal = cIt->second;
+                            hasInitStore = true;
+                            break;
+                        }
+                    }
+                }
+                if (hasInitStore) break;
+            }
+        }
+        if (!hasInitStore) {
+            auto initIt = initialAllocaStores.find(inductionAlloca);
+            if (initIt != initialAllocaStores.end()) {
+                initVal = initIt->second;
+                hasInitStore = true;
+            }
         }
         if (!hasInitStore) {
             continue;
         }
 
-        // Verify that inductionAlloca is modified only once in the loop by a step-1 increment
+        // Collect all blocks belonging to the loop body via CFG reachability
+        std::unordered_set<std::string> loopBlocks;
+        std::vector<std::string> worklist;
+        worklist.push_back(bodyLabel);
+        loopBlocks.insert(bodyLabel);
+
+        while (!worklist.empty()) {
+            std::string curr = worklist.back();
+            worklist.pop_back();
+
+            auto bIt = blockMap.find(curr);
+            if (bIt == blockMap.end()) continue;
+            const auto* currBlk = bIt->second;
+            if (currBlk->instructions.empty()) continue;
+
+            const auto& t = currBlk->instructions.back();
+            auto addSucc = [&](const std::string& succ) {
+                if (succ.empty()) return;
+                if (succ == exitLabel || succ == blk->label) return;
+                if (loopBlocks.insert(succ).second) {
+                    worklist.push_back(succ);
+                }
+            };
+
+            if (t.opcode == Opcode::Jump) {
+                addSucc(t.label1);
+            } else if (t.opcode == Opcode::Branch) {
+                addSucc(t.label1);
+                addSucc(t.label2);
+            } else if (t.opcode == Opcode::Switch) {
+                addSucc(t.label1);
+                for (const auto& sc : t.switchCases) {
+                    addSucc(sc.second);
+                }
+            }
+        }
+
+        // Verify that inductionAlloca is modified only once in the loop by a step-1 increment,
+        // and that boundedArr is not modified in the loop body.
         bool validIncrement = false;
         int storeCount = 0;
-        for (size_t nextIdx = bIdx + 1; nextIdx < fn.blocks.size(); ++nextIdx) {
-            const auto& nextBlk = fn.blocks[nextIdx];
-            if (nextBlk->label == exitLabel || nextBlk->label == blk->label) {
-                break;
-            }
-            for (const auto& inst : nextBlk->instructions) {
+        bool arrayModified = false;
+        ValueId rootBoundedArr = (boundedArr != InvalidValue) ? getRootArray(boundedArr) : InvalidValue;
+
+        for (const auto& lbl : loopBlocks) {
+            auto bIt = blockMap.find(lbl);
+            if (bIt == blockMap.end()) continue;
+            const auto* lBlk = bIt->second;
+
+            for (const auto& inst : lBlk->instructions) {
+                if (boundedArr != InvalidValue && inst.opcode == Opcode::Store) {
+                    if (inst.op1 == boundedArr || inst.op1 == rootBoundedArr) {
+                        arrayModified = true;
+                    }
+                }
                 if (inst.opcode == Opcode::Store && inst.op1 == inductionAlloca) {
                     storeCount++;
                     ValueId rhsVal = inst.op2;
-                    for (const auto& prevInst : nextBlk->instructions) {
+                    for (const auto& prevInst : lBlk->instructions) {
                         if (prevInst.result == rhsVal && prevInst.opcode == Opcode::Add) {
                             ValueId addOp1 = prevInst.op1;
                             ValueId addOp2 = prevInst.op2;
@@ -273,7 +365,7 @@ void RangeAnalysis::identifyCanonicalLoops(IRFunction& fn) {
                             bool hasOne = (c1 != constantValues_.end() && c1->second == 1) ||
                                           (c2 != constantValues_.end() && c2->second == 1);
                             ValueId loadCandidate = (c1 != constantValues_.end() && c1->second == 1) ? addOp2 : addOp1;
-                            for (const auto& loadInst : nextBlk->instructions) {
+                            for (const auto& loadInst : lBlk->instructions) {
                                 if (loadInst.result == loadCandidate && loadInst.opcode == Opcode::Load && loadInst.op1 == inductionAlloca) {
                                     if (hasOne) {
                                         validIncrement = true;
@@ -286,6 +378,15 @@ void RangeAnalysis::identifyCanonicalLoops(IRFunction& fn) {
                 }
             }
         }
+
+        if (arrayModified) {
+            boundedArr = InvalidValue;
+        }
+
+        if (boundedArr == InvalidValue && constBound <= 0) {
+            continue;
+        }
+
         if (storeCount != 1 || !validIncrement) {
             continue; // Non-monotonic or modified in body; cannot eliminate bounds checks
         }
@@ -302,17 +403,8 @@ void RangeAnalysis::identifyCanonicalLoops(IRFunction& fn) {
         liv.bodyBlock = bodyLabel;
 
         inductionVars_.push_back(liv);
-        blockInductionVars_[bodyLabel].push_back(liv);
-
-        // Also register for any descendant blocks in the body before the exit or cond block
-        for (size_t nextIdx = bIdx + 1; nextIdx < fn.blocks.size(); ++nextIdx) {
-            const auto& nextBlk = fn.blocks[nextIdx];
-            if (nextBlk->label == exitLabel || nextBlk->label == blk->label) {
-                break;
-            }
-            if (nextBlk->label != bodyLabel) {
-                blockInductionVars_[nextBlk->label].push_back(liv);
-            }
+        for (const auto& lbl : loopBlocks) {
+            blockInductionVars_[lbl].push_back(liv);
         }
     }
 }

@@ -81,6 +81,11 @@ std::string Monomorphizer::mangleTypeNode(const ast::TypeNode* node) {
                 case PrimitiveKind::I64: return "i64";
                 case PrimitiveKind::I128: return "i128";
                 case PrimitiveKind::Isize: return "isize";
+                case PrimitiveKind::Float4: return "float4";
+                case PrimitiveKind::Float8: return "float8";
+                case PrimitiveKind::Int4: return "int4";
+                case PrimitiveKind::Int8: return "int8";
+                case PrimitiveKind::Int16: return "int16";
             }
             return "prim";
         }
@@ -180,6 +185,17 @@ ast::TypePtr Monomorphizer::typeToASTTypeNode(const Type* type, SourceLocation l
             std::vector<TypePtr> params;
             for (auto p : type->paramTypes) params.push_back(typeToASTTypeNode(p, loc));
             return std::make_unique<FunctionTypeNode>(std::move(params), typeToASTTypeNode(type->returnType, loc), loc);
+        }
+        case TypeKind::SIMDVector: {
+            if (type->elementType && type->elementType->isFloat()) {
+                if (type->vectorWidth == 4) return std::make_unique<PrimitiveTypeNode>(PrimitiveKind::Float4, loc);
+                if (type->vectorWidth == 8) return std::make_unique<PrimitiveTypeNode>(PrimitiveKind::Float8, loc);
+            } else if (type->elementType && type->elementType->isInteger()) {
+                if (type->vectorWidth == 4) return std::make_unique<PrimitiveTypeNode>(PrimitiveKind::Int4, loc);
+                if (type->vectorWidth == 8) return std::make_unique<PrimitiveTypeNode>(PrimitiveKind::Int8, loc);
+                if (type->vectorWidth == 16) return std::make_unique<PrimitiveTypeNode>(PrimitiveKind::Int16, loc);
+            }
+            return std::make_unique<NamedTypeNode>(type->toString(), loc);
         }
         default:
             return std::make_unique<NamedTypeNode>(type->toString(), loc);
@@ -467,7 +483,9 @@ ast::ExprPtr Monomorphizer::substituteExpr(const ast::Expr* expr, const TypeSubs
                 auto s = substituteStmt(e.blockBody.get(), subst);
                 blkB = std::unique_ptr<BlockStmt>(static_cast<BlockStmt*>(s.release()));
             }
-            return std::make_unique<LambdaExpr>(std::move(params), std::move(ret), std::move(exprB), std::move(blkB), e.loc);
+            auto res = std::make_unique<LambdaExpr>(std::move(params), std::move(ret), std::move(exprB), std::move(blkB), e.loc);
+            res->captures = e.captures;
+            return res;
         }
         case ExprKind::Range: {
             auto& e = static_cast<const RangeExpr&>(*expr);
@@ -631,8 +649,12 @@ ast::StmtPtr Monomorphizer::substituteStmt(const ast::Stmt* stmt, const TypeSubs
         }
         case StmtKind::DestructureVarDecl: {
             auto& s = static_cast<const DestructureVarDeclStmt&>(*stmt);
+            std::vector<TypePtr> newTypes;
+            for (const auto& t : s.types) {
+                newTypes.push_back(substituteType(t.get(), subst));
+            }
             auto init = substituteExpr(s.initializer.get(), subst);
-            return std::make_unique<DestructureVarDeclStmt>(s.names, std::move(init), s.isConst, s.loc);
+            return std::make_unique<DestructureVarDeclStmt>(std::move(newTypes), s.names, std::move(init), s.isConst, s.loc);
         }
         case StmtKind::Switch: {
             auto& s = static_cast<const SwitchStmt&>(*stmt);
@@ -678,6 +700,11 @@ std::unique_ptr<ast::FunctionDecl> Monomorphizer::monomorphizeFunction(
     auto fn = std::make_unique<FunctionDecl>(
         std::move(retTy), specializedName, std::move(params), std::move(body),
         templateFn.loc, templateFn.isPublic, templateFn.isNoInline, templateFn.isAlwaysInline);
+    fn->isExtern = templateFn.isExtern;
+    fn->linkage = templateFn.linkage;
+    fn->isExported = templateFn.isExported;
+    fn->isAsync = templateFn.isAsync;
+    fn->cfg = templateFn.cfg;
     fn->typeParams.clear(); // Monomorphized specialization has no free type params
     fn->traitBounds.clear();
     return fn;
@@ -712,10 +739,12 @@ std::unique_ptr<ast::StructDecl> Monomorphizer::monomorphizeStruct(
         if (m.body) {
             body = std::unique_ptr<BlockStmt>(static_cast<BlockStmt*>(substituteStmt(m.body.get(), subst).release()));
         }
-        methods.push_back(MethodDecl{
+        MethodDecl md{
             std::move(retTy), m.name, std::move(params), std::move(body),
             m.isConst, m.isVirtual, m.isOverride, m.isPureVirtual, m.isOperator, m.access, m.loc
-        });
+        };
+        md.isAsync = m.isAsync;
+        methods.push_back(std::move(md));
     }
 
     std::vector<ConstructorDecl> constructors;
@@ -750,6 +779,16 @@ std::unique_ptr<ast::StructDecl> Monomorphizer::monomorphizeStruct(
         });
     }
 
+    std::vector<BaseClassSpec> baseClasses;
+    for (const auto& bc : templateStruct.baseClasses) {
+        std::string bName = bc.name;
+        auto it = subst.find(bName);
+        if (it != subst.end() && it->second) {
+            bName = mangleTypeNode(it->second);
+        }
+        baseClasses.push_back(BaseClassSpec{std::move(bName), bc.access, bc.loc});
+    }
+
     auto sd = std::make_unique<StructDecl>(
         specializedName, std::move(fields), templateStruct.layout,
         templateStruct.loc, templateStruct.isClass, templateStruct.isInterface, templateStruct.isPublic);
@@ -758,6 +797,8 @@ std::unique_ptr<ast::StructDecl> Monomorphizer::monomorphizeStruct(
     sd->methods = std::move(methods);
     sd->constructors = std::move(constructors);
     sd->destructor = std::move(destructor);
+    sd->baseClasses = std::move(baseClasses);
+    sd->cfg = templateStruct.cfg;
     return sd;
 }
 
@@ -778,6 +819,7 @@ std::unique_ptr<ast::EnumDecl> Monomorphizer::monomorphizeEnum(
     auto ed = std::make_unique<EnumDecl>(
         specializedName, std::move(variants), templateEnum.loc, templateEnum.isPublic);
     ed->typeParams.clear();
+    ed->cfg = templateEnum.cfg;
     return ed;
 }
 

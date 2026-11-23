@@ -1895,8 +1895,10 @@ void IRBuilder::lowerMatchStmt(MatchStmt& stmt) {
     }
 
     if (!anyCaseFallsThrough) {
-        if (!currentFunction_->blocks.empty() && currentFunction_->blocks.back().get() == mergeBlock) {
-            currentFunction_->blocks.pop_back();
+        auto it = std::find_if(currentFunction_->blocks.begin(), currentFunction_->blocks.end(),
+                               [&](const std::unique_ptr<BasicBlock>& b) { return b.get() == mergeBlock; });
+        if (it != currentFunction_->blocks.end()) {
+            currentFunction_->blocks.erase(it);
         }
         currentBlock_ = nullptr;
     } else {
@@ -2652,10 +2654,16 @@ void IRBuilder::lowerReturn(ReturnStmt& stmt) {
             const auto& id = static_cast<const ast::IdentifierExpr&>(*stmt.value);
             markVariableMoved(id.name);
         }
-        auto val = lowerExpr(*stmt.value);
-        auto valTy = checker_.getExprType(stmt.value.get());
+        ValueId val = InvalidValue;
         auto retTy = currentFunction_->returnType;
-        val = emitCastIfNeeded(val, valTy, retTy);
+        if (retTy && retTy->isReference()) {
+            auto [ptr, _] = getLValuePointer(*stmt.value);
+            val = ptr;
+        } else {
+            val = lowerExpr(*stmt.value);
+            auto valTy = checker_.getExprType(stmt.value.get());
+            val = emitCastIfNeeded(val, valTy, retTy);
+        }
         retInst.op1 = val;
     } else {
         retInst.op1 = InvalidValue;
@@ -4446,84 +4454,73 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                     }
                 }
                 case UnaryOp::PreInc:
-                case UnaryOp::PostInc: {
-                    if (un.operand->kind == ExprKind::Identifier) {
-                        auto& id = static_cast<IdentifierExpr&>(*un.operand);
-                        auto* b = lookupBinding(id.name);
-                        auto ptr = b ? b->ptr : InvalidValue;
-                        auto ty  = b ? b->type : nullptr;
-
-                        Instruction load;
-                        load.opcode = Opcode::Load;
-                        load.result = nextValueId();
-                        load.op1    = ptr;
-                        load.type   = ty;
-                        emit(load);
-
-                        Instruction one;
-                        one.opcode = Opcode::IConst;
-                        one.result = nextValueId();
-                        one.intImm = 1;
-                        one.type   = ty;
-                        emit(one);
-
-                        Instruction add;
-                        add.opcode = (ty && ty->isFloat()) ? Opcode::FAdd : Opcode::Add;
-                        add.result = nextValueId();
-                        add.op1    = load.result;
-                        add.op2    = one.result;
-                        add.type   = ty;
-                        emit(add);
-
-                        Instruction store;
-                        store.opcode = Opcode::Store;
-                        store.op1    = ptr;
-                        store.op2    = add.result;
-                        emit(store);
-
-                        return (un.op == UnaryOp::PreInc) ? add.result : load.result;
-                    }
-                    return InvalidValue;
-                }
+                case UnaryOp::PostInc:
                 case UnaryOp::PreDec:
                 case UnaryOp::PostDec: {
-                    if (un.operand->kind == ExprKind::Identifier) {
-                        auto& id = static_cast<IdentifierExpr&>(*un.operand);
-                        auto* b = lookupBinding(id.name);
-                        auto ptr = b ? b->ptr : InvalidValue;
-                        auto ty  = b ? b->type : nullptr;
+                    auto [ptr, ty] = getLValuePointer(*un.operand);
+                    if (ptr == InvalidValue) return InvalidValue;
 
-                        Instruction load;
-                        load.opcode = Opcode::Load;
-                        load.result = nextValueId();
-                        load.op1    = ptr;
-                        load.type   = ty;
-                        emit(load);
+                    Instruction load;
+                    load.opcode = Opcode::Load;
+                    load.result = nextValueId();
+                    load.op1    = ptr;
+                    load.type   = ty;
+                    emit(load);
 
+                    ValueId updatedVal = InvalidValue;
+                    if (ty && ty->isPointer()) {
+                        ValueId stepVal = emitIntConstant(
+                            (un.op == UnaryOp::PreInc || un.op == UnaryOp::PostInc) ? 1 : -1,
+                            checker_.context().getI64());
+                        Instruction gep;
+                        gep.opcode = Opcode::GetArrayElemPtr;
+                        gep.result = nextValueId();
+                        gep.op1    = load.result;
+                        gep.op2    = stepVal;
+                        gep.type   = ty->elementType ? ty->elementType : checker_.context().getI8();
+                        emit(gep);
+                        updatedVal = gep.result;
+                    } else if (ty && ty->isFloat()) {
+                        Instruction one;
+                        one.opcode = Opcode::FConst;
+                        one.result = nextValueId();
+                        one.floatImm = 1.0;
+                        one.type = ty;
+                        emit(one);
+
+                        Instruction bin;
+                        bin.opcode = (un.op == UnaryOp::PreInc || un.op == UnaryOp::PostInc) ? Opcode::FAdd : Opcode::FSub;
+                        bin.result = nextValueId();
+                        bin.op1 = load.result;
+                        bin.op2 = one.result;
+                        bin.type = ty;
+                        emit(bin);
+                        updatedVal = bin.result;
+                    } else {
                         Instruction one;
                         one.opcode = Opcode::IConst;
                         one.result = nextValueId();
                         one.intImm = 1;
-                        one.type   = ty;
+                        one.type = ty ? ty : checker_.context().getI32();
                         emit(one);
 
-                        Instruction sub;
-                        sub.opcode = (ty && ty->isFloat()) ? Opcode::FSub : Opcode::Sub;
-                        sub.result = nextValueId();
-                        sub.op1    = load.result;
-                        sub.op2    = one.result;
-                        sub.type   = ty;
-                        emit(sub);
-
-                        Instruction store;
-                        store.opcode = Opcode::Store;
-                        store.op1    = ptr;
-                        store.op2    = sub.result;
-                        emit(store);
-
-                        return (un.op == UnaryOp::PreDec) ? sub.result : load.result;
+                        Instruction bin;
+                        bin.opcode = (un.op == UnaryOp::PreInc || un.op == UnaryOp::PostInc) ? Opcode::Add : Opcode::Sub;
+                        bin.result = nextValueId();
+                        bin.op1 = load.result;
+                        bin.op2 = one.result;
+                        bin.type = ty ? ty : checker_.context().getI32();
+                        emit(bin);
+                        updatedVal = bin.result;
                     }
-                    return InvalidValue;
+
+                    Instruction store;
+                    store.opcode = Opcode::Store;
+                    store.op1    = ptr;
+                    store.op2    = updatedVal;
+                    emit(store);
+
+                    return (un.op == UnaryOp::PreInc || un.op == UnaryOp::PreDec) ? updatedVal : load.result;
                 }
                 case UnaryOp::Not: {
                     auto operand = lowerExpr(*un.operand);
@@ -4563,37 +4560,8 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                     return inst.result;
                 }
                 case UnaryOp::AddrOf: {
-                    if (un.operand->kind == ExprKind::Identifier) {
-                        auto& id = static_cast<IdentifierExpr&>(*un.operand);
-                        auto* b = lookupBinding(id.name);
-                        if (b) {
-                            if (b->type && b->type->isRef()) {
-                                Instruction load;
-                                load.opcode = Opcode::Load;
-                                load.result = nextValueId();
-                                load.op1    = b->ptr;
-                                load.type   = b->type;
-                                emit(load);
-                                return load.result;
-                            }
-                            return b->ptr;
-                        }
-                        auto git = globals_.find(id.name);
-                        if (git != globals_.end()) {
-                            Instruction gptr;
-                            gptr.opcode = Opcode::GlobalPtr;
-                            gptr.result = nextValueId();
-                            gptr.strImm = git->second.name;
-                            gptr.type   = checker_.context().getReference(git->second.type, false, true);
-                            emit(gptr);
-                            return gptr.result;
-                        }
-                    } else if (un.operand->kind == ExprKind::Field) {
-                        return getStructPointer(*un.operand);
-                    } else if (un.operand->kind == ExprKind::Index) {
-                        return getStructPointer(*un.operand);
-                    }
-                    return InvalidValue;
+                    auto [ptr, _] = getLValuePointer(*un.operand);
+                    return ptr;
                 }
                 case UnaryOp::Deref: {
                     auto ptrVal = lowerExpr(*un.operand);
@@ -5041,7 +5009,9 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                 auto idxVal = lowerExpr(*idxExpr.index);
                 auto elemTy = checker_.getExprType(&expr);
 
-                val = emitCastIfNeeded(val, valTy, elemTy);
+                if (a.op == AssignOp::Assign || (!elemTy || !elemTy->isPointer())) {
+                    val = emitCastIfNeeded(val, valTy, elemTy);
+                }
 
                 // Insert bounds check if known size or view
                 if (arrTy && (arrTy->isArrayView() || arrTy->arraySize >= 0)) {
@@ -5129,7 +5099,9 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                 if (un.op == UnaryOp::Deref) {
                     auto ptrVal = lowerExpr(*un.operand);
                     auto elemTy = checker_.getExprType(&expr);
-                    val = emitCastIfNeeded(val, valTy, elemTy);
+                    if (a.op == AssignOp::Assign || (!elemTy || !elemTy->isPointer())) {
+                        val = emitCastIfNeeded(val, valTy, elemTy);
+                    }
 
                     if (a.op != AssignOp::Assign) {
                         Instruction load;
@@ -5205,7 +5177,9 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                 auto& tie = static_cast<TupleIndexExpr&>(*a.target);
                 auto basePtr = getStructPointer(*tie.tuple);
                 auto elemTy = checker_.getExprType(&expr);
-                val = emitCastIfNeeded(val, valTy, elemTy);
+                if (a.op == AssignOp::Assign || (!elemTy || !elemTy->isPointer())) {
+                    val = emitCastIfNeeded(val, valTy, elemTy);
+                }
 
                 Instruction gfp;
                 gfp.opcode = Opcode::GetFieldPtr;
@@ -5285,6 +5259,83 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                 store.op2    = val;
                 emit(store);
                 return val;
+            } else {
+                auto [ptr, elemTy] = getLValuePointer(*a.target);
+                if (ptr != InvalidValue) {
+                    if (a.op == AssignOp::Assign || (!elemTy || !elemTy->isPointer())) {
+                        val = emitCastIfNeeded(val, valTy, elemTy);
+                    }
+                    if (a.op != AssignOp::Assign) {
+                        Instruction load;
+                        load.opcode = Opcode::Load;
+                        load.result = nextValueId();
+                        load.op1    = ptr;
+                        load.type   = elemTy;
+                        emit(load);
+
+                        if (elemTy && elemTy->isPointer() && (a.op == AssignOp::AddAssign || a.op == AssignOp::SubAssign)) {
+                            ValueId stepVal = val;
+                            if (a.op == AssignOp::SubAssign) {
+                                Instruction zeroConst;
+                                zeroConst.opcode = Opcode::IConst;
+                                zeroConst.result = nextValueId();
+                                zeroConst.intImm = 0;
+                                zeroConst.type   = valTy ? valTy : checker_.context().getI64();
+                                emit(zeroConst);
+
+                                Instruction neg;
+                                neg.opcode = Opcode::Sub;
+                                neg.result = nextValueId();
+                                neg.op1    = zeroConst.result;
+                                neg.op2    = val;
+                                neg.type   = valTy ? valTy : checker_.context().getI64();
+                                emit(neg);
+                                stepVal = neg.result;
+                            }
+                            Instruction gep;
+                            gep.opcode = Opcode::GetArrayElemPtr;
+                            gep.result = nextValueId();
+                            gep.op1    = load.result;
+                            gep.op2    = stepVal;
+                            gep.type   = elemTy->elementType ? elemTy->elementType : checker_.context().getI8();
+                            emit(gep);
+                            val = gep.result;
+                        } else {
+                            bool isFloat = elemTy && elemTy->isFloat();
+                            bool isUnsigned = elemTy && elemTy->isUnsignedInteger();
+                            Opcode binOp = isFloat ? Opcode::FAdd : Opcode::Add;
+                            switch (a.op) {
+                                case AssignOp::AddAssign: binOp = isFloat ? Opcode::FAdd : Opcode::Add; break;
+                                case AssignOp::SubAssign: binOp = isFloat ? Opcode::FSub : Opcode::Sub; break;
+                                case AssignOp::MulAssign: binOp = isFloat ? Opcode::FMul : Opcode::Mul; break;
+                                case AssignOp::DivAssign: binOp = isFloat ? Opcode::FDiv : (isUnsigned ? Opcode::UDiv : Opcode::SDiv); break;
+                                case AssignOp::ModAssign: binOp = isUnsigned ? Opcode::URem : Opcode::SRem; break;
+                                case AssignOp::AndAssign: binOp = Opcode::And; break;
+                                case AssignOp::OrAssign:  binOp = Opcode::Or; break;
+                                case AssignOp::XorAssign: binOp = Opcode::Xor; break;
+                                case AssignOp::ShlAssign: binOp = Opcode::Shl; break;
+                                case AssignOp::ShrAssign: binOp = isUnsigned ? Opcode::LShr : Opcode::AShr; break;
+                                default: break;
+                            }
+
+                            Instruction bin;
+                            bin.opcode = binOp;
+                            bin.result = nextValueId();
+                            bin.op1    = load.result;
+                            bin.op2    = val;
+                            bin.type   = elemTy;
+                            emit(bin);
+                            val = bin.result;
+                        }
+                    }
+
+                    Instruction store;
+                    store.opcode = Opcode::Store;
+                    store.op1    = ptr;
+                    store.op2    = val;
+                    emit(store);
+                    return val;
+                }
             }
             return val;
         }
@@ -6116,6 +6167,11 @@ ValueId IRBuilder::lowerExpr(Expr& expr) {
                 }
 
                 auto retTy = checker_.getExprType(&expr);
+                if (sym && sym->isAsync) {
+                    retTy = checker_.context().getTask(fnTy ? fnTy->returnType : checker_.context().getVoid());
+                } else if (fnTy && fnTy->returnType && fnTy->returnType->isReference()) {
+                    retTy = fnTy->returnType;
+                }
                 Instruction callInst;
                 callInst.opcode   = Opcode::Call;
                 callInst.result   = (retTy && !retTy->isVoid()) ? nextValueId() : InvalidValue;
@@ -6978,6 +7034,15 @@ ValueId IRBuilder::getStructPointer(Expr& objExpr) {
         gfp.intImm = static_cast<int64_t>(tie.index);
         gfp.type   = elemTy;
         emit(gfp);
+        if (elemTy && elemTy->isReference()) {
+            Instruction loadRef;
+            loadRef.opcode = Opcode::Load;
+            loadRef.result = nextValueId();
+            loadRef.op1    = gfp.result;
+            loadRef.type   = elemTy;
+            emit(loadRef);
+            return loadRef.result;
+        }
         return gfp.result;
     }
     if (objExpr.kind == ExprKind::Identifier) {
@@ -7035,6 +7100,15 @@ ValueId IRBuilder::getStructPointer(Expr& objExpr) {
         gfp.type   = f ? f->type : nullptr;
         gfp.strImm = baseTy->structName;
         emit(gfp);
+        if (f && f->type && f->type->isReference()) {
+            Instruction loadRef;
+            loadRef.opcode = Opcode::Load;
+            loadRef.result = nextValueId();
+            loadRef.op1    = gfp.result;
+            loadRef.type   = f->type;
+            emit(loadRef);
+            return loadRef.result;
+        }
         return gfp.result;
     } else if (objExpr.kind == ExprKind::Index) {
         auto& idx = static_cast<IndexExpr&>(objExpr);
@@ -7088,6 +7162,15 @@ ValueId IRBuilder::getStructPointer(Expr& objExpr) {
         gep.op2    = idxVal;
         gep.type   = elemTy;
         emit(gep);
+        if (elemTy && elemTy->isReference()) {
+            Instruction loadRef;
+            loadRef.opcode = Opcode::Load;
+            loadRef.result = nextValueId();
+            loadRef.op1    = gep.result;
+            loadRef.type   = elemTy;
+            emit(loadRef);
+            return loadRef.result;
+        }
         return gep.result;
     } else {
         auto valTy = checker_.getExprType(&objExpr);
@@ -7108,6 +7191,127 @@ ValueId IRBuilder::getStructPointer(Expr& objExpr) {
         emit(store);
         return allocaInst.result;
     }
+}
+
+std::pair<ValueId, const sema::Type*> IRBuilder::getLValuePointer(Expr& expr) {
+    if (expr.kind == ExprKind::Identifier) {
+        auto& id = static_cast<IdentifierExpr&>(expr);
+        auto* b = lookupBinding(id.name);
+        if (b) {
+            if (b->type && b->type->isRef()) {
+                Instruction loadRef;
+                loadRef.opcode = Opcode::Load;
+                loadRef.result = nextValueId();
+                loadRef.op1    = b->ptr;
+                loadRef.type   = b->type;
+                emit(loadRef);
+                return { loadRef.result, b->type->elementType };
+            }
+            return { b->ptr, b->type };
+        }
+        if (currentRecord_ && currentRecord_->findField(id.name)) {
+            int fIdx = currentRecord_->getFieldIndex(id.name);
+            auto f = currentRecord_->findField(id.name);
+            auto fTy = f ? f->type : checker_.context().getI32();
+            Instruction gfp;
+            gfp.opcode = Opcode::GetFieldPtr;
+            gfp.result = nextValueId();
+            gfp.op1    = currentThisValue_;
+            gfp.intImm = fIdx;
+            gfp.type   = fTy;
+            gfp.strImm = currentRecord_->structName;
+            emit(gfp);
+            return { gfp.result, fTy };
+        }
+        auto git = globals_.find(id.name);
+        if (git != globals_.end()) {
+            Instruction gptr;
+            gptr.opcode = Opcode::GlobalPtr;
+            gptr.result = nextValueId();
+            gptr.strImm = git->second.name;
+            gptr.type   = checker_.context().getReference(git->second.type, false, true);
+            emit(gptr);
+            return { gptr.result, git->second.type };
+        }
+    } else if (expr.kind == ExprKind::Unary) {
+        auto& un = static_cast<UnaryExpr&>(expr);
+        if (un.op == UnaryOp::Deref) {
+            auto ptrVal = lowerExpr(*un.operand);
+            auto opTy = checker_.getExprType(un.operand.get());
+            auto elemTy = (opTy && opTy->isReference()) ? opTy->elementType : checker_.getExprType(&expr);
+            return { ptrVal, elemTy };
+        }
+    } else if (expr.kind == ExprKind::Field) {
+        auto& fe = static_cast<FieldExpr&>(expr);
+        auto structPtr = getStructPointer(*fe.object);
+        auto baseTy = checker_.getExprType(fe.object.get());
+        if (baseTy && baseTy->isReference()) baseTy = baseTy->elementType;
+        int fieldIdx = baseTy ? baseTy->getFieldIndex(fe.fieldName) : 0;
+        auto f = baseTy ? baseTy->findField(fe.fieldName) : nullptr;
+        auto fieldTy = f ? f->type : checker_.context().getI32();
+
+        Instruction gfp;
+        gfp.opcode = Opcode::GetFieldPtr;
+        gfp.result = nextValueId();
+        gfp.op1    = structPtr;
+        gfp.intImm = fieldIdx;
+        gfp.type   = fieldTy;
+        gfp.strImm = baseTy ? baseTy->structName : "";
+        emit(gfp);
+        return { gfp.result, fieldTy };
+    } else if (expr.kind == ExprKind::TupleIndex) {
+        auto& tie = static_cast<TupleIndexExpr&>(expr);
+        auto basePtr = getStructPointer(*tie.tuple);
+        auto elemTy = checker_.getExprType(&expr);
+
+        Instruction gfp;
+        gfp.opcode = Opcode::GetFieldPtr;
+        gfp.result = nextValueId();
+        gfp.op1    = basePtr;
+        gfp.intImm = static_cast<int64_t>(tie.index);
+        gfp.type   = elemTy;
+        emit(gfp);
+        return { gfp.result, elemTy };
+    } else if (expr.kind == ExprKind::Index) {
+        auto& idx = static_cast<IndexExpr&>(expr);
+        auto arrTy = checker_.getExprType(idx.array.get());
+        if (arrTy && arrTy->isReference()) arrTy = arrTy->elementType;
+        auto elemTy = checker_.getExprType(&expr);
+        auto arrVal = lowerExpr(*idx.array);
+        auto idxVal = lowerExpr(*idx.index);
+
+        if (arrTy && (arrTy->isArrayView() || arrTy->arraySize >= 0)) {
+            Instruction chk;
+            chk.opcode = Opcode::BoundsCheck;
+            chk.op1    = idxVal;
+            chk.op2    = arrVal;
+            emit(chk);
+        }
+
+        Instruction gep;
+        gep.opcode = Opcode::GetArrayElemPtr;
+        gep.result = nextValueId();
+        gep.op1    = arrVal;
+        gep.op2    = idxVal;
+        gep.type   = elemTy;
+        emit(gep);
+        return { gep.result, elemTy };
+    }
+    if (expr.kind == ExprKind::Call) {
+        auto& call = static_cast<CallExpr&>(expr);
+        auto sym = checker_.symbols().lookup(call.callee);
+        const sema::Type* fnTy = sym ? sym->type : checker_.findGlobalFunction(call.callee);
+        if (fnTy && fnTy->returnType && fnTy->returnType->isReference()) {
+            auto val = lowerExpr(expr);
+            return { val, fnTy->returnType->elementType };
+        }
+    }
+    auto exprTy = checker_.getExprType(&expr);
+    if (exprTy && exprTy->isReference()) {
+        auto val = lowerExpr(expr);
+        return { val, exprTy->elementType };
+    }
+    return { InvalidValue, nullptr };
 }
 
 ValueId IRBuilder::lowerMatchExpr(MatchExpr& expr) {
@@ -7369,8 +7573,10 @@ ValueId IRBuilder::lowerMatchExpr(MatchExpr& expr) {
     }
 
     if (!anyCaseFallsThrough) {
-        if (!currentFunction_->blocks.empty() && currentFunction_->blocks.back().get() == mergeBlock) {
-            currentFunction_->blocks.pop_back();
+        auto it = std::find_if(currentFunction_->blocks.begin(), currentFunction_->blocks.end(),
+                               [&](const std::unique_ptr<BasicBlock>& b) { return b.get() == mergeBlock; });
+        if (it != currentFunction_->blocks.end()) {
+            currentFunction_->blocks.erase(it);
         }
         currentBlock_ = nullptr;
         return InvalidValue;

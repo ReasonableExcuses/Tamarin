@@ -57,17 +57,24 @@ struct ThreadTaskPool {
     static constexpr size_t MAX_CACHED = 512;
     TamarinAsyncTask* pool[MAX_CACHED];
     size_t count = 0;
+    std::vector<TamarinAsyncTask*> allAllocated;
 
     ThreadTaskPool() {
         for (size_t i = 0; i < 64; ++i) {
-            pool[count++] = new TamarinAsyncTask();
+            auto* t = new TamarinAsyncTask();
+            pool[count++] = t;
+            allAllocated.push_back(t);
         }
     }
 
     ~ThreadTaskPool() {
-        for (size_t i = 0; i < count; ++i) {
-            delete pool[i];
+        for (auto* t : allAllocated) {
+            if (t) {
+                t->reset();
+                delete t;
+            }
         }
+        allAllocated.clear();
         count = 0;
     }
 
@@ -75,7 +82,17 @@ struct ThreadTaskPool {
         if (count > 0) {
             return pool[--count];
         }
-        return new TamarinAsyncTask();
+        // Check if any previously allocated tasks were unawaited and finished
+        for (auto* t : allAllocated) {
+            if (t && t->ready.load(std::memory_order_acquire) && t->refCount.load(std::memory_order_relaxed) > 0) {
+                // Reclaim unawaited completed task
+                t->reset();
+                return t;
+            }
+        }
+        auto* t = new TamarinAsyncTask();
+        allAllocated.push_back(t);
+        return t;
     }
 
     inline void release(TamarinAsyncTask* t) {
@@ -84,6 +101,10 @@ struct ThreadTaskPool {
         if (count < MAX_CACHED) {
             pool[count++] = t;
         } else {
+            auto it = std::find(allAllocated.begin(), allAllocated.end(), t);
+            if (it != allAllocated.end()) {
+                allAllocated.erase(it);
+            }
             delete t;
         }
     }
@@ -141,6 +162,19 @@ public:
                 t.join();
             }
         }
+        // Drain any remaining in-flight tasks in asyncQueue_
+        std::unique_lock<std::mutex> lock(queueMutex_);
+        while (!asyncQueue_.empty()) {
+            auto* aTask = asyncQueue_.front();
+            asyncQueue_.pop_front();
+            if (aTask) {
+                if (aTask->refCount.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                    t_asyncTaskPool.release(aTask);
+                }
+            }
+        }
+        tasksQueue_.clear();
+        parallelQueue_.clear();
     }
 
     static ThreadPool& instance() {
@@ -187,8 +221,8 @@ public:
                 int64_t cEnd = std::min(cStart + j->grain, j->end);
                 j->worker(cStart, cEnd, j->ctx);
             }
+            std::unique_lock<std::mutex> lk(j->mtx);
             if (j->activeWorkers.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-                std::unique_lock<std::mutex> lk(j->mtx);
                 j->cv.notify_all();
             }
         };
@@ -265,8 +299,8 @@ public:
                 int64_t cEnd = std::min(cStart + pJob->grain, pJob->end);
                 pJob->worker(cStart, cEnd, pJob->ctx);
             }
+            std::unique_lock<std::mutex> lk(pJob->mtx);
             if (pJob->activeWorkers.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-                std::unique_lock<std::mutex> lk(pJob->mtx);
                 pJob->cv.notify_all();
             }
             return true;
@@ -274,8 +308,8 @@ public:
         if (hasTItem) {
             tItem.fn(tItem.ctx);
             if (tItem.scope) {
+                std::unique_lock<std::mutex> lk(tItem.scope->mtx);
                 if (tItem.scope->pendingTasks.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-                    std::unique_lock<std::mutex> lk(tItem.scope->mtx);
                     tItem.scope->cv.notify_all();
                 }
             }
@@ -320,8 +354,8 @@ public:
             if (found) {
                 item.fn(item.ctx);
                 if (item.scope) {
+                    std::unique_lock<std::mutex> lk(item.scope->mtx);
                     if (item.scope->pendingTasks.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-                        std::unique_lock<std::mutex> lk(item.scope->mtx);
                         item.scope->cv.notify_all();
                     }
                 }
@@ -379,15 +413,15 @@ private:
                     int64_t cEnd = std::min(cStart + pJob->grain, pJob->end);
                     pJob->worker(cStart, cEnd, pJob->ctx);
                 }
+                std::unique_lock<std::mutex> lk(pJob->mtx);
                 if (pJob->activeWorkers.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-                    std::unique_lock<std::mutex> lk(pJob->mtx);
                     pJob->cv.notify_all();
                 }
             } else if (hasTItem) {
                 tItem.fn(tItem.ctx);
                 if (tItem.scope) {
+                    std::unique_lock<std::mutex> lk(tItem.scope->mtx);
                     if (tItem.scope->pendingTasks.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-                        std::unique_lock<std::mutex> lk(tItem.scope->mtx);
                         tItem.scope->cv.notify_all();
                     }
                 }

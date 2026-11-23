@@ -407,6 +407,66 @@ int process_items(int[] items) {
 int main() { return 0; }
 """, expect_success=False)
 
+# BUG-40: Increment and decrement on complex lvalues
+test_code("bug40_complex_lvalue_inc_dec", """
+struct Point { int x; int y; };
+int main() {
+    int val = 10;
+    int* p = &val;
+    (*p)++;
+    Point pt = {20, 30};
+    pt.x++;
+    (int, int) t = (40, 50);
+    t.0++;
+    int[3] arr = {60, 70, 80};
+    arr[0]++;
+    if (val == 11 && pt.x == 21 && t.0 == 41 && arr[0] == 61) return 0;
+    return 1;
+}
+""")
+
+# BUG-41: Compound pointer assignment on tuple element
+test_code("bug41_compound_assign_tuple_pointer", """
+int main() {
+    int[4] arr = {10, 20, 30, 40};
+    (int*, int) t = (&arr[0], 100);
+    t.0 += 2;
+    if (*t.0 == 30) return 0;
+    return 1;
+}
+""")
+
+# BUG-42: Match with all returning branches produces clean LLVM IR without unterminated merge block
+test_code("bug42_match_all_return_clean_cfg", """
+int check_match(int x) {
+    match x {
+        1 => { return 10; }
+        2 => { return 20; }
+        _ => { return 30; }
+    }
+}
+int main() {
+    if (check_match(1) == 10 && check_match(2) == 20 && check_match(99) == 30) return 0;
+    return 1;
+}
+""")
+
+# BUG-43: Assignment to function call returning a reference
+test_code("bug43_call_returning_reference_assignment", """
+int& pick(int& a, int& b, bool cond) {
+    if (cond) return a;
+    return b;
+}
+int main() {
+    int x = 1;
+    int y = 2;
+    pick(x, y, true) = 100;
+    pick(x, y, false) = 200;
+    if (x == 100 && y == 200) return 0;
+    return 1;
+}
+""")
+
 test_bug21_cleanup()
 
 print(f"=== Verification Summary: {passed} Passed, {failed} Failed ===")

@@ -624,13 +624,13 @@ Token Lexer::scanNextToken() {
 
 void Lexer::skipIntegerSuffix() {
     // Check for integer suffixes: u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize
+    // or standard C suffixes: u, l, ul, lu, ll, ull, llu (case-insensitive)
     if (isAtEnd()) return;
     auto safeChar = [&](size_t offset) -> char {
         return (pos_ + offset < source_.size()) ? source_[pos_ + offset] : '\0';
     };
     uint32_t saved = pos_;
     if (current() == 'u' || current() == 'i') {
-        char prefix = current();
         advance();
         if (current() == '8' && !std::isalnum(static_cast<unsigned char>(peekChar()))) {
             advance(); return;
@@ -641,27 +641,40 @@ void Lexer::skipIntegerSuffix() {
             if (current() == '2' && peekChar() == '8' && !std::isalnum(static_cast<unsigned char>(safeChar(2)))) {
                 advance(); advance(); return;
             }
-            pos_ = saved; return;
-        }
-        if (current() == '3' && peekChar() == '2' && !std::isalnum(static_cast<unsigned char>(safeChar(2)))) {
+            pos_ = saved;
+        } else if (current() == '3' && peekChar() == '2' && !std::isalnum(static_cast<unsigned char>(safeChar(2)))) {
             advance(); advance(); return;
-        }
-        if (current() == '6' && peekChar() == '4' && !std::isalnum(static_cast<unsigned char>(safeChar(2)))) {
+        } else if (current() == '6' && peekChar() == '4' && !std::isalnum(static_cast<unsigned char>(safeChar(2)))) {
             advance(); advance(); return;
+        } else if (source_.substr(pos_, 4) == "size" &&
+                   (pos_ + 4 >= source_.size() || !std::isalnum(static_cast<unsigned char>(source_[pos_ + 4])))) {
+            pos_ += 4; return;
+        } else {
+            pos_ = saved; // rollback to test C suffixes
         }
-        // usize / isize
-        if (prefix == 'u' || prefix == 'i') {
-            auto remaining = source_.substr(pos_ - 1);
-            if (remaining.starts_with("usize") || remaining.starts_with("isize")) {
-                // Check we consumed the prefix char already, consume the rest
-                // "size" part
-                if (source_.substr(pos_, 4) == "size" &&
-                    (pos_ + 4 >= source_.size() || !std::isalnum(static_cast<unsigned char>(source_[pos_ + 4])))) {
-                    pos_ += 4; return;
-                }
+    }
+
+    // Standard C suffixes
+    char c = current();
+    if (c == 'u' || c == 'U' || c == 'l' || c == 'L') {
+        size_t len = 0;
+        char c0 = static_cast<char>(std::tolower(static_cast<unsigned char>(safeChar(0))));
+        char c1 = static_cast<char>(std::tolower(static_cast<unsigned char>(safeChar(1))));
+        char c2 = static_cast<char>(std::tolower(static_cast<unsigned char>(safeChar(2))));
+        if ((c0 == 'u' && c1 == 'l' && c2 == 'l') || (c0 == 'l' && c1 == 'l' && c2 == 'u')) {
+            len = 3;
+        } else if ((c0 == 'u' && c1 == 'l') || (c0 == 'l' && c1 == 'u') || (c0 == 'l' && c1 == 'l')) {
+            len = 2;
+        } else if (c0 == 'u' || c0 == 'l') {
+            len = 1;
+        }
+        if (len > 0) {
+            char after = safeChar(len);
+            if (!std::isalnum(static_cast<unsigned char>(after)) && after != '_') {
+                pos_ += static_cast<uint32_t>(len);
+                return;
             }
         }
-        pos_ = saved; // not a valid suffix, rollback
     }
 }
 

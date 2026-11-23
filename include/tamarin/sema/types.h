@@ -701,6 +701,10 @@ struct Type {
 class TypeContext {
 public:
     TypeContext();
+    TypeContext(const TypeContext&) = delete;
+    TypeContext& operator=(const TypeContext&) = delete;
+    TypeContext(TypeContext&& other) noexcept;
+    TypeContext& operator=(TypeContext&& other) noexcept;
 
     const Type* getVoid()  const noexcept { return &voidTy_; }
     const Type* getBool()  const noexcept { return &boolTy_; }

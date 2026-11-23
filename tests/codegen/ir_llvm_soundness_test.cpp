@@ -631,3 +631,81 @@ TAMARIN_TEST(IRLLVMSoundness, Optimizer_ConstantFoldingIntegerAndFloat) {
         "ret i32"));
     return true;
 }
+
+TAMARIN_TEST(IRLLVMSoundness, LValue_ComplexIncrementAndDecrement) {
+    EXPECT_TRUE(checkCodegen(
+        "struct Point { int x; int y; };\n"
+        "int main() {\n"
+        "    int val = 10;\n"
+        "    int* p = &val;\n"
+        "    (*p)++;\n"
+        "    Point pt = {20, 30};\n"
+        "    pt.x++;\n"
+        "    (int, int) t = (40, 50);\n"
+        "    t.0++;\n"
+        "    int[3] arr = {60, 70, 80};\n"
+        "    arr[0]++;\n"
+        "    return 0;\n"
+        "}\n",
+        "define i32 @main"));
+    return true;
+}
+
+TAMARIN_TEST(IRLLVMSoundness, LValue_CompoundAssignmentTuplePointer) {
+    EXPECT_TRUE(checkCodegen(
+        "int main() {\n"
+        "    int[4] arr = {10, 20, 30, 40};\n"
+        "    (int*, int) t = (&arr[0], 100);\n"
+        "    t.0 += 2;\n"
+        "    return 0;\n"
+        "}\n",
+        "define i32 @main"));
+    return true;
+}
+
+TAMARIN_TEST(IRLLVMSoundness, ControlFlow_MatchAllReturnErasesEmptyMerge) {
+    EXPECT_TRUE(checkCodegen(
+        "int check_match(int x) {\n"
+        "    match x {\n"
+        "        1 => { return 10; }\n"
+        "        2 => { return 20; }\n"
+        "        _ => { return 30; }\n"
+        "    }\n"
+        "}\n"
+        "int main() { return check_match(1); }\n",
+        "define i32 @check_match"));
+    return true;
+}
+
+TAMARIN_TEST(IRLLVMSoundness, RangeAnalysis_InductionWithNestedIf) {
+    EXPECT_TRUE(checkCodegen(
+        "int main() {\n"
+        "    int[10] arr = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};\n"
+        "    int sum = 0;\n"
+        "    for (int i = 0; i < 10; ++i) {\n"
+        "        if (i % 2 == 0) {\n"
+        "            sum += arr[i];\n"
+        "        } else {\n"
+        "            sum -= arr[i];\n"
+        "        }\n"
+        "    }\n"
+        "    return sum;\n"
+        "}\n",
+        "define i32 @main"));
+    return true;
+}
+
+TAMARIN_TEST(IRLLVMSoundness, AliasAnalysis_DisjointAllocaAndParamRef) {
+    EXPECT_TRUE(checkCodegen(
+        "void update(int& refVal) {\n"
+        "    int localVal = 42;\n"
+        "    refVal = localVal;\n"
+        "}\n"
+        "int main() {\n"
+        "    int x = 0;\n"
+        "    update(x);\n"
+        "    return x;\n"
+        "}\n",
+        "define void @update"));
+    return true;
+}

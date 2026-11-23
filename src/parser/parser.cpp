@@ -235,6 +235,9 @@ bool Parser::isGenericCallLookahead() {
             tok.kind == TokenKind::Eq || tok.kind == TokenKind::Plus ||
             tok.kind == TokenKind::Minus || tok.kind == TokenKind::Star ||
             tok.kind == TokenKind::Slash || tok.kind == TokenKind::Percent ||
+            tok.kind == TokenKind::Amp || tok.kind == TokenKind::Pipe ||
+            tok.kind == TokenKind::Caret || tok.kind == TokenKind::Tilde ||
+            tok.kind == TokenKind::LtLt ||
             tok.kind == TokenKind::AmpAmp || tok.kind == TokenKind::PipePipe ||
             tok.kind == TokenKind::EqEq || tok.kind == TokenKind::BangEq ||
             tok.kind == TokenKind::LtEq || tok.kind == TokenKind::GtEq) {
@@ -811,6 +814,9 @@ DeclPtr Parser::parseTopDecl(bool defaultExtern, const std::string& defaultLinka
 
     // Global const
     if (isConst) {
+        if (isArray) {
+            type = std::make_unique<ArrayTypeNode>(std::move(type), std::move(arraySize), loc, isConst);
+        }
         expect(TokenKind::Eq, "expected '=' in const declaration");
         auto value = parseExpr();
         expect(TokenKind::Semicolon, "expected ';' after const declaration");
@@ -1053,7 +1059,7 @@ DeclPtr Parser::parseStructOrClassDecl(LayoutDirective layout, SourceLocation lo
     }
 
     expect(TokenKind::RBrace, "expected '}' after body");
-    expect(TokenKind::Semicolon, "expected ';' after declaration");
+    match(TokenKind::Semicolon); // optional trailing semicolon for struct/class
 
     for (const auto& tp : typeParams) {
         knownTypes_.erase(tp);
@@ -2499,6 +2505,15 @@ ExprPtr Parser::parsePostfix() {
                                   nextK == TokenKind::Await ||
                                   nextK == TokenKind::Match ||
                                   nextK == TokenKind::This ||
+                                  nextK == TokenKind::Fn ||
+                                  nextK == TokenKind::Float4 ||
+                                  nextK == TokenKind::Float8 ||
+                                  nextK == TokenKind::Int4 ||
+                                  nextK == TokenKind::Int8 ||
+                                  nextK == TokenKind::Int16 ||
+                                  nextK == TokenKind::Min ||
+                                  nextK == TokenKind::Max ||
+                                  nextK == TokenKind::Slab ||
                                   nextK == TokenKind::Null);
             if (isExprStarter) {
                 break;
@@ -2727,6 +2742,7 @@ ExprPtr Parser::parsePrimary() {
         bool isType = false;
         if (isTypeNameKind(nextK) || nextK == TokenKind::Struct ||
             nextK == TokenKind::Class || nextK == TokenKind::Interface ||
+            nextK == TokenKind::Const ||
             (nextK == TokenKind::Identifier && knownTypes_.count(std::string(lex_.peek().text)))) {
             isType = true;
         } else if (nextK == TokenKind::Star) {
@@ -2737,6 +2753,7 @@ ExprPtr Parser::parsePrimary() {
             auto afterStarK = lex_.peek(k).kind;
             if (isTypeNameKind(afterStarK) || afterStarK == TokenKind::Struct ||
                 afterStarK == TokenKind::Class || afterStarK == TokenKind::Interface ||
+                afterStarK == TokenKind::Const ||
                 (afterStarK == TokenKind::Identifier && knownTypes_.count(std::string(lex_.peek(k).text)))) {
                 isType = true;
             }

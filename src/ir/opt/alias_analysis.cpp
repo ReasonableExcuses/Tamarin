@@ -62,9 +62,12 @@ bool AliasAnalysis::runOnFunction(IRFunction& fn, const sema::TypeContext* /*typ
                     noaliasValues_.insert(inst.result);
                     break;
                 }
+                case Opcode::Cast:
+                case Opcode::MakeView:
                 case Opcode::GetArrayElemPtr:
                 case Opcode::GetFieldPtr:
-                case Opcode::SoAGetFieldPtr: {
+                case Opcode::SoAGetFieldPtr:
+                case Opcode::VariantPayloadPtr: {
                     auto it = provenanceMap_.find(inst.op1);
                     if (it != provenanceMap_.end()) {
                         provenanceMap_[inst.result] = it->second;
@@ -106,6 +109,23 @@ bool AliasAnalysis::areDisjoint(ValueId ptrA, ValueId ptrB) const {
     if (provB.origin == StorageOrigin::DistinctAlloca &&
         (provA.origin == StorageOrigin::DistinctRegion || provA.origin == StorageOrigin::DynamicHeap)) {
         return true;
+    }
+
+    // Stack alloca vs function param reference/view never overlap
+    if ((provA.origin == StorageOrigin::DistinctAlloca && provB.origin == StorageOrigin::ParamRef) ||
+        (provB.origin == StorageOrigin::DistinctAlloca && provA.origin == StorageOrigin::ParamRef)) {
+        return true;
+    }
+
+    // Dynamic heap vs distinct region never overlap
+    if ((provA.origin == StorageOrigin::DynamicHeap && provB.origin == StorageOrigin::DistinctRegion) ||
+        (provB.origin == StorageOrigin::DynamicHeap && provA.origin == StorageOrigin::DistinctRegion)) {
+        return true;
+    }
+
+    // Distinct dynamic heap allocations never overlap
+    if (provA.origin == StorageOrigin::DynamicHeap && provB.origin == StorageOrigin::DynamicHeap) {
+        return provA.baseOriginId != provB.baseOriginId;
     }
 
     // Distinct region allocations never overlap

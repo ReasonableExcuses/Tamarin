@@ -73,6 +73,7 @@ private:
     ValueId lowerLambda(ast::LambdaExpr& expr);
     ValueId emitCastIfNeeded(ValueId val, const sema::Type* fromTy, const sema::Type* toTy);
     ValueId getStructPointer(ast::Expr& objExpr);
+    std::pair<ValueId, const sema::Type*> getLValuePointer(ast::Expr& expr);
     void emitCleanupsUpTo(size_t targetScopeDepth);
     int64_t registerStringLiteral(const std::string& str);
     void ensureDestructor(const sema::Type* ty);
