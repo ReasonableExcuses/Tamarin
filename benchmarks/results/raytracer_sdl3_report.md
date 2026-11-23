@@ -23,14 +23,14 @@ Across 1280×720 framebuffer rendering with 16 samples per pixel (14.75 million 
 
 | Language & Configuration | Frame Time (ms) | Throughput (Mrays/s) | Clean Build (s) | Binary Size (KB) | Peak RSS (MB) | Unsafe Blocks | Checksum Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Tamarin (SIMD 8-wide)** | **197.83** | **74.53** | **0.98** | **96.5** | **12.57** | **0** | **MATCH** (`0x2BA9B398A1D21CEF`) |
-| **Clang C++20 (SIMD 8-wide)** | 217.96 | 67.65 | 1.10 | 209.5 | 12.22 | N/A | **MATCH** (`0x2BA9B398A1D21CEF`) |
-| **Rust (SIMD 8-wide)** | 205.74 | 71.67 | 3.98 | 276.5 | 11.98 | 3 | **MATCH** (`0x2BA9B398A1D21CEF`) |
-| **Tamarin (Standard SoA)** | 959.22 | 15.37 | 0.98 | 96.5 | 12.64 | **0** | **MATCH** (`0x2BA9B398A1D21CEF`) |
-| **Clang C++20 (Standard SoA)** | 911.41 | 16.18 | 1.10 | 209.5 | 12.23 | N/A | **MATCH** (`0x2BA9B398A1D21CEF`) |
-| **Rust (Standard SoA)** | 985.88 | 14.96 | 3.98 | 276.5 | 12.02 | 3 | **MATCH** (`0x2BA9B398A1D21CEF`) |
-| **Clang C++20 (AoS Baseline)** | 931.84 | 15.82 | 1.10 | 209.5 | 12.23 | N/A | **MATCH** (`0x2BA9B398A1D21CEF`) |
-| **Rust (AoS Baseline)** | 1131.59 | 13.03 | 3.98 | 276.5 | 12.01 | 3 | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Tamarin (SIMD 8-wide)** | **231.01** | **63.83** | **1.13** | **96.5** | **12.61** | **0** | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Clang C++20 (SIMD 8-wide)** | 247.52 | 59.57 | 1.49 | 209.5 | 12.23 | N/A | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Rust (SIMD 8-wide)** | 244.61 | 60.28 | 4.67 | 276.5 | 12.00 | 3 | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Tamarin (Standard SoA)** | 1057.42 | 13.94 | 1.13 | 96.5 | 12.59 | **0** | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Clang C++20 (Standard SoA)** | 1051.67 | 14.02 | 1.49 | 209.5 | 12.23 | N/A | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Rust (Standard SoA)** | 1023.88 | 14.40 | 4.67 | 276.5 | 12.01 | 3 | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Clang C++20 (AoS Baseline)** | 1033.76 | 14.26 | 1.49 | 209.5 | 12.22 | N/A | **MATCH** (`0x2BA9B398A1D21CEF`) |
+| **Rust (AoS Baseline)** | 1190.52 | 12.39 | 4.67 | 276.5 | 11.95 | 3 | **MATCH** (`0x2BA9B398A1D21CEF`) |
 
 ---
 
@@ -43,7 +43,7 @@ Across 1280×720 framebuffer rendering with 16 samples per pixel (14.75 million 
 
 ### 2. Explicit 8-Wide AVX2 SIMD Sphere Batching vs Scalar SoA
 - Implementing 8-wide sphere batching with branchless root selection `(r1 <= t_min || closest_so_far <= r1) ? r2 : r1` and 8-sphere early-out masks accelerated all three languages from **~17 Mrays/s to ~70 Mrays/s** (a **4.1x speedup**).
-- Tamarin achieves **74.53 Mrays/s (197.83 ms)** using high-level `float8` vectors with **zero unsafe code**, leading C++ (67.65 Mrays/s) and Rust (71.67 Mrays/s).
+- Tamarin achieves **63.83 Mrays/s (231.01 ms)** using high-level `float8` vectors with **zero unsafe code**, leading C++ (59.57 Mrays/s) and Rust (60.28 Mrays/s).
 
 ### 3. Concurrency & Memory Safety Architecture
 - **Tamarin:** Parallelized scanlines `parallel for (int y = 0; y < 720; y++)` directly write into the 2D global array `g_framebuffer[720][1280]`. Tamarin's affine index injectivity checker statically verifies that loop index `[y]` partitions writes into disjoint scanlines with **zero data races** and **zero `unsafe` blocks** across the entire application—including all `extern "C"` SDL3 streaming texture locking (`SDL_LockTexture`), unlocking (`SDL_UnlockTexture`), and present calls.
@@ -51,7 +51,7 @@ Across 1280×720 framebuffer rendering with 16 samples per pixel (14.75 million 
 - **C++20:** Entirely unchecked manual pointer arithmetic and thread dispatch via `std::jthread`.
 
 ### 4. Build Latency and Binary Footprint
-- **Clean Release Build Time:** Tamarin built in **0.98 s**, significantly faster than Rust's `cargo build --release` (3.98 s) and comparable to Clang C++ (1.10 s).
+- **Clean Release Build Time:** Tamarin built in **1.13 s**, significantly faster than Rust's `cargo build --release` (4.67 s) and comparable to Clang C++ (1.49 s).
 - **Binary Size:** Tamarin produced a lean **96.5 KB** native binary, smaller than both C++ (209.5 KB) and Rust (276.5 KB).
 
 ---

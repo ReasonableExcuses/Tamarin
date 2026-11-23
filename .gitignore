@@ -97,6 +97,7 @@ benchmarks/**/*.obj
 benchmarks/**/*.pdb
 benchmarks/**/*.ll
 benchmarks/**/*.bmp
+benchmarks/**/analysis/
 *.bmp
 Tamarin_Audit_Report_Updated.md
 Tamarin_Comprehensive_Bug_Report.md
